@@ -3,6 +3,7 @@ package dtls13
 import (
 	"bytes"
 	"context"
+	"crypto"
 	"crypto/ed25519"
 	"crypto/rand"
 	"crypto/tls"
@@ -10,6 +11,7 @@ import (
 	"crypto/x509/pkix"
 	"errors"
 	"fmt"
+	"io"
 	"math/big"
 	"net"
 	"strings"
@@ -32,6 +34,12 @@ type captureWritesConn struct {
 	net.Conn
 	mu     sync.Mutex
 	writes [][]byte
+}
+
+type failingSigner struct{ crypto.Signer }
+
+func (failingSigner) Sign(io.Reader, []byte, crypto.SignerOpts) ([]byte, error) {
+	return nil, errors.New("test signer failure")
 }
 
 type corruptSecondClientHelloCookieConn struct {
@@ -1225,6 +1233,27 @@ func TestFatalAlertIsReported(t *testing.T) {
 	var alertErr AlertError
 	if !errors.As(err, &alertErr) || alertErr != 80 {
 		t.Fatalf("fatal alert returned %v", err)
+	}
+}
+
+func TestHandshakeSendsGeneralErrorForUnclassifiedLocalFailure(t *testing.T) {
+	serverCertificate, roots := testServerCertificate(t)
+	clientCertificate, clientRoots := testClientCertificate(t)
+	clientCertificate.PrivateKey = failingSigner{clientCertificate.PrivateKey.(crypto.Signer)}
+	left, right := memoryDatagramPair()
+	defer left.Close()
+	defer right.Close()
+	client := Client(left, &Config{RootCAs: roots, ServerName: "server.test", Certificates: []tls.Certificate{clientCertificate}, HandshakeTimeout: time.Second, FlightInterval: 5 * time.Millisecond})
+	server := Server(right, &Config{Certificates: []tls.Certificate{serverCertificate}, ClientAuth: tls.RequireAndVerifyClientCert, ClientCAs: clientRoots, HandshakeTimeout: time.Second, FlightInterval: 5 * time.Millisecond})
+	serverDone := make(chan error, 1)
+	go func() { serverDone <- server.Handshake() }()
+	clientErr := client.Handshake()
+	serverErr := <-serverDone
+	if !errors.Is(serverErr, AlertError(alertGeneralError)) {
+		t.Fatalf("server received %v, want general_error", serverErr)
+	}
+	if clientErr == nil || !strings.Contains(clientErr.Error(), "test signer failure") {
+		t.Fatalf("client returned %v", clientErr)
 	}
 }
 

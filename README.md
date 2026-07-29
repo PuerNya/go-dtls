@@ -6,7 +6,7 @@
 
 `go-dtls` 是一个使用 Go 实现的 DTLS 1.3 库，协议行为以 [RFC 9147](https://www.rfc-editor.org/rfc/rfc9147) 为准。模块导入路径为 `github.com/puernya/go-dtls`，包名为 `dtls13`。
 
-当前实现完成了 RFC 9147 的强制语义，并覆盖 RFC 9147 列出的全部 11 项直接规范性引用。TLS 1.3 基线按取代 RFC 8446 的 [RFC 9846](https://www.rfc-editor.org/rfc/rfc9846) 审计；其中适用于现有功能的主体行为已经实现，但仍有下文明确列出的推荐行为和后续规范缺口。本文记录 2026-07-29 当前源码的实现状态、测试证据和性能基线。
+当前实现完成了 RFC 9147 的强制语义，并覆盖 RFC 9147 列出的全部 11 项直接规范性引用。TLS 1.3 基线按取代 RFC 8446 的 [RFC 9846](https://www.rfc-editor.org/rfc/rfc9846) 审计；其中适用于当前已启用功能的强制与推荐行为已经实现，尚未实现的后续可选扩展和范围边界在下文明确列出。本文记录 2026-07-29 当前源码的实现状态、测试证据和性能基线。
 
 > 本项目仍处于活跃开发阶段。RFC 审计完成不等同于第三方合规认证。RFC 9325 的证书安全下限默认强制执行：RSA 服务端认证 leaf 不得小于 2048 位，SHA-1/MD5 证书不能通过自签名、信任锚、`InsecureSkipVerify` 或 session resumption 绕过。
 
@@ -305,7 +305,7 @@ serverConfig := &dtls13.Config{
 | --- | --- | --- |
 | [RFC 9147](https://www.rfc-editor.org/rfc/rfc9147) | 完成 | Record、Handshake、epoch、ACK、KeyUpdate、CID update、Application Data 与适用安全要求完成；推荐行为在已启用范围完成 |
 | [RFC 9146](https://www.rfc-editor.org/rfc/rfc9146) | 完成 | CID 协商、方向性 CID、更新、Listener 路由、错误处理和地址保持完成；DTLS 1.2 专属细节不适用 |
-| [RFC 9846](https://www.rfc-editor.org/rfc/rfc9846) | 基本完成 | 当前仍把 `user_canceled(90)` 返回为 `AlertError`，未按 SHOULD 忽略并等待 `close_notify`；`general_error(117)` 尚无命名常量和主动发送策略 |
+| [RFC 9846](https://www.rfc-editor.org/rfc/rfc9846) | 完成（已启用范围） | 握手内、final ACK 等待和握手后均忽略 `user_canceled(90)` 并继续等 `close_notify`；没有更具体 alert 的本地加密失败发送 `general_error(117)`，具体协议 alert 始终优先 |
 | [RFC 9325](https://www.rfc-editor.org/rfc/rfc9325) | 部分实现 | PFS、AEAD、SNI/ALPN、ticket、0-RTT、KeyUpdate 和证书安全下限已覆盖；缺少 OCSP stapling，且本模块有意不实现该 BCP 要求的 DTLS 1.2 |
 | [RFC 9525](https://www.rfc-editor.org/rfc/rfc9525) | 部分实现 | Go X.509 与 `ServerName` 覆盖 DNS-ID/IP-ID；URI-ID、SRV-ID 和应用 service identity 由调用方验证回调承担 |
 | [RFC 9853](https://www.rfc-editor.org/rfc/rfc9853) | 未实现 | 当前不会未经路径验证自动 rebind，因此没有安全降级；但提供 CID 的客户端尚未按 SHOULD 同时提供 Return Routability Check |
@@ -351,7 +351,7 @@ serverConfig := &dtls13.Config{
 
 | 规范 | 与本实现的关系 | 状态 |
 | --- | --- | --- |
-| [RFC 9846](https://www.rfc-editor.org/rfc/rfc9846) | 取代 RFC 8446 的 TLS 1.3 规范；修订 KeyShare、PSK/HRR、NST、AEAD limit、KeyUpdate、alert 和 vector 边界 | 主体变更完成；mTLS 恢复保留认证状态、当前策略/CA/有效期及总认证寿命；`user_canceled` 和 `general_error` 差异见总体状态 |
+| [RFC 9846](https://www.rfc-editor.org/rfc/rfc9846) | 取代 RFC 8446 的 TLS 1.3 规范；修订 KeyShare、PSK/HRR、NST、AEAD limit、KeyUpdate、alert 和 vector 边界 | 已启用范围完成；mTLS 恢复保留认证状态、当前策略/CA/有效期及总认证寿命；`user_canceled` 和 `general_error` 语义见总体状态 |
 | [RFC 9325](https://www.rfc-editor.org/rfc/rfc9325) | TLS/DTLS 部署安全 BCP | ticket 使用 AES-256-GCM，寿命限制为 1 秒至 7 天；RSA 2048 位及 SHA-1/MD5 证书下限在完整握手、信任锚和恢复路径统一执行；OCSP 和 DTLS 1.2 范围例外见总体状态 |
 | [RFC 9525](https://www.rfc-editor.org/rfc/rfc9525) | 服务身份校验 | DNS-ID/IP-ID 默认严格验证；其他 reference identifier 需要调用方实现应用语义 |
 | [RFC 8449](https://www.rfc-editor.org/rfc/rfc8449) | 双向 record size 协商 | 未实现；PMTU API 只解决路径报文大小，不表示对端接收限制 |
@@ -380,7 +380,6 @@ serverConfig := &dtls13.Config{
 
 | 优先级 | 工作项 | 完成条件摘要 |
 | --- | --- | --- |
-| P0 | RFC 9846 alert 语义 | 正确处理 `user_canceled`，并为 `general_error` 增加命名值和发送策略 |
 | P1 | RFC 9853 RRC | CID 客户端默认提供 RRC，完整实现路径挑战、放大限制、计时和 NAT rebind 测试 |
 | P1 | RFC 8449 `record_size_limit` | 完成 CH/EE 协商、双向限制、HRR/恢复保持和超限处理 |
 | P1 | 第三方互通矩阵 | 在对端实际支持时补齐 CID、KeyUpdate、0-RTT、恢复和 PHA 的双向证据 |
@@ -457,8 +456,11 @@ go test -run TestInteropWolfSSL -v -count=10
 - 全量测试 `-count=10`、`go vet`、golangci-lint v2.12.2 和 Windows race 于 2026-07-29 通过。
 - 综合双向丢包、延迟、乱序和重复，以及 CH/SH/Finished/ACK/HRR/mTLS 恢复组合，连续 100 次通过。
 - mTLS 完整握手、PSK 恢复、0-RTT、CA/策略回退、ticket 续签认证寿命以及现有 CID、KeyUpdate、exporter 和 PHA 测试通过。
+- RFC 9846 alert 专项、弱网/重传/mTLS/CID/KeyUpdate/PHA 组合各 `-count=100` 通过；`user_canceled` 覆盖握手、同 datagram ACK、握手后乱序与 `close_notify`，未分类本地签名失败端到端收到 `general_error`。
+- 当前工作树与 `HEAD` 预编译二进制交替 8 轮、每轮 500 次：普通握手中位数 `612.5/607.7 us`、mTLS Full `895.8/899.7 us`、Resumed `452.5/456.6 us`（当前/基线），耗时差异处于噪声范围；分配分别由 `876/1169/825-826` 降至 `872/1165/821-822 allocs/op`。连接资源测试连续 10 次为 `121066-127034 B/连接`，保留堆 `132104-355064 B`，goroutine 始终 `2->2`。
 - parser/record fuzz 累计覆盖数百万输入，并包含四套 AEAD 的复制与原地解密差分。
 - wolfSSL 5.9.2 双向互通于 2026-07-29 四个方向/套件用例各 `-count=10` 通过，覆盖 HRR、RSA-PSS 证书握手、Finished ACK、应用数据、AES-GCM 和 AES-128-CCM；该构建未启用 session ticket/`SESSION_CERTS`，未强行声称 mTLS 恢复互通。
+- 本轮 RFC 9846 alert 修改验证时未设置 `WOLFSSL_ROOT`，本机也没有 wolfSSL 构建，四个第三方用例显式跳过；协议层对照使用 Go 1.26.3 `crypto/tls`，其 TLS 1.3 reader 同样丢弃 `user_canceled` 并继续读取。
 
 协议行为变更必须同步更新本文的完成度、验证证据、性能数据、已知差异和第三方互通边界。
 

@@ -638,7 +638,7 @@ func (c *Conn) failConnection(err error) {
 	if err == nil {
 		return
 	}
-	if description, ok := protocolAlert(err); ok {
+	if description, ok := outboundAlert(err); ok {
 		c.sendFatalAlert(description)
 	}
 	c.clearTrafficSecrets(err)
@@ -804,6 +804,9 @@ func (c *Conn) dispatchDatagramFrom(datagram []byte, from net.Addr) error {
 			if parseErr != nil {
 				description, _ := protocolAlert(parseErr)
 				return alertError(description, parseErr)
+			}
+			if alert.isUserCanceled() {
+				break
 			}
 			if alert.isCloseNotify() {
 				c.closure.receive(number)

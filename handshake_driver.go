@@ -80,7 +80,7 @@ func (c *Conn) runHandshake(ctx context.Context) (result error) {
 	c.handshakeDeadline = deadline
 	defer func() { _ = c.conn.SetDeadline(time.Time{}) }()
 	defer func() {
-		if description, ok := protocolAlert(result); ok {
+		if description, ok := outboundAlert(result); ok {
 			if c.sendCipher != nil {
 				c.sendFatalAlert(description)
 			} else {
@@ -394,6 +394,9 @@ func receiveHandshakeMessageWithEarlyBatch(conn net.Conn, inbox *handshakeInbox,
 				if parseErr != nil {
 					return completedHandshakeBatch{}, parseErr
 				}
+				if alert.isUserCanceled() {
+					continue
+				}
 				if alert.isCloseNotify() {
 					return completedHandshakeBatch{}, io.EOF
 				}
@@ -467,62 +470,72 @@ func receiveHandshakeMessageWithEarlyBatch(conn net.Conn, inbox *handshakeInbox,
 func receiveACKRecord(conn net.Conn, dst []recordNumber, ciphers ...*recordCipher) ([]recordNumber, error) {
 	buffer := acquireDatagramBuffer()
 	defer releaseDatagramBuffer(buffer)
+
 	for {
 		datagram := buffer[:]
 		n, err := conn.Read(datagram)
 		if err != nil {
 			return nil, err
 		}
-		if n == 0 || !isUnifiedRecord(datagram[:n]) {
-			continue
-		}
-		lastCipher := -1
-		for i, cipher := range ciphers {
-			if recordCipherMatchesUnifiedEpoch(cipher, datagram[0]) {
-				lastCipher = i
-			}
-		}
-		if lastCipher < 0 {
-			continue
-		}
-		for i, cipher := range ciphers {
-			if !recordCipherMatchesUnifiedEpoch(cipher, datagram[0]) {
-				continue
-			}
-			var content []byte
-			var typ uint8
-			var openErr error
-			if i == lastCipher {
-				content, typ, _, openErr = cipher.openInPlace(datagram[:n])
-			} else {
-				content, typ, _, openErr = cipher.open(datagram[:n])
-			}
-			if openErr != nil {
-				if fatalErr := protectedRecordReceiveError(openErr); fatalErr != nil {
-					return nil, fatalErr
+		datagram = datagram[:n]
+		for len(datagram) > 0 && isUnifiedRecord(datagram) {
+			lastCipher := -1
+			for i, cipher := range ciphers {
+				if recordCipherMatchesUnifiedEpoch(cipher, datagram[0]) {
+					lastCipher = i
 				}
-				continue
 			}
-			switch typ {
-			case recordTypeACK:
-				numbers, parseErr := parseACKInto(content, dst)
-				if parseErr != nil {
-					return nil, parseErr
-				}
-				if parseErr = validateACKEpoch(numbers, cipher.epoch); parseErr != nil {
-					return nil, parseErr
-				}
-				return numbers, nil
-			case recordTypeAlert:
-				alert, parseErr := parseAlert(content)
-				if parseErr != nil {
-					return nil, parseErr
-				}
-				if alert.isCloseNotify() {
-					return nil, io.EOF
-				}
-				return nil, AlertError(alert.description)
+			if lastCipher < 0 {
+				break
 			}
+			consumed := 0
+			for i, cipher := range ciphers {
+				if !recordCipherMatchesUnifiedEpoch(cipher, datagram[0]) {
+					continue
+				}
+				var content []byte
+				var typ uint8
+				var openErr error
+				if i == lastCipher {
+					content, typ, consumed, openErr = cipher.openInPlace(datagram)
+				} else {
+					content, typ, consumed, openErr = cipher.open(datagram)
+				}
+				if openErr != nil {
+					consumed = 0
+					if fatalErr := protectedRecordReceiveError(openErr); fatalErr != nil {
+						return nil, fatalErr
+					}
+					continue
+				}
+				switch typ {
+				case recordTypeACK:
+					numbers, parseErr := parseACKInto(content, dst)
+					if parseErr != nil {
+						return nil, parseErr
+					}
+					if parseErr = validateACKEpoch(numbers, cipher.epoch); parseErr != nil {
+						return nil, parseErr
+					}
+					return numbers, nil
+				case recordTypeAlert:
+					alert, parseErr := parseAlert(content)
+					if parseErr != nil {
+						return nil, parseErr
+					}
+					if alert.isCloseNotify() {
+						return nil, io.EOF
+					}
+					if !alert.isUserCanceled() {
+						return nil, AlertError(alert.description)
+					}
+				}
+				break
+			}
+			if consumed == 0 {
+				break
+			}
+			datagram = datagram[consumed:]
 		}
 	}
 }
@@ -1447,7 +1460,6 @@ func (c *Conn) serverHandshake(ctx context.Context) error {
 			return err
 		}
 	}
-	c.sendCipher = serverCipher
 	var earlyCipher *recordCipher
 	if !hrrUsed && c.earlyAccepted {
 		earlySchedule := newKeySchedule(suite, psk)
@@ -1531,6 +1543,7 @@ func (c *Conn) serverHandshake(ctx context.Context) error {
 		return err
 	}
 	serverFlight := combineFlights(plain, protected)
+	c.sendCipher = serverCipher
 	if err = c.writeFlight(serverFlightConn, serverFlight); err != nil {
 		return err
 	}

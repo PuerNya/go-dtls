@@ -211,6 +211,37 @@ func TestHandshakeReceiveTreatsWarningAlertAsFatal(t *testing.T) {
 	}
 }
 
+func TestHandshakeReceiveIgnoresUserCanceled(t *testing.T) {
+	left, right := memoryDatagramPair()
+	defer left.Close()
+	defer right.Close()
+	_ = right.SetReadDeadline(time.Now().Add(time.Second))
+
+	body, err := (alertMessage{level: alertLevelWarning, description: alertUserCanceled}).marshal()
+	if err != nil {
+		t.Fatal(err)
+	}
+	canceled, err := marshalPlainRecord(record{typ: recordTypeAlert, payload: body})
+	if err != nil {
+		t.Fatal(err)
+	}
+	flight, _, err := buildPlainFlight([]handshakeMessage{{typ: handshakeTypeClientHello, body: []byte("continued")}}, 1200, 0, 1)
+	if err != nil {
+		t.Fatal(err)
+	}
+	go func() {
+		_, _ = left.Write(canceled)
+		_, _ = left.Write(flight.records[0].wire)
+	}()
+	messages, err := receiveHandshakeMessage(right, newHandshakeInbox(0, 1024, 8, 4096), nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(messages) != 1 || messages[0].typ != handshakeTypeClientHello || string(messages[0].body) != "continued" {
+		t.Fatalf("unexpected messages %#v", messages)
+	}
+}
+
 func TestHelloRetryRequestRetransmitsOnlyForRepeatedClientHello(t *testing.T) {
 	left, right := memoryDatagramPair()
 	defer left.Close()

@@ -1,8 +1,11 @@
 package dtls13
 
 import (
+	"context"
 	"errors"
 	"fmt"
+	"io"
+	"net"
 	"strings"
 )
 
@@ -21,9 +24,11 @@ const (
 	alertDecryptError          uint8 = 51
 	alertTooManyCIDsRequest    uint8 = 52
 	alertProtocolVersion       uint8 = 70
+	alertUserCanceled          uint8 = 90
 	alertMissingExtension      uint8 = 109
 	alertUnsupportedExtension  uint8 = 110
 	alertCertificateRequired   uint8 = 116
+	alertGeneralError          uint8 = 117
 	alertNoApplicationProtocol uint8 = 120
 )
 
@@ -74,6 +79,23 @@ func protocolAlert(err error) (uint8, bool) {
 	return alertIllegalParameter, true
 }
 
+func outboundAlert(err error) (uint8, bool) {
+	if err == nil {
+		return 0, false
+	}
+	if description, ok := protocolAlert(err); ok {
+		return description, true
+	}
+	var peer AlertError
+	var network net.Error
+	if errors.As(err, &peer) || errors.As(err, &network) ||
+		errors.Is(err, io.EOF) || errors.Is(err, net.ErrClosed) ||
+		errors.Is(err, context.Canceled) || errors.Is(err, context.DeadlineExceeded) {
+		return 0, false
+	}
+	return alertGeneralError, true
+}
+
 func (a alertMessage) marshal() ([]byte, error) {
 	if a.level != alertLevelWarning && a.level != alertLevelFatal {
 		return nil, &ProtocolError{"invalid alert level"}
@@ -89,6 +111,10 @@ func parseAlert(b []byte) (alertMessage, error) {
 
 func (a alertMessage) isCloseNotify() bool {
 	return (a.level == alertLevelWarning || a.level == alertLevelFatal) && a.description == alertCloseNotify
+}
+
+func (a alertMessage) isUserCanceled() bool {
+	return (a.level == alertLevelWarning || a.level == alertLevelFatal) && a.description == alertUserCanceled
 }
 
 type closureState struct {

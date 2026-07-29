@@ -6,6 +6,7 @@ import (
 	"errors"
 	"reflect"
 	"testing"
+	"time"
 )
 
 func TestACKRoundTrip(t *testing.T) {
@@ -307,6 +308,37 @@ func TestReceiveACKRecordSkipsNonUnifiedDatagram(t *testing.T) {
 	go func() {
 		_, _ = left.Write(plain[0])
 		_, _ = left.Write(protected[0])
+	}()
+	numbers, err := receiveACKRecord(right, nil, receiver)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(numbers) != 1 || numbers[0] != want {
+		t.Fatalf("ACK numbers = %#v, want %#v", numbers, []recordNumber{want})
+	}
+}
+
+func TestReceiveACKRecordIgnoresUserCanceled(t *testing.T) {
+	sender, receiver := recordCipherPair(t, TLS_AES_128_GCM_SHA256, 3)
+	body, err := (alertMessage{level: alertLevelWarning, description: alertUserCanceled}).marshal()
+	if err != nil {
+		t.Fatal(err)
+	}
+	canceled, err := sender.seal(recordTypeAlert, body)
+	if err != nil {
+		t.Fatal(err)
+	}
+	want := recordNumber{epoch: 2, sequence: 5}
+	ack, _, err := buildACKRecords([]recordNumber{want}, 1200, 0, sender)
+	if err != nil {
+		t.Fatal(err)
+	}
+	left, right := memoryDatagramPair()
+	defer left.Close()
+	defer right.Close()
+	_ = right.SetReadDeadline(time.Now().Add(time.Second))
+	go func() {
+		_, _ = left.Write(append(canceled, ack[0]...))
 	}()
 	numbers, err := receiveACKRecord(right, nil, receiver)
 	if err != nil {

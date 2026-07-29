@@ -1,7 +1,10 @@
 package dtls13
 
 import (
+	"context"
 	"errors"
+	"io"
+	"net"
 	"testing"
 )
 
@@ -25,12 +28,14 @@ func TestAlertAndClosureOrdering(t *testing.T) {
 }
 
 func TestUnknownAlertLevelIsAnErrorAlert(t *testing.T) {
-	alert, err := parseAlert([]byte{255, alertCloseNotify})
-	if err != nil {
-		t.Fatal(err)
-	}
-	if alert.isCloseNotify() {
-		t.Fatal("unknown alert level was treated as an orderly close")
+	for _, description := range []uint8{alertCloseNotify, alertUserCanceled} {
+		alert, err := parseAlert([]byte{255, description})
+		if err != nil {
+			t.Fatal(err)
+		}
+		if alert.isCloseNotify() || alert.isUserCanceled() {
+			t.Fatalf("unknown alert level was accepted for description %d", description)
+		}
 	}
 }
 
@@ -51,6 +56,28 @@ func TestProtocolAlertClassification(t *testing.T) {
 		got, ok := protocolAlert(test.err)
 		if got != test.want || ok != test.ok {
 			t.Fatalf("protocolAlert(%v)=(%d,%v), want (%d,%v)", test.err, got, ok, test.want, test.ok)
+		}
+	}
+}
+
+func TestOutboundAlertClassification(t *testing.T) {
+	tests := []struct {
+		err  error
+		want uint8
+		ok   bool
+	}{
+		{nil, 0, false},
+		{errors.New("local callback failed"), alertGeneralError, true},
+		{&ProtocolError{"unexpected handshake message"}, alertUnexpectedMessage, true},
+		{AlertError(alertIllegalParameter), 0, false},
+		{io.EOF, 0, false},
+		{context.Canceled, 0, false},
+		{&net.OpError{Op: "read", Net: "udp", Err: errors.New("network failure")}, 0, false},
+	}
+	for _, test := range tests {
+		got, ok := outboundAlert(test.err)
+		if got != test.want || ok != test.ok {
+			t.Fatalf("outboundAlert(%v)=(%d,%v), want (%d,%v)", test.err, got, ok, test.want, test.ok)
 		}
 	}
 }

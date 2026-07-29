@@ -1015,3 +1015,43 @@ func TestCloseNotifyUsesRecordNumberOrdering(t *testing.T) {
 		t.Fatalf("closed=%v buffered=%q; want only pre-close data", closed, buffered)
 	}
 }
+
+func TestUserCanceledWaitsForCloseNotifyAcrossReordering(t *testing.T) {
+	client, server := establishedConnPair(t)
+	defer client.conn.Close()
+	defer server.conn.Close()
+
+	canceledBody, err := (alertMessage{level: alertLevelWarning, description: alertUserCanceled}).marshal()
+	if err != nil {
+		t.Fatal(err)
+	}
+	canceled, err := client.sendCipher.seal(recordTypeAlert, canceledBody)
+	if err != nil {
+		t.Fatal(err)
+	}
+	application, err := client.sendCipher.seal(recordTypeApplicationData, []byte("before close"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	closeBody, err := (alertMessage{level: alertLevelWarning, description: alertCloseNotify}).marshal()
+	if err != nil {
+		t.Fatal(err)
+	}
+	closeWire, err := client.sendCipher.seal(recordTypeAlert, closeBody)
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, wire := range [][]byte{closeWire, canceled, application} {
+		if err = server.dispatchDatagram(wire); err != nil {
+			t.Fatal(err)
+		}
+	}
+	buffer := make([]byte, 32)
+	n, _, err := server.ReadDatagram(buffer)
+	if err != nil || string(buffer[:n]) != "before close" {
+		t.Fatalf("ReadDatagram = %q, %v", buffer[:n], err)
+	}
+	if _, _, err = server.ReadDatagram(buffer); !errors.Is(err, io.EOF) {
+		t.Fatalf("ReadDatagram after close_notify = %v", err)
+	}
+}
