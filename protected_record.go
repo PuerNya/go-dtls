@@ -434,7 +434,7 @@ func equalBytes(a, b []byte) bool {
 }
 
 func validInnerContentType(contentType uint8) bool {
-	return contentType == recordTypeAlert || contentType == recordTypeHandshake || contentType == recordTypeApplicationData || contentType == recordTypeHeartbeat || contentType == recordTypeACK
+	return contentType == recordTypeAlert || contentType == recordTypeHandshake || contentType == recordTypeApplicationData || contentType == recordTypeHeartbeat || contentType == recordTypeACK || contentType == recordTypeReturnRoutability
 }
 
 func reconstructSequence(expected, truncated uint64, bits uint) uint64 {

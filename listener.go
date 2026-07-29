@@ -312,11 +312,18 @@ func (l *packetListener) connectionValidated(session *packetSession) {
 	}
 }
 
-func (l *packetListener) rebindSession(session *packetSession, oldAddress, newAddress net.Addr) {
-	if newAddress == nil || oldAddress == nil || sessionKey(oldAddress) == sessionKey(newAddress) {
+func (l *packetListener) rebindSession(session *packetSession, newAddress net.Addr) {
+	if session == nil || newAddress == nil {
 		return
 	}
 	l.mu.Lock()
+	session.mu.Lock()
+	oldAddress := session.remote
+	if oldAddress == nil || sessionKey(oldAddress) == sessionKey(newAddress) {
+		session.mu.Unlock()
+		l.mu.Unlock()
+		return
+	}
 	oldKey, newKey := sessionKey(oldAddress), sessionKey(newAddress)
 	if l.sessions[oldKey] == session {
 		delete(l.sessions, oldKey)
@@ -331,6 +338,8 @@ func (l *packetListener) rebindSession(session *packetSession, oldAddress, newAd
 		displaced.closeWithoutCallback()
 	}
 	l.sessions[newKey] = session
+	session.remote = newAddress
+	session.mu.Unlock()
 	l.mu.Unlock()
 }
 
@@ -460,7 +469,7 @@ type packetSession struct {
 	deadline               chan struct{}
 	closeOnce              sync.Once
 	onClose                func(*packetSession)
-	onRebind               func(*packetSession, net.Addr, net.Addr)
+	onRebind               func(*packetSession, net.Addr)
 	onNewCIDs              func(*packetSession, [][]byte) error
 	onRemoveCIDs           func(*packetSession, [][]byte)
 	onValidated            func(*packetSession)
@@ -478,7 +487,7 @@ type packetDatagram struct {
 	from    net.Addr
 }
 
-func newPacketSession(conn net.PacketConn, remote net.Addr, queueSize int, onClose func(*packetSession), onRebind func(*packetSession, net.Addr, net.Addr), onNewCIDs func(*packetSession, [][]byte) error, onRemoveCIDs func(*packetSession, [][]byte), onValidated func(*packetSession)) *packetSession {
+func newPacketSession(conn net.PacketConn, remote net.Addr, queueSize int, onClose func(*packetSession), onRebind func(*packetSession, net.Addr), onNewCIDs func(*packetSession, [][]byte) error, onRemoveCIDs func(*packetSession, [][]byte), onValidated func(*packetSession)) *packetSession {
 	return &packetSession{
 		conn: conn, remote: remote, in: make(chan packetDatagram, queueSize), done: make(chan struct{}),
 		deadline: make(chan struct{}, 1), onClose: onClose, onRebind: onRebind, onNewCIDs: onNewCIDs, onRemoveCIDs: onRemoveCIDs, onValidated: onValidated,
@@ -600,11 +609,19 @@ func (s *packetSession) lastReadSource() net.Addr {
 	return s.lastReadFrom
 }
 
-func (s *packetSession) recordAuthenticated() {
-	// RFC 9147 section 11 forbids changing the destination address merely
-	// because a CID-protected record authenticated from a new source address.
-	// The specification does not define a path-challenge procedure, so retain
-	// the original peer address until an explicit validation mechanism exists.
+func (s *packetSession) rebindRemote(newAddress net.Addr) {
+	if newAddress == nil {
+		return
+	}
+	if s.onRebind != nil {
+		s.onRebind(s, newAddress)
+		return
+	}
+	s.mu.Lock()
+	if !sameNetworkAddress(s.remote, newAddress) {
+		s.remote = newAddress
+	}
+	s.mu.Unlock()
 }
 
 func (s *packetSession) handshakeValidated() {

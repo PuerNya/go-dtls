@@ -434,7 +434,7 @@ func (c *Conn) finishPostHandshakeAuthLocked(err error) error {
 	return err
 }
 
-func (c *Conn) bufferPostHandshakeAuthApplicationLocked(content []byte, number recordNumber) (bool, error) {
+func (c *Conn) bufferPostHandshakeAuthApplicationLocked(content []byte, number recordNumber, from net.Addr) (bool, error) {
 	if c.isClient || c.postHandshakeAuthState == nil || !c.postHandshakeAuthState.hasResponseEpoch {
 		return false, nil
 	}
@@ -449,7 +449,7 @@ func (c *Conn) bufferPostHandshakeAuthApplicationLocked(content []byte, number r
 		return false, &ProtocolError{"buffered post-handshake authentication application data limit exceeded"}
 	}
 	state.pendingApplication = append(state.pendingApplication, pendingPostAuthApplication{
-		number: number, content: append([]byte(nil), content...), from: c.dispatchSource,
+		number: number, content: append([]byte(nil), content...), from: from,
 	})
 	state.pendingApplicationBytes += len(content)
 	return true, nil

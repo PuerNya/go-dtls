@@ -108,11 +108,17 @@
 // A Listener can use authenticated CIDs to route records whose source address
 // has changed.
 //
-// A CID authenticates a connection, not a network path. This package does not
-// define or perform path validation and does not automatically change the
-// address used for replies merely because a valid record arrived from a new
-// address. Applications that support migration must provide a path-validation
-// and rebinding policy appropriate to their protocol.
+// A CID authenticates a connection, not a network path. When both peers
+// negotiate CID, the package also negotiates the [RFC 9853] Return Routability
+// Check by default. A Listener association uses the enhanced procedure: it
+// first challenges the old path, falls back to a challenge on the candidate
+// path only when needed, enforces the three-times amplification limit, and
+// changes [Conn.RemoteAddr] only after validation. If a spare peer CID is
+// available, the candidate-path probe uses it without changing old-path
+// traffic, and validation activates it before traffic uses the new path.
+// Set [Config.DisableReturnRoutabilityCheck] only when the application supplies
+// equivalent address validation. A connected UDP client cannot receive packets
+// from a changed server address until its underlying transport permits them.
 //
 // # Post-handshake operations
 //
@@ -145,6 +151,7 @@
 // [RFC 9147]: https://www.rfc-editor.org/rfc/rfc9147
 // [RFC 8446]: https://www.rfc-editor.org/rfc/rfc8446
 // [RFC 9146]: https://www.rfc-editor.org/rfc/rfc9146
+// [RFC 9853]: https://www.rfc-editor.org/rfc/rfc9853
 //
 // [RFC 9846]: https://www.rfc-editor.org/rfc/rfc9846
 package dtls13

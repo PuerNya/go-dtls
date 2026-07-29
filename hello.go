@@ -19,6 +19,7 @@ const (
 	extPostHandshakeAuth       uint16 = 49
 	extSignatureAlgorithmsCert uint16 = 50
 	extConnectionID            uint16 = 54
+	extReturnRoutability       uint16 = 61
 )
 
 func knownExtensionType(typ uint16) bool {
@@ -26,7 +27,7 @@ func knownExtensionType(typ uint16) bool {
 	case extServerName, extSupportedGroups, extSupportedVersions, extKeyShare,
 		extSignatureAlgorithms, extALPN, extPadding, extPreSharedKey, extEarlyData,
 		extCookie, extPSKKeyExchangeModes, extPostHandshakeAuth,
-		extSignatureAlgorithmsCert, extConnectionID:
+		extSignatureAlgorithmsCert, extConnectionID, extReturnRoutability:
 		return true
 	default:
 		return false
@@ -63,22 +64,37 @@ type clientHello struct {
 	earlyData                   bool
 	connectionID                []byte
 	hasConnectionID             bool
+	returnRoutability           bool
 	postHandshakeAuth           bool
 	unknownExtensions           map[uint16][]byte
 }
 type serverHello struct {
-	random           [32]byte
-	sessionID        []byte
-	cipherSuite      uint16
-	keyShare         keyShareEntry
-	selectedIdentity *uint16
-	connectionID     []byte
-	hasConnectionID  bool
+	random            [32]byte
+	sessionID         []byte
+	cipherSuite       uint16
+	keyShare          keyShareEntry
+	selectedIdentity  *uint16
+	connectionID      []byte
+	hasConnectionID   bool
+	returnRoutability bool
 }
 
 func validateServerHelloConnectionID(hello *clientHello, sh *serverHello) error {
 	if sh != nil && sh.hasConnectionID && (hello == nil || !hello.hasConnectionID) {
 		return alertError(alertUnsupportedExtension, &ProtocolError{"server negotiated an unoffered connection ID"})
+	}
+	return nil
+}
+
+func validateServerHelloReturnRoutability(hello *clientHello, sh *serverHello) error {
+	if sh == nil || !sh.returnRoutability {
+		return nil
+	}
+	if hello == nil || !hello.returnRoutability {
+		return alertError(alertUnsupportedExtension, &ProtocolError{"server negotiated an unoffered return routability check"})
+	}
+	if !hello.hasConnectionID || !sh.hasConnectionID {
+		return alertError(alertIllegalParameter, &ProtocolError{"return routability check requires connection ID"})
 	}
 	return nil
 }
@@ -903,7 +919,7 @@ func (h *clientHello) marshal() ([]byte, error) {
 	} else if len(h.pskBinder) > 0 || len(h.pskBinders) > 0 {
 		return nil, &ProtocolError{"PSK binder without identity"}
 	}
-	var extensionStorage [13]orderedExtension
+	var extensionStorage [14]orderedExtension
 	extensions := extensionStorage[:0]
 	if serverName != nil {
 		extensions = append(extensions, orderedExtension{typ: extServerName, value: serverName})
@@ -928,6 +944,9 @@ func (h *clientHello) marshal() ([]byte, error) {
 	}
 	if h.hasConnectionID {
 		extensions = append(extensions, orderedExtension{typ: extConnectionID, value: connectionID})
+	}
+	if h.returnRoutability {
+		extensions = append(extensions, orderedExtension{typ: extReturnRoutability})
 	}
 	if h.earlyData {
 		extensions = append(extensions, orderedExtension{typ: extEarlyData})
@@ -989,7 +1008,7 @@ func parseClientHello(b []byte) (*clientHello, error) {
 		h.cipherSuites = append(h.cipherSuites, binary.BigEndian.Uint16(suites))
 		suites = suites[2:]
 	}
-	var extensionStorage [13]orderedExtension
+	var extensionStorage [14]orderedExtension
 	exts, err := parseOrderedExtensionsView(extBytes, extensionStorage[:0])
 	if err != nil {
 		return nil, err
@@ -998,7 +1017,7 @@ func parseClientHello(b []byte) (*clientHello, error) {
 		switch extension.typ {
 		case extServerName, extSupportedGroups, extSignatureAlgorithms, extSignatureAlgorithmsCert, extALPN, extPadding,
 			extSupportedVersions, extCookie, extKeyShare, extPostHandshakeAuth,
-			extConnectionID, extEarlyData, extPSKKeyExchangeModes, extPreSharedKey:
+			extConnectionID, extReturnRoutability, extEarlyData, extPSKKeyExchangeModes, extPreSharedKey:
 		default:
 			if h.unknownExtensions == nil {
 				h.unknownExtensions = make(map[uint16][]byte)
@@ -1084,6 +1103,12 @@ func parseClientHello(b []byte) (*clientHello, error) {
 		}
 		h.hasConnectionID = true
 	}
+	if raw, ok := orderedExtensionValue(exts, extReturnRoutability); ok {
+		if len(raw) != 0 {
+			return nil, alertError(alertDecodeError, &ProtocolError{"invalid rrc extension length"})
+		}
+		h.returnRoutability = true
+	}
 	if raw, ok := orderedExtensionValue(exts, extPostHandshakeAuth); ok {
 		if len(raw) != 0 {
 			return nil, alertError(alertDecodeError, &ProtocolError{"invalid post_handshake_auth extension length"})
@@ -1162,6 +1187,9 @@ func (h *serverHello) marshal() ([]byte, error) {
 	if h.hasConnectionID && !addExtension(1+len(h.connectionID)) {
 		return nil, &ProtocolError{"16-bit vector overflow"}
 	}
+	if h.returnRoutability && !addExtension(0) {
+		return nil, &ProtocolError{"16-bit vector overflow"}
+	}
 	if h.selectedIdentity != nil && !addExtension(2) {
 		return nil, &ProtocolError{"16-bit vector overflow"}
 	}
@@ -1182,6 +1210,10 @@ func (h *serverHello) marshal() ([]byte, error) {
 		w.u16(int(extConnectionID))
 		w.u16(1 + len(h.connectionID))
 		w.bytes8(h.connectionID)
+	}
+	if h.returnRoutability {
+		w.u16(int(extReturnRoutability))
+		w.u16(0)
 	}
 	if h.selectedIdentity != nil {
 		w.u16(int(extPreSharedKey))
@@ -1210,14 +1242,14 @@ func parseServerHello(b []byte) (*serverHello, error) {
 	if len(h.sessionID) != 0 {
 		return nil, &ProtocolError{"DTLS 1.3 ServerHello legacy_session_id must be empty"}
 	}
-	var extensionStorage [4]orderedExtension
+	var extensionStorage [5]orderedExtension
 	exts, err := parseOrderedExtensionsView(extBytes, extensionStorage[:0])
 	if err != nil {
 		return nil, err
 	}
 	for _, extension := range exts {
 		switch extension.typ {
-		case extSupportedVersions, extKeyShare, extConnectionID, extPreSharedKey:
+		case extSupportedVersions, extKeyShare, extConnectionID, extReturnRoutability, extPreSharedKey:
 		default:
 			if knownExtensionType(extension.typ) {
 				return nil, alertError(alertIllegalParameter, &ProtocolError{"recognized extension is not permitted in ServerHello"})
@@ -1254,6 +1286,12 @@ func parseServerHello(b []byte) (*serverHello, error) {
 			return nil, err
 		}
 		h.hasConnectionID = true
+	}
+	if raw, ok := orderedExtensionValue(exts, extReturnRoutability); ok {
+		if len(raw) != 0 {
+			return nil, alertError(alertDecodeError, &ProtocolError{"invalid ServerHello rrc extension length"})
+		}
+		h.returnRoutability = true
 	}
 	if raw, ok := orderedExtensionValue(exts, extPreSharedKey); ok {
 		if len(raw) != 2 {

@@ -56,7 +56,10 @@ type ConnectionState struct {
 	// records sent to the peer. It is empty when no non-empty CID is active in
 	// that direction.
 	PeerConnectionID []byte
-	exporter         *exporterState
+	// ReturnRoutabilityCheck is true when RFC 9853 was negotiated together with
+	// Connection ID for this association.
+	ReturnRoutabilityCheck bool
+	exporter               *exporterState
 }
 
 // ExportKeyingMaterial returns exporter output for the completed connection,
@@ -139,6 +142,7 @@ type Conn struct {
 	sendConnectionID                 []byte
 	receiveConnectionID              []byte
 	connectionIDNegotiated           bool
+	returnRoutabilityCheckNegotiated bool
 	localCIDUpdatesAllowed           bool
 	peerCIDUpdatesAllowed            bool
 	newConnectionIDFlight            *flight
@@ -164,7 +168,7 @@ type Conn struct {
 	plainSendSequence                atomic.Uint64
 	retransmitNanos                  atomic.Int64
 	lastRTTSampleUnixNano            atomic.Int64
-	dispatchSource                   net.Addr
+	returnRoutability                *returnRoutabilityState
 }
 
 type applicationDatagram struct {
@@ -531,7 +535,7 @@ func (c *Conn) rememberProtectedHandshakeRange(first, last recordNumber) error {
 	return nil
 }
 
-func (c *Conn) bufferIncompleteHandshakeApplicationLocked(content []byte, number recordNumber) (bool, error) {
+func (c *Conn) bufferIncompleteHandshakeApplicationLocked(content []byte, number recordNumber, from net.Addr) (bool, error) {
 	if c.postHandshakeReassembly == nil || !c.postHandshakeReassembly.hasIncompleteProtected() {
 		return false, nil
 	}
@@ -542,7 +546,7 @@ func (c *Conn) bufferIncompleteHandshakeApplicationLocked(content []byte, number
 		return false, &ProtocolError{"buffered protected-handshake application data limit exceeded"}
 	}
 	c.pendingHandshakeApplications = append(c.pendingHandshakeApplications, pendingPostAuthApplication{
-		number: number, content: append([]byte(nil), content...), from: c.dispatchSource,
+		number: number, content: append([]byte(nil), content...), from: from,
 	})
 	c.pendingHandshakeApplicationBytes += len(content)
 	return true, nil
@@ -655,6 +659,7 @@ func (c *Conn) clearTrafficSecrets(failure error) {
 	c.dispatchMu.Lock()
 	defer c.dispatchMu.Unlock()
 	c.writeMu.Lock()
+	c.clearReturnRoutabilityLocked()
 	c.sendCipher = nil
 	if c.sendingTraffic != nil {
 		c.sendingTraffic.clearSecrets()
@@ -741,11 +746,7 @@ func (c *Conn) dispatchDatagram(datagram []byte) error {
 
 func (c *Conn) dispatchDatagramFrom(datagram []byte, from net.Addr) error {
 	c.dispatchMu.Lock()
-	c.dispatchSource = from
-	defer func() {
-		c.dispatchSource = nil
-		c.dispatchMu.Unlock()
-	}()
+	defer c.dispatchMu.Unlock()
 	for len(datagram) > 0 {
 		content, typ, epoch, consumed, openErr := c.receiveEpochs.openInPlace(datagram)
 		if openErr != nil {
@@ -758,9 +759,6 @@ func (c *Conn) dispatchDatagramFrom(datagram []byte, from net.Addr) error {
 				}
 			}
 			return nil
-		}
-		if authenticated, ok := c.conn.(interface{ recordAuthenticated() }); ok {
-			authenticated.recordAuthenticated()
 		}
 		cipher, selectErr := c.receiveEpochs.selectCipher(datagram[0])
 		if selectErr != nil {
@@ -778,16 +776,21 @@ func (c *Conn) dispatchDatagramFrom(datagram []byte, from net.Addr) error {
 			datagram = datagram[consumed:]
 			continue
 		}
+		if cipher.hasConnectionID {
+			if err := c.observeReturnRoutabilityRecord(from, consumed); err != nil {
+				return err
+			}
+		}
 		switch typ {
 		case recordTypeApplicationData:
 			c.writeMu.Lock()
 			bufferErr := c.rememberApplicationRecordLocked(number)
 			buffered := false
 			if bufferErr == nil {
-				buffered, bufferErr = c.bufferIncompleteHandshakeApplicationLocked(content, number)
+				buffered, bufferErr = c.bufferIncompleteHandshakeApplicationLocked(content, number, from)
 			}
 			if bufferErr == nil && !buffered {
-				buffered, bufferErr = c.bufferPostHandshakeAuthApplicationLocked(content, number)
+				buffered, bufferErr = c.bufferPostHandshakeAuthApplicationLocked(content, number, from)
 			}
 			c.writeMu.Unlock()
 			if bufferErr != nil {
@@ -796,7 +799,7 @@ func (c *Conn) dispatchDatagramFrom(datagram []byte, from net.Addr) error {
 			if buffered {
 				break
 			}
-			if err := c.queueApplicationData(content, c.dispatchSource); err != nil {
+			if err := c.queueApplicationData(content, from); err != nil {
 				return err
 			}
 		case recordTypeAlert:
@@ -886,6 +889,10 @@ func (c *Conn) dispatchDatagramFrom(datagram []byte, from net.Addr) error {
 			c.writeMu.Unlock()
 			if startKeyUpdateResponse {
 				go c.startKeyUpdateRetransmission()
+			}
+		case recordTypeReturnRoutability:
+			if err := c.handleReturnRoutability(content, from); err != nil {
+				return err
 			}
 		case recordTypeHandshake:
 			var fragmentScratch [1]handshakeFragment
@@ -1297,9 +1304,9 @@ func (c *Conn) Close() error {
 // LocalAddr returns the local network address of the underlying transport.
 func (c *Conn) LocalAddr() net.Addr { return c.conn.LocalAddr() }
 
-// RemoteAddr returns the destination address of the connected underlying
-// transport. It is not automatically rebound when a valid CID record arrives
-// from a different source address.
+// RemoteAddr returns the current destination address. When Connection ID and
+// RFC 9853 Return Routability Check are negotiated on a Listener association,
+// it changes only after the new path has completed validation.
 func (c *Conn) RemoteAddr() net.Addr { return c.conn.RemoteAddr() }
 
 // SetDeadline sets both read and write deadlines on the underlying transport.

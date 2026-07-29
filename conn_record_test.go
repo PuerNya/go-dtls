@@ -914,23 +914,23 @@ func TestProtectedHandshakeApplicationRecordBufferIsCountBounded(t *testing.T) {
 		t.Fatalf("incomplete fragment: complete=%v err=%v", complete, err)
 	}
 	for sequence := uint64(0); sequence < 8; sequence++ {
-		buffered, err := server.bufferIncompleteHandshakeApplicationLocked(nil, recordNumber{epoch: 3, sequence: sequence})
+		buffered, err := server.bufferIncompleteHandshakeApplicationLocked(nil, recordNumber{epoch: 3, sequence: sequence}, nil)
 		if err != nil || !buffered {
 			t.Fatalf("buffer %d: buffered=%v err=%v", sequence, buffered, err)
 		}
 	}
-	if _, err := server.bufferIncompleteHandshakeApplicationLocked(nil, recordNumber{epoch: 3, sequence: 8}); err == nil {
+	if _, err := server.bufferIncompleteHandshakeApplicationLocked(nil, recordNumber{epoch: 3, sequence: 8}, nil); err == nil {
 		t.Fatal("zero-length application records exceeded the ordering buffer count limit")
 	}
 
 	server.postHandshakeAuthState = &postHandshakeAuthState{hasResponseEpoch: true, responseEpoch: 3}
 	for sequence := uint64(0); sequence < 8; sequence++ {
-		buffered, err := server.bufferPostHandshakeAuthApplicationLocked(nil, recordNumber{epoch: 3, sequence: sequence})
+		buffered, err := server.bufferPostHandshakeAuthApplicationLocked(nil, recordNumber{epoch: 3, sequence: sequence}, nil)
 		if err != nil || !buffered {
 			t.Fatalf("PHA buffer %d: buffered=%v err=%v", sequence, buffered, err)
 		}
 	}
-	if _, err := server.bufferPostHandshakeAuthApplicationLocked(nil, recordNumber{epoch: 3, sequence: 8}); err == nil {
+	if _, err := server.bufferPostHandshakeAuthApplicationLocked(nil, recordNumber{epoch: 3, sequence: 8}, nil); err == nil {
 		t.Fatal("zero-length PHA application records exceeded the ordering buffer count limit")
 	}
 }

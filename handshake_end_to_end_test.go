@@ -2065,6 +2065,9 @@ func TestEndToEndConnectionIDAndKeyUpdate(t *testing.T) {
 		!bytes.Equal(serverState.LocalConnectionID, serverCID) || !bytes.Equal(serverState.PeerConnectionID, clientCID) {
 		t.Fatalf("CID states client=%#v server=%#v", clientState, serverState)
 	}
+	if !clientState.ReturnRoutabilityCheck || !serverState.ReturnRoutabilityCheck {
+		t.Fatal("RRC was not negotiated with Connection ID")
+	}
 	clientWire.reset()
 	if _, err := client.WriteDatagram([]byte("client CID")); err != nil {
 		t.Fatal(err)
@@ -2128,6 +2131,40 @@ func TestConnectionIDRequiresBothPeers(t *testing.T) {
 	}
 }
 
+func TestReturnRoutabilityNegotiationCanBeDisabled(t *testing.T) {
+	certificate, roots := testServerCertificate(t)
+	for _, test := range []struct {
+		name          string
+		disableClient bool
+		disableServer bool
+	}{
+		{name: "client", disableClient: true},
+		{name: "server", disableServer: true},
+	} {
+		t.Run(test.name, func(t *testing.T) {
+			left, right := memoryDatagramPair()
+			client := Client(left, &Config{RootCAs: roots, ServerName: "server.test", ConnectionID: []byte{1}, DisableReturnRoutabilityCheck: test.disableClient, SessionTicketsDisabled: true, HandshakeTimeout: 2 * time.Second, FlightInterval: 5 * time.Millisecond})
+			server := Server(right, &Config{Certificates: []tls.Certificate{certificate}, ConnectionID: []byte{2}, DisableReturnRoutabilityCheck: test.disableServer, SessionTicketsDisabled: true, HandshakeTimeout: 2 * time.Second, FlightInterval: 5 * time.Millisecond})
+			defer client.Close()
+			defer server.Close()
+			serverErr := make(chan error, 1)
+			go func() { serverErr <- server.Handshake() }()
+			if err := client.Handshake(); err != nil {
+				t.Fatal(err)
+			}
+			if err := <-serverErr; err != nil {
+				t.Fatal(err)
+			}
+			if !client.connectionIDNegotiated || !server.connectionIDNegotiated {
+				t.Fatal("disabling RRC also disabled Connection ID")
+			}
+			if client.ConnectionState().ReturnRoutabilityCheck || server.ConnectionState().ReturnRoutabilityCheck {
+				t.Fatal("RRC was negotiated despite explicit opt-out")
+			}
+		})
+	}
+}
+
 func TestEndToEndEmptyConnectionID(t *testing.T) {
 	certificate, roots := testServerCertificate(t)
 	left, right := memoryDatagramPair()
@@ -2141,6 +2178,9 @@ func TestEndToEndEmptyConnectionID(t *testing.T) {
 	}
 	if err := <-serverErr; err != nil {
 		t.Fatal(err)
+	}
+	if !client.ConnectionState().ReturnRoutabilityCheck || !server.ConnectionState().ReturnRoutabilityCheck {
+		t.Fatal("RRC was not negotiated with empty Connection ID")
 	}
 	clientWire.reset()
 	if _, err := client.WriteDatagram([]byte("empty CID")); err != nil {

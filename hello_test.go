@@ -77,7 +77,7 @@ func TestHandshakeMarshalRFCWireVectors(t *testing.T) {
 }
 
 func TestClientHelloRoundTrip(t *testing.T) {
-	h := &clientHello{sessionID: []byte{1, 2, 3}, cookie: []byte{4, 5}, cipherSuites: []uint16{TLS_AES_128_GCM_SHA256, TLS_AES_256_GCM_SHA384}, keyShares: []keyShareEntry{{group: tls.X25519, data: bytes.Repeat([]byte{7}, 32)}}, serverName: "example.test", alpn: []string{"h3", "coap"}}
+	h := &clientHello{sessionID: []byte{1, 2, 3}, cookie: []byte{4, 5}, cipherSuites: []uint16{TLS_AES_128_GCM_SHA256, TLS_AES_256_GCM_SHA384}, keyShares: []keyShareEntry{{group: tls.X25519, data: bytes.Repeat([]byte{7}, 32)}}, serverName: "example.test", alpn: []string{"h3", "coap"}, connectionID: []byte{1}, hasConnectionID: true, returnRoutability: true}
 	for i := range h.random {
 		h.random[i] = byte(i)
 	}
@@ -89,7 +89,7 @@ func TestClientHelloRoundTrip(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if got.random != h.random || !bytes.Equal(got.sessionID, h.sessionID) || !bytes.Equal(got.cookie, h.cookie) || len(got.cipherSuites) != 2 || len(got.keyShares) != 1 || got.keyShares[0].group != tls.X25519 || !bytes.Equal(got.keyShares[0].data, h.keyShares[0].data) || got.serverName != "example.test" || len(got.alpn) != 2 || got.alpn[1] != "coap" {
+	if got.random != h.random || !bytes.Equal(got.sessionID, h.sessionID) || !bytes.Equal(got.cookie, h.cookie) || len(got.cipherSuites) != 2 || len(got.keyShares) != 1 || got.keyShares[0].group != tls.X25519 || !bytes.Equal(got.keyShares[0].data, h.keyShares[0].data) || got.serverName != "example.test" || len(got.alpn) != 2 || got.alpn[1] != "coap" || !got.returnRoutability {
 		t.Fatalf("round trip mismatch: %#v", got)
 	}
 }
@@ -155,7 +155,7 @@ func TestClientHelloRejectsEarlyDataWithoutPSK(t *testing.T) {
 }
 
 func TestServerHelloRoundTrip(t *testing.T) {
-	h := &serverHello{cipherSuite: TLS_AES_128_GCM_SHA256, keyShare: keyShareEntry{group: tls.X25519, data: bytes.Repeat([]byte{9}, 32)}, connectionID: []byte{7, 8}, hasConnectionID: true}
+	h := &serverHello{cipherSuite: TLS_AES_128_GCM_SHA256, keyShare: keyShareEntry{group: tls.X25519, data: bytes.Repeat([]byte{9}, 32)}, connectionID: []byte{7, 8}, hasConnectionID: true, returnRoutability: true}
 	h.random[0] = 42
 	b, err := h.marshal()
 	if err != nil {
@@ -165,7 +165,7 @@ func TestServerHelloRoundTrip(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if got.random != h.random || got.cipherSuite != h.cipherSuite || got.keyShare.group != h.keyShare.group || !bytes.Equal(got.keyShare.data, h.keyShare.data) || !got.hasConnectionID || !bytes.Equal(got.connectionID, h.connectionID) {
+	if got.random != h.random || got.cipherSuite != h.cipherSuite || got.keyShare.group != h.keyShare.group || !bytes.Equal(got.keyShare.data, h.keyShare.data) || !got.hasConnectionID || !bytes.Equal(got.connectionID, h.connectionID) || !got.returnRoutability {
 		t.Fatalf("round trip mismatch: %#v", got)
 	}
 }
@@ -249,6 +249,59 @@ func TestServerHelloRejectsUnsolicitedConnectionIDAsUnsupportedExtension(t *test
 	}
 	if err = validateServerHelloConnectionID(&clientHello{hasConnectionID: true}, &serverHello{hasConnectionID: true}); err != nil {
 		t.Fatalf("requested connection_id was rejected: %v", err)
+	}
+}
+
+func TestReturnRoutabilityHelloRequirements(t *testing.T) {
+	if err := validateServerHelloReturnRoutability(&clientHello{}, &serverHello{returnRoutability: true}); err == nil {
+		t.Fatal("accepted an unsolicited rrc extension")
+	} else if description, ok := protocolAlert(err); !ok || description != alertUnsupportedExtension {
+		t.Fatalf("unsolicited rrc alert=%d ok=%v", description, ok)
+	}
+	offer := &clientHello{returnRoutability: true, hasConnectionID: true}
+	if err := validateServerHelloReturnRoutability(offer, &serverHello{returnRoutability: true}); err == nil {
+		t.Fatal("accepted rrc without a negotiated connection ID")
+	} else if description, ok := protocolAlert(err); !ok || description != alertIllegalParameter {
+		t.Fatalf("rrc without CID alert=%d ok=%v", description, ok)
+	}
+	if err := validateServerHelloReturnRoutability(offer, &serverHello{returnRoutability: true, hasConnectionID: true}); err != nil {
+		t.Fatal(err)
+	}
+
+	client := &clientHello{cipherSuites: []uint16{TLS_AES_128_GCM_SHA256}, signatureSchemes: defaultSignatureSchemes(), supportedGroups: []tls.CurveID{tls.X25519}, keyShares: []keyShareEntry{{group: tls.X25519, data: bytes.Repeat([]byte{1}, 32)}}}
+	clientWire, err := client.marshal()
+	if err != nil {
+		t.Fatal(err)
+	}
+	p := wireParser{b: clientWire}
+	_ = p.u16()
+	_ = p.take(32)
+	_ = p.bytes8()
+	_ = p.bytes8()
+	_ = p.bytes16()
+	_ = p.bytes8()
+	extensionLengthOffset := p.off
+	extensionLength := int(binary.BigEndian.Uint16(clientWire[extensionLengthOffset:]))
+	clientWire = append(clientWire, byte(extReturnRoutability>>8), byte(extReturnRoutability), 0, 1, 1)
+	binary.BigEndian.PutUint16(clientWire[extensionLengthOffset:], uint16(extensionLength+5))
+	if _, err = parseClientHello(clientWire); err == nil {
+		t.Fatal("accepted a non-empty ClientHello rrc extension")
+	} else if description, ok := protocolAlert(err); !ok || description != alertDecodeError {
+		t.Fatalf("malformed ClientHello rrc alert=%d ok=%v", description, ok)
+	}
+
+	server := &serverHello{cipherSuite: TLS_AES_128_GCM_SHA256, keyShare: keyShareEntry{group: tls.X25519, data: bytes.Repeat([]byte{9}, 32)}}
+	serverWire, err := server.marshal()
+	if err != nil {
+		t.Fatal(err)
+	}
+	serverExtensionLength := int(binary.BigEndian.Uint16(serverWire[38:40]))
+	serverWire = append(serverWire, byte(extReturnRoutability>>8), byte(extReturnRoutability), 0, 1, 1)
+	binary.BigEndian.PutUint16(serverWire[38:40], uint16(serverExtensionLength+5))
+	if _, err = parseServerHello(serverWire); err == nil {
+		t.Fatal("accepted a non-empty ServerHello rrc extension")
+	} else if description, ok := protocolAlert(err); !ok || description != alertDecodeError {
+		t.Fatalf("malformed ServerHello rrc alert=%d ok=%v", description, ok)
 	}
 }
 
@@ -566,6 +619,7 @@ func TestSecondClientHelloRejectsChangedInvariantFields(t *testing.T) {
 		pskDHE:                      true,
 		connectionID:                []byte{3},
 		hasConnectionID:             true,
+		returnRoutability:           true,
 		postHandshakeAuth:           true,
 		unknownExtensions:           map[uint16][]byte{0xffa5: {4}},
 	}
@@ -587,6 +641,7 @@ func TestSecondClientHelloRejectsChangedInvariantFields(t *testing.T) {
 		{"psk-mode", func(h *clientHello) { h.pskDHE = false }},
 		{"connection-id", func(h *clientHello) { h.connectionID = []byte{9} }},
 		{"connection-id-presence", func(h *clientHello) { h.hasConnectionID = false }},
+		{"return-routability", func(h *clientHello) { h.returnRoutability = false }},
 		{"post-handshake-auth", func(h *clientHello) { h.postHandshakeAuth = false }},
 		{"unknown-extension", func(h *clientHello) { h.unknownExtensions = map[uint16][]byte{0xffa5: {9}} }},
 	} {

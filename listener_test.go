@@ -458,6 +458,159 @@ func TestListenerConnectionIDAuthenticatedMigration(t *testing.T) {
 	}
 }
 
+func TestListenerReturnRoutabilityNATRebinding(t *testing.T) {
+	certificate, roots := testServerCertificate(t)
+	serverCID := []byte{0x91, 0x92, 0x93, 0x94}
+	clientCID := []byte{0x81, 0x82, 0x83}
+	listener, err := Listen("udp4", "127.0.0.1:0", &Config{
+		Certificates: []tls.Certificate{certificate}, SessionTicketsDisabled: true,
+		GetConnectionID:  func() ([]byte, error) { return append([]byte(nil), serverCID...), nil },
+		HandshakeTimeout: 2 * time.Second, FlightInterval: 5 * time.Millisecond,
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer listener.Close()
+	accepted := make(chan *Conn, 1)
+	serverErr := make(chan error, 1)
+	go func() {
+		server, acceptErr := listener.Accept()
+		if acceptErr == nil {
+			acceptErr = server.Handshake()
+		}
+		if acceptErr != nil {
+			serverErr <- acceptErr
+			return
+		}
+		accepted <- server
+	}()
+	client, err := DialWithDialer(&net.Dialer{Timeout: 2 * time.Second}, "udp4", listener.Addr().String(), &Config{
+		RootCAs: roots, ServerName: "server.test", ConnectionID: clientCID, SessionTicketsDisabled: true,
+		HandshakeTimeout: 2 * time.Second, FlightInterval: 5 * time.Millisecond,
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer client.Close()
+	var server *Conn
+	select {
+	case server = <-accepted:
+	case err = <-serverErr:
+		t.Fatal(err)
+	case <-time.After(2 * time.Second):
+		t.Fatal("server handshake timed out")
+	}
+	defer server.Close()
+	if !client.ConnectionState().ReturnRoutabilityCheck || !server.ConnectionState().ReturnRoutabilityCheck {
+		t.Fatal("RRC was not negotiated")
+	}
+
+	client.writeMu.Lock()
+	wire, err := client.sendCipher.seal(recordTypeApplicationData, []byte("rebinding"))
+	client.writeMu.Unlock()
+	if err != nil {
+		t.Fatal(err)
+	}
+	oldTransport, ok := client.conn.(*net.UDPConn)
+	if !ok {
+		t.Fatalf("client transport is %T", client.conn)
+	}
+	oldAddress := oldTransport.LocalAddr()
+	if err = oldTransport.SetReadDeadline(time.Now()); err != nil {
+		t.Fatal(err)
+	}
+	deadline := time.Now().Add(time.Second)
+	for time.Now().Before(deadline) {
+		client.readerMu.Lock()
+		running := client.readerRunning
+		client.readerMu.Unlock()
+		if !running {
+			break
+		}
+		time.Sleep(time.Millisecond)
+	}
+	client.readerMu.Lock()
+	readerRunning := client.readerRunning
+	client.readerMu.Unlock()
+	if readerRunning {
+		t.Fatal("old path reader did not stop")
+	}
+	if err = oldTransport.SetReadDeadline(time.Time{}); err != nil {
+		t.Fatal(err)
+	}
+	migrated, err := net.ListenUDP("udp4", &net.UDPAddr{IP: net.IPv4(127, 0, 0, 1)})
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer migrated.Close()
+	server.retransmitNanos.Store(int64(5 * time.Millisecond))
+	server.lastRTTSampleUnixNano.Store(time.Now().UnixNano())
+	if _, err = migrated.WriteTo(wire, listener.Addr()); err != nil {
+		t.Fatal(err)
+	}
+	buffer := make([]byte, 2048)
+	if n, _, readErr := server.ReadDatagram(buffer); readErr != nil || string(buffer[:n]) != "rebinding" {
+		t.Fatalf("server read %q, %v", buffer[:n], readErr)
+	}
+
+	if err = migrated.SetReadDeadline(time.Now().Add(time.Second)); err != nil {
+		t.Fatal(err)
+	}
+	n, _, err := migrated.ReadFromUDP(buffer)
+	if err != nil {
+		t.Fatal(err)
+	}
+	content, contentType, _, _, err := client.receiveEpochs.openInPlace(buffer[:n])
+	if err != nil || contentType != recordTypeReturnRoutability {
+		t.Fatalf("basic challenge type=%d err=%v", contentType, err)
+	}
+	challenge, known, err := parseReturnRoutabilityMessage(content)
+	if err != nil || !known || challenge.typ != returnRoutabilityPathChallenge {
+		t.Fatalf("challenge=%#v known=%v err=%v", challenge, known, err)
+	}
+	response, err := (returnRoutabilityMessage{typ: returnRoutabilityPathResponse, cookie: challenge.cookie}).marshal()
+	if err != nil {
+		t.Fatal(err)
+	}
+	client.writeMu.Lock()
+	responseWire, err := client.sendCipher.seal(recordTypeReturnRoutability, response[:])
+	client.writeMu.Unlock()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err = migrated.WriteTo(responseWire, listener.Addr()); err != nil {
+		t.Fatal(err)
+	}
+	deadline = time.Now().Add(time.Second)
+	for time.Now().Before(deadline) && !sameNetworkAddress(server.RemoteAddr(), migrated.LocalAddr()) {
+		time.Sleep(time.Millisecond)
+	}
+	if !sameNetworkAddress(server.RemoteAddr(), migrated.LocalAddr()) {
+		t.Fatalf("server did not rebind: got %v want %v", server.RemoteAddr(), migrated.LocalAddr())
+	}
+
+	if _, err = server.WriteDatagram([]byte("new path")); err != nil {
+		t.Fatal(err)
+	}
+	n, _, err = migrated.ReadFromUDP(buffer)
+	if err != nil {
+		t.Fatal(err)
+	}
+	content, contentType, _, _, err = client.receiveEpochs.openInPlace(buffer[:n])
+	if err != nil || contentType != recordTypeApplicationData || string(content) != "new path" {
+		t.Fatalf("rebound response type=%d content=%q err=%v", contentType, content, err)
+	}
+
+	internal := listener
+	internal.mu.Lock()
+	bound := internal.sessions[sessionKey(migrated.LocalAddr())]
+	oldBound := internal.sessions[sessionKey(oldAddress)]
+	internal.mu.Unlock()
+	if bound != server.conn.(*packetSession) || oldBound != nil {
+		t.Fatal("Listener tuple map was not updated with the validated path")
+	}
+}
+
 func TestListenerRoutesNegotiatedEmptyConnectionID(t *testing.T) {
 	certificate, roots := testServerCertificate(t)
 	listener, err := Listen("udp4", "127.0.0.1:0", &Config{

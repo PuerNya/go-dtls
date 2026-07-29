@@ -189,6 +189,11 @@ type Config struct {
 	// DisableConnectionID suppresses the client's recommended empty-CID offer
 	// when ConnectionID is nil. It has no effect when ConnectionID is non-nil.
 	DisableConnectionID bool
+	// DisableReturnRoutabilityCheck disables RFC 9853 negotiation. By default,
+	// a client offering Connection ID also offers Return Routability Check, and
+	// a capable server negotiates it with Connection ID. Set this only when the
+	// application validates changed peer addresses itself.
+	DisableReturnRoutabilityCheck bool
 	// GetConnectionID optionally creates a local CID for each accepted Listener
 	// session and in response to RequestConnectionId. It overrides ConnectionID
 	// for a newly accepted Listener session. Returned IDs must be at most 255

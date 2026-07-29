@@ -131,7 +131,7 @@ func TestPlainRecordIgnoresLegacyVersion(t *testing.T) {
 }
 
 func TestPlainRecordRejectsProtectedOnlyContentTypes(t *testing.T) {
-	for _, contentType := range []uint8{recordTypeChangeCipherSpec, recordTypeApplicationData, recordTypeHeartbeat, 0xff} {
+	for _, contentType := range []uint8{recordTypeChangeCipherSpec, recordTypeApplicationData, recordTypeHeartbeat, recordTypeReturnRoutability, 0xff} {
 		if _, err := marshalPlainRecord(record{typ: contentType}); err == nil {
 			t.Fatalf("marshaled plaintext content type %d", contentType)
 		}

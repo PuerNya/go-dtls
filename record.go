@@ -3,15 +3,16 @@ package dtls13
 import "encoding/binary"
 
 const (
-	recordTypeChangeCipherSpec uint8  = 20
-	recordTypeAlert            uint8  = 21
-	recordTypeHandshake        uint8  = 22
-	recordTypeApplicationData  uint8  = 23
-	recordTypeHeartbeat        uint8  = 24
-	recordTypeACK              uint8  = 26
-	dtlsLegacyVersion          uint16 = 0xfefd
-	plainRecordHeaderLen              = 13
-	maxRecordContent                  = 1 << 14
+	recordTypeChangeCipherSpec  uint8  = 20
+	recordTypeAlert             uint8  = 21
+	recordTypeHandshake         uint8  = 22
+	recordTypeApplicationData   uint8  = 23
+	recordTypeHeartbeat         uint8  = 24
+	recordTypeACK               uint8  = 26
+	recordTypeReturnRoutability uint8  = 27
+	dtlsLegacyVersion           uint16 = 0xfefd
+	plainRecordHeaderLen               = 13
+	maxRecordContent                   = 1 << 14
 )
 
 type record struct {

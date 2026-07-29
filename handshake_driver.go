@@ -609,6 +609,7 @@ func (c *Conn) clientHandshake(ctx context.Context) error {
 	if connectionID, offered := c.config.clientConnectionIDOffer(); offered {
 		hello.hasConnectionID = true
 		hello.connectionID = connectionID
+		hello.returnRoutability = !c.config.DisableReturnRoutabilityCheck
 	}
 	if _, err = io.ReadFull(c.config.Rand, hello.random[:]); err != nil {
 		return err
@@ -822,6 +823,9 @@ func (c *Conn) clientHandshake(ctx context.Context) error {
 	if err = validateServerHelloConnectionID(hello, sh); err != nil {
 		return err
 	}
+	if err = validateServerHelloReturnRoutability(hello, sh); err != nil {
+		return err
+	}
 	if sh.hasConnectionID {
 		c.connectionIDNegotiated = true
 		c.sendConnectionID = append([]byte(nil), sh.connectionID...)
@@ -829,6 +833,7 @@ func (c *Conn) clientHandshake(ctx context.Context) error {
 		c.localCIDUpdatesAllowed = len(c.receiveConnectionID) > 0
 		c.peerCIDUpdatesAllowed = len(c.sendConnectionID) > 0
 	}
+	c.returnRoutabilityCheckNegotiated = sh.returnRoutability
 	resumed := sh.selectedIdentity != nil
 	if resumed {
 		if clientSession == nil || *sh.selectedIdentity != 0 {
@@ -1097,7 +1102,7 @@ func (c *Conn) clientHandshake(ctx context.Context) error {
 	c.completedPeerFlightEnd = serverFinishedSequence
 	c.hasCompletedPeerFlight = true
 	c.mu.Lock()
-	c.state = ConnectionState{Version: VersionDTLS13, HandshakeComplete: true, DidResume: resumed, CipherSuite: suite.id, NegotiatedProtocol: negotiated, ServerName: c.config.ServerName, PeerCertificates: peerCerts, VerifiedChains: chains, LocalConnectionID: append([]byte(nil), c.receiveConnectionID...), PeerConnectionID: append([]byte(nil), c.sendConnectionID...), exporter: newExporter(suite, schedule.exporterMasterSecret)}
+	c.state = ConnectionState{Version: VersionDTLS13, HandshakeComplete: true, DidResume: resumed, CipherSuite: suite.id, NegotiatedProtocol: negotiated, ServerName: c.config.ServerName, PeerCertificates: peerCerts, VerifiedChains: chains, LocalConnectionID: append([]byte(nil), c.receiveConnectionID...), PeerConnectionID: append([]byte(nil), c.sendConnectionID...), ReturnRoutabilityCheck: c.returnRoutabilityCheckNegotiated, exporter: newExporter(suite, schedule.exporterMasterSecret)}
 	c.mu.Unlock()
 	return nil
 }
@@ -1136,6 +1141,7 @@ func equalClientHelloAfterHRR(initial, second *clientHello, requestedGroup tls.C
 		initial.pskDHE == second.pskDHE &&
 		equalBytes(initial.connectionID, second.connectionID) &&
 		initial.hasConnectionID == second.hasConnectionID &&
+		initial.returnRoutability == second.returnRoutability &&
 		initial.postHandshakeAuth == second.postHandshakeAuth &&
 		equalExtensionMaps(initial.unknownExtensions, second.unknownExtensions)
 }
@@ -1414,6 +1420,10 @@ func (c *Conn) serverHandshake(ctx context.Context) error {
 		c.peerCIDUpdatesAllowed = len(c.sendConnectionID) > 0
 		sh.hasConnectionID = true
 		sh.connectionID = append([]byte(nil), c.receiveConnectionID...)
+	}
+	if c.connectionIDNegotiated && ch.returnRoutability && !c.config.DisableReturnRoutabilityCheck {
+		c.returnRoutabilityCheckNegotiated = true
+		sh.returnRoutability = true
 	}
 	if resumed {
 		selected := selectedPSKIdentity
@@ -1695,7 +1705,7 @@ func (c *Conn) serverHandshake(ctx context.Context) error {
 	c.completedPeerFlightEnd = clientFinishedSequence
 	c.hasCompletedPeerFlight = true
 	c.mu.Lock()
-	c.state = ConnectionState{Version: VersionDTLS13, HandshakeComplete: true, DidResume: resumed, CipherSuite: suite.id, NegotiatedProtocol: negotiated, PeerCertificates: clientCerts, VerifiedChains: clientChains, LocalConnectionID: append([]byte(nil), c.receiveConnectionID...), PeerConnectionID: append([]byte(nil), c.sendConnectionID...), exporter: newExporter(suite, schedule.exporterMasterSecret)}
+	c.state = ConnectionState{Version: VersionDTLS13, HandshakeComplete: true, DidResume: resumed, CipherSuite: suite.id, NegotiatedProtocol: negotiated, PeerCertificates: clientCerts, VerifiedChains: clientChains, LocalConnectionID: append([]byte(nil), c.receiveConnectionID...), PeerConnectionID: append([]byte(nil), c.sendConnectionID...), ReturnRoutabilityCheck: c.returnRoutabilityCheckNegotiated, exporter: newExporter(suite, schedule.exporterMasterSecret)}
 	c.mu.Unlock()
 	if validated, ok := c.conn.(interface{ handshakeValidated() }); ok {
 		validated.handshakeValidated()
