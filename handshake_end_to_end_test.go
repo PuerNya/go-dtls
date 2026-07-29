@@ -417,7 +417,7 @@ func testServerCertificate(t testing.TB) (tls.Certificate, *x509.CertPool) {
 	return tls.Certificate{Certificate: [][]byte{der}, PrivateKey: key, Leaf: parsed}, pool
 }
 
-func testClientCertificate(t *testing.T) (tls.Certificate, *x509.CertPool) {
+func testClientCertificate(t testing.TB) (tls.Certificate, *x509.CertPool) {
 	t.Helper()
 	pub, key, err := ed25519.GenerateKey(rand.Reader)
 	if err != nil {
@@ -1373,6 +1373,217 @@ func TestEndToEndSessionResumption(t *testing.T) {
 	}
 }
 
+func TestEndToEndMutualTLSSessionResumption(t *testing.T) {
+	serverCertificate, roots := testServerCertificate(t)
+	clientCertificate, clientRoots := testClientCertificate(t)
+	cache := NewLRUClientSessionCache(2)
+	var ticketKey [32]byte
+	copy(ticketKey[:], bytes.Repeat([]byte{0x3c}, 32))
+	clientConfig := &Config{
+		RootCAs: roots, ServerName: "server.test", Certificates: []tls.Certificate{clientCertificate},
+		ClientSessionCache: cache, HandshakeTimeout: 2 * time.Second, FlightInterval: 5 * time.Millisecond,
+	}
+	serverConfig := &Config{
+		Certificates: []tls.Certificate{serverCertificate}, ClientAuth: tls.RequireAndVerifyClientCert,
+		ClientCAs: clientRoots, SessionTicketKey: ticketKey, SessionTicketLifetime: time.Hour,
+		HandshakeTimeout: 2 * time.Second, FlightInterval: 5 * time.Millisecond,
+	}
+	verifyCalls := 0
+	serverConfig.VerifyPeerCertificate = func(_ [][]byte, _ [][]*x509.Certificate) error {
+		verifyCalls++
+		return nil
+	}
+	_ = issueEarlyDataTicket(t, clientConfig, serverConfig)
+	if verifyCalls != 1 {
+		t.Fatalf("full handshake VerifyPeerCertificate calls = %d, want 1", verifyCalls)
+	}
+
+	// Possession of the cached PSK authenticates the resumed client. Removing
+	// the certificate ensures this cannot silently fall back to a full mTLS handshake.
+	resumingClientConfig := clientConfig.Clone()
+	resumingClientConfig.Certificates = nil
+	left, right := memoryDatagramPair()
+	client := Client(left, resumingClientConfig)
+	server := Server(right, serverConfig)
+	serverErr := make(chan error, 1)
+	go func() { serverErr <- server.Handshake() }()
+	if err := client.Handshake(); err != nil {
+		t.Fatal(err)
+	}
+	if err := <-serverErr; err != nil {
+		t.Fatal(err)
+	}
+	clientState, serverState := client.ConnectionState(), server.ConnectionState()
+	if !clientState.DidResume || !serverState.DidResume {
+		t.Fatalf("mutual TLS resumption state client=%v server=%v", clientState.DidResume, serverState.DidResume)
+	}
+	if len(serverState.PeerCertificates) != 1 || serverState.PeerCertificates[0].Subject.CommonName != "client" || len(serverState.VerifiedChains) == 0 {
+		t.Fatalf("resumed client authentication state %#v", serverState.PeerCertificates)
+	}
+	if verifyCalls != 1 {
+		t.Fatalf("resumed handshake called VerifyPeerCertificate; calls = %d", verifyCalls)
+	}
+	_ = client.Close()
+	_ = server.Close()
+}
+
+func TestMutualTLSSessionResumptionPolicyFallbacks(t *testing.T) {
+	serverCertificate, roots := testServerCertificate(t)
+	clientCertificate, clientRoots := testClientCertificate(t)
+	var ticketKey [32]byte
+	copy(ticketKey[:], bytes.Repeat([]byte{0x5e}, 32))
+
+	t.Run("UnauthenticatedTicketFallsBackToFullMutualTLS", func(t *testing.T) {
+		cache := NewLRUClientSessionCache(2)
+		clientConfig := &Config{
+			RootCAs: roots, ServerName: "server.test", Certificates: []tls.Certificate{clientCertificate},
+			ClientSessionCache: cache, HandshakeTimeout: 2 * time.Second, FlightInterval: 5 * time.Millisecond,
+		}
+		serverConfig := &Config{
+			Certificates: []tls.Certificate{serverCertificate}, SessionTicketKey: ticketKey,
+			SessionTicketLifetime: time.Hour, HandshakeTimeout: 2 * time.Second, FlightInterval: 5 * time.Millisecond,
+		}
+		_ = issueEarlyDataTicket(t, clientConfig, serverConfig)
+		serverConfig.ClientAuth = tls.RequireAndVerifyClientCert
+		serverConfig.ClientCAs = clientRoots
+
+		left, right := memoryDatagramPair()
+		client := Client(left, clientConfig)
+		server := Server(right, serverConfig)
+		serverErr := make(chan error, 1)
+		go func() { serverErr <- server.Handshake() }()
+		if err := client.Handshake(); err != nil {
+			t.Fatal(err)
+		}
+		if err := <-serverErr; err != nil {
+			t.Fatal(err)
+		}
+		if client.ConnectionState().DidResume || server.ConnectionState().DidResume {
+			t.Fatal("unauthenticated ticket resumed after mutual TLS became required")
+		}
+		if len(server.ConnectionState().VerifiedChains) == 0 {
+			t.Fatal("full mutual TLS fallback did not authenticate the client")
+		}
+		_ = client.Close()
+		_ = server.Close()
+	})
+
+	t.Run("ChangedClientCARejectsResumption", func(t *testing.T) {
+		cache := NewLRUClientSessionCache(2)
+		clientConfig := &Config{
+			RootCAs: roots, ServerName: "server.test", Certificates: []tls.Certificate{clientCertificate},
+			ClientSessionCache: cache, HandshakeTimeout: 2 * time.Second, FlightInterval: 5 * time.Millisecond,
+		}
+		serverConfig := &Config{
+			Certificates: []tls.Certificate{serverCertificate}, ClientAuth: tls.RequireAndVerifyClientCert,
+			ClientCAs: clientRoots, SessionTicketKey: ticketKey, SessionTicketLifetime: time.Hour,
+			HandshakeTimeout: 2 * time.Second, FlightInterval: 5 * time.Millisecond,
+		}
+		_ = issueEarlyDataTicket(t, clientConfig, serverConfig)
+		serverConfig.ClientCAs = x509.NewCertPool()
+		clientConfig = clientConfig.Clone()
+		clientConfig.Certificates = nil
+
+		left, right := memoryDatagramPair()
+		client := Client(left, clientConfig)
+		server := Server(right, serverConfig)
+		serverErr := make(chan error, 1)
+		go func() { serverErr <- server.Handshake() }()
+		clientErr := client.Handshake()
+		serverHandshakeErr := <-serverErr
+		if clientErr == nil && serverHandshakeErr == nil {
+			t.Fatal("resumed mutual TLS with a client chain no longer trusted by ClientCAs")
+		}
+		if client.ConnectionState().DidResume || server.ConnectionState().DidResume {
+			t.Fatal("changed ClientCAs retained resumed state")
+		}
+		_ = client.Close()
+		_ = server.Close()
+	})
+}
+
+func TestMutualTLSSessionTicketRollPreservesAuthenticationTime(t *testing.T) {
+	serverCertificate, roots := testServerCertificate(t)
+	clientCertificate, clientRoots := testClientCertificate(t)
+	cache := NewLRUClientSessionCache(2)
+	now := time.Now()
+	clock := func() time.Time { return now }
+	var ticketKey [32]byte
+	copy(ticketKey[:], bytes.Repeat([]byte{0x6f}, 32))
+	clientConfig := &Config{
+		RootCAs: roots, ServerName: "server.test", Certificates: []tls.Certificate{clientCertificate},
+		ClientSessionCache: cache, Time: clock, HandshakeTimeout: 2 * time.Second, FlightInterval: 5 * time.Millisecond,
+	}
+	serverConfig := &Config{
+		Certificates: []tls.Certificate{serverCertificate}, ClientAuth: tls.RequireAndVerifyClientCert,
+		ClientCAs: clientRoots, SessionTicketKey: ticketKey, SessionTicketLifetime: time.Hour, Time: clock,
+		HandshakeTimeout: 2 * time.Second, FlightInterval: 5 * time.Millisecond,
+	}
+	first := issueEarlyDataTicket(t, clientConfig, serverConfig)
+	protector, err := newSessionTicketProtector(ticketKey, nil, clock)
+	if err != nil {
+		t.Fatal(err)
+	}
+	firstState, err := protector.open(first.ticket)
+	if err != nil {
+		t.Fatal(err)
+	}
+	now = now.Add(time.Minute)
+	resumingConfig := clientConfig.Clone()
+	resumingConfig.Certificates = nil
+	second := issueEarlyDataTicket(t, resumingConfig, serverConfig)
+	secondState, err := protector.open(second.ticket)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if secondState.clientAuthAt != firstState.clientAuthAt {
+		t.Fatalf("rolled ticket client authentication time = %d, want %d", secondState.clientAuthAt, firstState.clientAuthAt)
+	}
+}
+
+func TestEndToEndMutualTLSEarlyData(t *testing.T) {
+	serverCertificate, roots := testServerCertificate(t)
+	clientCertificate, clientRoots := testClientCertificate(t)
+	cache := NewLRUClientSessionCache(2)
+	var ticketKey [32]byte
+	copy(ticketKey[:], bytes.Repeat([]byte{0x4d}, 32))
+	clientConfig := &Config{
+		RootCAs: roots, ServerName: "server.test", Certificates: []tls.Certificate{clientCertificate},
+		ClientSessionCache: cache, HandshakeTimeout: 2 * time.Second, FlightInterval: 5 * time.Millisecond,
+	}
+	serverConfig := &Config{
+		Certificates: []tls.Certificate{serverCertificate}, ClientAuth: tls.RequireAndVerifyClientCert, ClientCAs: clientRoots,
+		SessionTicketKey: ticketKey, SessionTicketLifetime: time.Hour, MaxEarlyData: 1024,
+		AllowEarlyDataWithoutCookie: true, EarlyDataReplayCache: NewLRUEarlyDataReplayCache(8),
+		HandshakeTimeout: 2 * time.Second, FlightInterval: 5 * time.Millisecond,
+	}
+	_ = issueEarlyDataTicket(t, clientConfig, serverConfig)
+	resumingClientConfig := clientConfig.Clone()
+	resumingClientConfig.Certificates = nil
+	left, right := memoryDatagramPair()
+	client := Client(left, resumingClientConfig)
+	server := Server(right, serverConfig)
+	serverErr := make(chan error, 1)
+	go func() { serverErr <- server.Handshake() }()
+	payload := []byte("idempotent mutual TLS early data")
+	if n, err := client.WriteEarlyData(payload); err != nil || n != len(payload) {
+		t.Fatalf("WriteEarlyData = %d, %v", n, err)
+	}
+	if err := <-serverErr; err != nil {
+		t.Fatal(err)
+	}
+	if !server.ConnectionState().DidResume || len(server.ConnectionState().VerifiedChains) == 0 {
+		t.Fatal("0-RTT resumption lost mutual TLS authentication state")
+	}
+	buffer := make([]byte, 64)
+	n, _, err := server.ReadDatagram(buffer)
+	if err != nil || !bytes.Equal(buffer[:n], payload) {
+		t.Fatalf("ReadDatagram = %q, %v", buffer[:n], err)
+	}
+	_ = client.Close()
+	_ = server.Close()
+}
+
 func TestSessionResumptionAllowsDifferentCipherSuiteWithSameHash(t *testing.T) {
 	certificate, roots := testServerCertificate(t)
 	cache := NewLRUClientSessionCache(2)
@@ -1498,6 +1709,8 @@ func issueEarlyDataTicket(t *testing.T, clientConfig, serverConfig *Config) *Cli
 	key := clientSessionCacheKey(client.config, client.conn)
 	for time.Now().Before(deadline) {
 		if state, ok := clientConfig.ClientSessionCache.Get(key); ok {
+			_ = client.Close()
+			_ = server.Close()
 			return state
 		}
 		time.Sleep(time.Millisecond)

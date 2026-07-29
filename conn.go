@@ -40,10 +40,11 @@ type ConnectionState struct {
 	// server-side state.
 	ServerName string
 	// PeerCertificates contains the certificate chain presented by the peer,
-	// with the leaf first. It can be empty for an authenticated resumed session
-	// or when a server did not request a client certificate.
+	// with the leaf first. Resumed connections restore this state from the
+	// session. It can be empty when a server did not request a client certificate.
 	PeerCertificates []*x509.Certificate
 	// VerifiedChains contains the chains built during certificate verification.
+	// Resumed connections restore chains after current built-in policy checks.
 	// It is nil when built-in verification was skipped or the peer did not send
 	// a certificate.
 	VerifiedChains [][]*x509.Certificate

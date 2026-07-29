@@ -57,11 +57,17 @@ type Config struct {
 	// parsing and verification. rawCerts contains the peer-provided DER chain.
 	// verifiedChains contains the chains built by normal verification, or is nil
 	// when built-in verification was skipped. Returning an error aborts the
-	// handshake.
+	// handshake. Like crypto/tls, it is not called on resumed connections. A
+	// server instead restores authenticated client state from the protected
+	// ticket and checks it against the current ClientAuth, ClientCAs, certificate
+	// validity, and SessionTicketLifetime. Disable tickets or rotate
+	// SessionTicketKey when a changed callback must invalidate existing sessions.
 	VerifyPeerCertificate func(rawCerts [][]byte, verifiedChains [][]*x509.Certificate) error
 	// ClientAuth controls a server's policy for client certificates during the
 	// handshake and for RequestClientCertificate. The zero value is
-	// tls.NoClientCert. It is ignored by clients.
+	// tls.NoClientCert. A resumable mutual-TLS session carries the authenticated
+	// client certificate state in its encrypted ticket; the abbreviated PSK
+	// handshake does not request a fresh certificate. It is ignored by clients.
 	ClientAuth tls.ClientAuthType
 	// PostHandshakeAuth makes a client advertise support for post-handshake
 	// client authentication and permits it to answer CertificateRequest using
@@ -146,10 +152,15 @@ type Config struct {
 	SessionTicketsDisabled bool
 	// SessionTicketKey authenticates and encrypts server ticket state. Servers
 	// sharing resumable sessions must use the same key. A zero key is replaced
-	// with random key material when the configuration is first used.
+	// with random key material when the configuration is first used. Applications
+	// must rotate explicitly configured keys regularly; changing the key
+	// immediately invalidates tickets issued with the previous key.
 	SessionTicketKey [32]byte
 	// SessionTicketLifetime controls ticket validity. Zero selects 24 hours;
-	// values from one second through seven days are accepted, matching RFC 8446.
+	// values from one second through seven days are accepted, matching RFC 9846.
+	// For mutual TLS it also bounds the total age of the original online client
+	// CertificateVerify authentication, so renewed tickets cannot extend it
+	// indefinitely.
 	SessionTicketLifetime time.Duration
 	// MaxEarlyData advertises and permits at most this many 0-RTT application
 	// bytes per resumed connection. Zero disables early data. It does not by

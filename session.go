@@ -1,6 +1,7 @@
 package dtls13
 
 import (
+	"bytes"
 	"container/list"
 	"crypto/aes"
 	"crypto/cipher"
@@ -291,14 +292,17 @@ func (c *lruSessionCache) Put(key string, state *ClientSessionState) {
 }
 
 type sessionTicketState struct {
-	createdAt    int64
-	lifetime     uint32
-	suite        uint16
-	psk          []byte
-	serverName   string
-	protocol     string
-	ageAdd       uint32
-	maxEarlyData uint32
+	createdAt        int64
+	lifetime         uint32
+	suite            uint16
+	psk              []byte
+	serverName       string
+	protocol         string
+	ageAdd           uint32
+	maxEarlyData     uint32
+	clientAuthAt     int64
+	peerCertificates []*x509.Certificate
+	verifiedChains   [][]*x509.Certificate
 }
 
 func (s *sessionTicketState) marshal() ([]byte, error) {
@@ -314,13 +318,43 @@ func (s *sessionTicketState) marshal() ([]byte, error) {
 	if len(s.protocol) > 255 {
 		return nil, &ProtocolError{"8-bit vector overflow"}
 	}
+	if len(s.verifiedChains) > 0 && len(s.peerCertificates) == 0 {
+		return nil, errors.New("dtls13: verified client chain without a certificate")
+	}
 	version := 1
 	if s.maxEarlyData != 0 {
 		version = 2
 	}
+	if len(s.peerCertificates) > 0 {
+		if s.clientAuthAt == 0 {
+			return nil, errors.New("dtls13: client authentication time is missing")
+		}
+		version = 3
+	}
 	capacity := 2 + 8 + 4 + 4 + 2 + 1 + len(s.psk) + 2 + len(s.serverName) + 1 + len(s.protocol)
 	if version >= 2 {
 		capacity += 4
+	}
+	if version >= 3 {
+		capacity += 8 + 2 + 2
+		for _, cert := range s.peerCertificates {
+			if cert == nil || len(cert.Raw) == 0 {
+				return nil, errors.New("dtls13: invalid client certificate in session ticket")
+			}
+			capacity += 3 + len(cert.Raw)
+		}
+		for _, chain := range s.verifiedChains {
+			if len(chain) == 0 || chain[0] == nil || !bytes.Equal(chain[0].Raw, s.peerCertificates[0].Raw) {
+				return nil, errors.New("dtls13: invalid verified client chain in session ticket")
+			}
+			capacity += 2
+			for _, cert := range chain[1:] {
+				if cert == nil || len(cert.Raw) == 0 {
+					return nil, errors.New("dtls13: invalid verified client chain in session ticket")
+				}
+				capacity += 3 + len(cert.Raw)
+			}
+		}
 	}
 	w := newWireBuilder(capacity)
 	w.u16(version)
@@ -334,13 +368,30 @@ func (s *sessionTicketState) marshal() ([]byte, error) {
 	if version >= 2 {
 		w.u32(s.maxEarlyData)
 	}
+	if version >= 3 {
+		w.b = binary.BigEndian.AppendUint64(w.b, uint64(s.clientAuthAt))
+		certificates := w.startVector16()
+		for _, cert := range s.peerCertificates {
+			w.bytes24(cert.Raw)
+		}
+		w.endVector16(certificates)
+		chains := w.startVector16()
+		for _, chain := range s.verifiedChains {
+			encoded := w.startVector16()
+			for _, cert := range chain[1:] {
+				w.bytes24(cert.Raw)
+			}
+			w.endVector16(encoded)
+		}
+		w.endVector16(chains)
+	}
 	return w.b, w.err
 }
 
 func parseSessionTicketState(b []byte) (*sessionTicketState, error) {
 	p := wireParser{b: b}
 	version := p.u16()
-	if version != 1 && version != 2 {
+	if version != 1 && version != 2 && version != 3 {
 		return nil, errors.New("dtls13: unsupported session ticket version")
 	}
 	created := p.take(8)
@@ -357,10 +408,49 @@ func parseSessionTicketState(b []byte) (*sessionTicketState, error) {
 	if version >= 2 {
 		state.maxEarlyData = uint32(p.u32())
 	}
+	if version >= 3 {
+		authenticated := p.take(8)
+		if len(authenticated) == 8 {
+			state.clientAuthAt = int64(binary.BigEndian.Uint64(authenticated))
+		}
+		certificates := wireParser{b: p.bytes16()}
+		for certificates.off < len(certificates.b) {
+			cert, err := x509.ParseCertificate(certificates.bytes24())
+			if err != nil {
+				return nil, errors.New("dtls13: invalid client certificate in session ticket")
+			}
+			state.peerCertificates = append(state.peerCertificates, cert)
+		}
+		if err := certificates.done(); err != nil {
+			return nil, err
+		}
+		chains := wireParser{b: p.bytes16()}
+		for chains.off < len(chains.b) {
+			if len(state.peerCertificates) == 0 {
+				return nil, errors.New("dtls13: verified client chain without a certificate")
+			}
+			encoded := wireParser{b: chains.bytes16()}
+			chain := []*x509.Certificate{state.peerCertificates[0]}
+			for encoded.off < len(encoded.b) {
+				cert, err := x509.ParseCertificate(encoded.bytes24())
+				if err != nil {
+					return nil, errors.New("dtls13: invalid verified client chain in session ticket")
+				}
+				chain = append(chain, cert)
+			}
+			if err := encoded.done(); err != nil {
+				return nil, err
+			}
+			state.verifiedChains = append(state.verifiedChains, chain)
+		}
+		if err := chains.done(); err != nil {
+			return nil, err
+		}
+	}
 	if err := p.done(); err != nil {
 		return nil, err
 	}
-	if state.lifetime == 0 || len(state.psk) == 0 {
+	if state.lifetime == 0 || len(state.psk) == 0 || (version >= 3 && (state.clientAuthAt == 0 || len(state.peerCertificates) == 0)) {
 		return nil, errors.New("dtls13: invalid session ticket state")
 	}
 	return state, nil
@@ -496,20 +586,67 @@ func usableClientSession(config *Config, conn net.Conn) (*ClientSessionState, *c
 	return state, suite
 }
 
-func (c *Conn) acceptSessionTicket(hello *clientHello, clientHelloBody, initialClientHelloHash, hrrBody []byte, suite *cipherSuite, protocol string) ([]byte, bool, uint16, error) {
+func validClientAuthenticationTicket(config *Config, state *sessionTicketState) bool {
+	// Match TLS 1.3 resumption: restore the authenticated identity without
+	// rerunning VerifyPeerCertificate, but enforce the current built-in policy.
+	hasCertificate := len(state.peerCertificates) != 0
+	if hasCertificate && config.ClientAuth == tls.NoClientCert {
+		return false
+	}
+	if !hasCertificate {
+		// Legacy tickets cannot distinguish an anonymous handshake from client
+		// authentication state that their format did not preserve.
+		return config.ClientAuth == tls.NoClientCert
+	}
+	now := config.Time()
+	if state.clientAuthAt == 0 || now.Before(time.Unix(state.clientAuthAt, 0)) || now.Sub(time.Unix(state.clientAuthAt, 0)) > config.SessionTicketLifetime {
+		return false
+	}
+	if config.ClientAuth < tls.VerifyClientCertIfGiven {
+		return !now.Before(state.peerCertificates[0].NotBefore) && !now.After(state.peerCertificates[0].NotAfter)
+	}
+	for _, chain := range state.verifiedChains {
+		if len(chain) == 0 {
+			continue
+		}
+		valid := true
+		for _, cert := range chain {
+			if now.Before(cert.NotBefore) || now.After(cert.NotAfter) {
+				valid = false
+				break
+			}
+		}
+		if !valid {
+			continue
+		}
+		intermediates := x509.NewCertPool()
+		for i := 1; i+1 < len(chain); i++ {
+			intermediates.AddCert(chain[i])
+		}
+		if _, err := chain[0].Verify(x509.VerifyOptions{
+			Roots: config.ClientCAs, Intermediates: intermediates, CurrentTime: now,
+			KeyUsages: []x509.ExtKeyUsage{x509.ExtKeyUsageClientAuth},
+		}); err == nil {
+			return true
+		}
+	}
+	return false
+}
+
+func (c *Conn) acceptSessionTicket(hello *clientHello, clientHelloBody, initialClientHelloHash, hrrBody []byte, suite *cipherSuite, protocol string) (*sessionTicketState, uint16, error) {
 	c.earlyMu.Lock()
 	c.earlyAccepted = false
 	c.earlyDataLimit = 0
 	c.earlyMu.Unlock()
-	if c.config.SessionTicketsDisabled || len(hello.pskIdentity) == 0 || !hello.pskDHE || c.config.ClientAuth != tls.NoClientCert {
-		return nil, false, 0, nil
+	if c.config.SessionTicketsDisabled || len(hello.pskIdentity) == 0 || !hello.pskDHE {
+		return nil, 0, nil
 	}
 	if err := ensureSessionTicketKey(c.config); err != nil {
-		return nil, false, 0, err
+		return nil, 0, err
 	}
 	protector, err := newSessionTicketProtector(c.config.SessionTicketKey, c.config.Rand, c.config.Time)
 	if err != nil {
-		return nil, false, 0, err
+		return nil, 0, err
 	}
 	identities := hello.pskIdentities
 	if len(identities) == 0 {
@@ -524,19 +661,19 @@ func (c *Conn) acceptSessionTicket(hello *clientHello, clientHelloBody, initialC
 		if openErr == nil {
 			candidateSuite, suiteErr = cipherSuiteForID(candidate.suite)
 		}
-		if openErr == nil && suiteErr == nil && candidateSuite.hash == suite.hash && candidate.serverName == hello.serverName && candidate.protocol == protocol && len(candidate.psk) == suite.hash.Size() {
+		if openErr == nil && suiteErr == nil && candidateSuite.hash == suite.hash && candidate.serverName == hello.serverName && candidate.protocol == protocol && len(candidate.psk) == suite.hash.Size() && validClientAuthenticationTicket(c.config, candidate) {
 			state = candidate
 			selected = i
 			break
 		}
 	}
 	if selected < 0 || selected > int(^uint16(0)) {
-		return nil, false, 0, nil
+		return nil, 0, nil
 	}
 	clientAge := identities[selected].obfuscatedAge - state.ageAdd
 	actualAge := c.config.Time().Sub(time.Unix(state.createdAt, 0))
 	if actualAge < 0 || actualAge > time.Duration(state.lifetime)*time.Second {
-		return nil, false, 0, nil
+		return nil, 0, nil
 	}
 	actualAgeMillis := uint64(actualAge / time.Millisecond)
 	ageWithinTolerance := true
@@ -550,7 +687,7 @@ func (c *Conn) acceptSessionTicket(hello *clientHello, clientHelloBody, initialC
 		}
 	}
 	if err = verifyClientHelloPSKBinderAt(clientHelloBody, suite, state.psk, initialClientHelloHash, hrrBody, selected); err != nil {
-		return nil, false, 0, err
+		return nil, 0, err
 	}
 	if selected == 0 && state.suite == suite.id && ageWithinTolerance && hello.earlyData && state.maxEarlyData > 0 && c.config.MaxEarlyData >= state.maxEarlyData && hrrBody == nil && c.config.AllowEarlyDataWithoutCookie {
 		limit := state.maxEarlyData
@@ -566,7 +703,7 @@ func (c *Conn) acceptSessionTicket(hello *clientHello, clientHelloBody, initialC
 			c.earlyMu.Unlock()
 		}
 	}
-	return append([]byte(nil), state.psk...), true, uint16(selected), nil
+	return state, uint16(selected), nil
 }
 
 func obfuscatedTicketAge(state *ClientSessionState, now time.Time) uint32 {
@@ -668,7 +805,7 @@ func verifyClientHelloPSKBinderAt(body []byte, suite *cipherSuite, psk, initialC
 	return nil
 }
 
-func (c *Conn) sendNewSessionTicket(schedule *keySchedule, suite *cipherSuite, serverName, protocol string) error {
+func (c *Conn) sendNewSessionTicket(schedule *keySchedule, suite *cipherSuite, serverName, protocol string, clientAuthAt int64, peerCertificates []*x509.Certificate, verifiedChains [][]*x509.Certificate) error {
 	if c.config.SessionTicketsDisabled {
 		return nil
 	}
@@ -694,11 +831,19 @@ func (c *Conn) sendNewSessionTicket(schedule *keySchedule, suite *cipherSuite, s
 	}
 	lifetime := uint32(c.config.SessionTicketLifetime / time.Second)
 	ticket, err := protector.seal(&sessionTicketState{
-		createdAt: c.config.Time().Unix(), lifetime: lifetime, suite: suite.id,
-		psk: psk, serverName: serverName, protocol: protocol, ageAdd: ageAdd, maxEarlyData: c.config.MaxEarlyData,
+		createdAt: c.config.Time().Unix(), lifetime: lifetime, suite: suite.id, psk: psk,
+		serverName: serverName, protocol: protocol, ageAdd: ageAdd, maxEarlyData: c.config.MaxEarlyData,
+		clientAuthAt: clientAuthAt, peerCertificates: peerCertificates, verifiedChains: verifiedChains,
 	})
 	if err != nil {
+		var protocolErr *ProtocolError
+		if len(peerCertificates) > 0 && errors.As(err, &protocolErr) && protocolErr.Reason == "16-bit vector overflow" {
+			return nil
+		}
 		return err
+	}
+	if len(ticket) > 65535 {
+		return nil
 	}
 	body, err := (&newSessionTicketMessage{
 		lifetime: lifetime, ageAdd: ageAdd, nonce: nonce, ticket: ticket, maxEarlyData: c.config.MaxEarlyData,

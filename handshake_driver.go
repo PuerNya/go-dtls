@@ -1225,6 +1225,7 @@ func (c *Conn) serverHandshake(ctx context.Context) error {
 	var requestedGroup tls.CurveID
 	var psk []byte
 	var resumed bool
+	var resumedSession *sessionTicketState
 	var share keyShareEntry
 	var negotiated string
 	var shared []byte
@@ -1239,12 +1240,13 @@ func (c *Conn) serverHandshake(ctx context.Context) error {
 		if selectErr == nil {
 			candidateProtocol, protocolErr := negotiateALPN(c.config.NextProtos, ch.alpn)
 			if protocolErr == nil {
-				candidatePSK, candidateResumed, candidateIdentity, acceptErr := c.acceptSessionTicket(ch, helloBody, initialHashTranscript.sumInto(transcriptDigest[:0]), nil, suite, candidateProtocol)
+				candidateSession, candidateIdentity, acceptErr := c.acceptSessionTicket(ch, helloBody, initialHashTranscript.sumInto(transcriptDigest[:0]), nil, suite, candidateProtocol)
 				if acceptErr != nil {
 					return acceptErr
 				}
-				if candidateResumed {
-					psk, resumed, selectedPSKIdentity = candidatePSK, true, candidateIdentity
+				if candidateSession != nil {
+					resumedSession = candidateSession
+					psk, resumed, selectedPSKIdentity = candidateSession.psk, true, candidateIdentity
 					hrrUsed = false
 					serverSequenceOffset = 0
 					clientFinishedSequence = 1
@@ -1334,9 +1336,12 @@ func (c *Conn) serverHandshake(ctx context.Context) error {
 		if err != nil {
 			return err
 		}
-		psk, resumed, selectedPSKIdentity, err = c.acceptSessionTicket(ch, helloBody, initialHashTranscript.sumInto(transcriptDigest[:0]), hrrBody, suite, negotiated)
+		resumedSession, selectedPSKIdentity, err = c.acceptSessionTicket(ch, helloBody, initialHashTranscript.sumInto(transcriptDigest[:0]), hrrBody, suite, negotiated)
 		if err != nil {
 			return err
+		}
+		if resumedSession != nil {
+			psk, resumed = resumedSession.psk, true
 		}
 	} else {
 		serverKeyShare, selectErr := selectKeyShare(c.config.CurvePreferences, ch.keyShares)
@@ -1536,6 +1541,12 @@ func (c *Conn) serverHandshake(ctx context.Context) error {
 	inbox = newHandshakeInbox(clientFinalFlightStart, c.config.MaxHandshakeMessage, c.config.MaxBufferedHandshakeMessages, c.config.MaxBufferedHandshakeBytes)
 	var clientCerts []*x509.Certificate
 	var clientChains [][]*x509.Certificate
+	var clientAuthAt int64
+	if resumedSession != nil {
+		clientCerts = resumedSession.peerCertificates
+		clientChains = resumedSession.verifiedChains
+		clientAuthAt = resumedSession.clientAuthAt
+	}
 	var clientRecords []recordNumber
 	sawClientCertificate := false
 	verifiedClientSignature := false
@@ -1547,7 +1558,7 @@ func (c *Conn) serverHandshake(ctx context.Context) error {
 		clientHandshakeComplete
 	)
 	clientStage := clientExpectFinished
-	if c.config.ClientAuth != tls.NoClientCert {
+	if !resumed && c.config.ClientAuth != tls.NoClientCert {
 		clientStage = clientExpectCertificate
 	}
 	for !clientDone {
@@ -1613,14 +1624,14 @@ func (c *Conn) serverHandshake(ctx context.Context) error {
 					return alertError(alertUnexpectedMessage, &ProtocolError{"unexpected client Finished"})
 				}
 				clientFinishedSequence = message.sequence
-				if c.config.ClientAuth != tls.NoClientCert && !sawClientCertificate {
+				if !resumed && c.config.ClientAuth != tls.NoClientCert && !sawClientCertificate {
 					return &ProtocolError{"client omitted Certificate message"}
 				}
-				required := c.config.ClientAuth == tls.RequireAnyClientCert || c.config.ClientAuth == tls.RequireAndVerifyClientCert
+				required := !resumed && (c.config.ClientAuth == tls.RequireAnyClientCert || c.config.ClientAuth == tls.RequireAndVerifyClientCert)
 				if required && len(clientCerts) == 0 {
 					return alertError(alertCertificateRequired, &ProtocolError{"client certificate is required"})
 				}
-				if len(clientCerts) > 0 && !verifiedClientSignature {
+				if !resumed && len(clientCerts) > 0 && !verifiedClientSignature {
 					return &ProtocolError{"client omitted CertificateVerify"}
 				}
 				verify, parseErr := parseFinished(message.body, suite.hash.Size())
@@ -1676,7 +1687,10 @@ func (c *Conn) serverHandshake(ctx context.Context) error {
 	if validated, ok := c.conn.(interface{ handshakeValidated() }); ok {
 		validated.handshakeValidated()
 	}
-	if err = c.sendNewSessionTicket(schedule, suite, ch.serverName, negotiated); err != nil {
+	if !resumed && len(clientCerts) > 0 {
+		clientAuthAt = c.config.Time().Unix()
+	}
+	if err = c.sendNewSessionTicket(schedule, suite, ch.serverName, negotiated, clientAuthAt, clientCerts, clientChains); err != nil {
 		return err
 	}
 	return nil

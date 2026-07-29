@@ -5,6 +5,7 @@ import (
 	"crypto/hkdf"
 	"crypto/hmac"
 	"crypto/tls"
+	"crypto/x509"
 	"net"
 	"sync"
 	"testing"
@@ -181,6 +182,99 @@ func TestSessionTicketProtectionTamperAndExpiry(t *testing.T) {
 	now = now.Add(61 * time.Second)
 	if _, err = protector.open(ticket); err == nil {
 		t.Fatal("accepted an expired ticket")
+	}
+}
+
+func TestSessionTicketStateClientAuthenticationRoundTrip(t *testing.T) {
+	certificate, _ := testClientCertificate(t)
+	leaf, err := x509.ParseCertificate(certificate.Certificate[0])
+	if err != nil {
+		t.Fatal(err)
+	}
+	want := &sessionTicketState{
+		createdAt: 1700000000, lifetime: 3600, suite: TLS_AES_128_GCM_SHA256,
+		psk: bytes.Repeat([]byte{0x42}, 32), serverName: "server.test", protocol: "coap", ageAdd: 7,
+		maxEarlyData: 1024, clientAuthAt: 1699999990,
+		peerCertificates: []*x509.Certificate{leaf}, verifiedChains: [][]*x509.Certificate{{leaf}},
+	}
+	wire, err := want.marshal()
+	if err != nil {
+		t.Fatal(err)
+	}
+	got, err := parseSessionTicketState(wire)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got.createdAt != want.createdAt || got.clientAuthAt != want.clientAuthAt || got.maxEarlyData != want.maxEarlyData || len(got.peerCertificates) != 1 || len(got.verifiedChains) != 1 || len(got.verifiedChains[0]) != 1 || !got.peerCertificates[0].Equal(leaf) || !got.verifiedChains[0][0].Equal(leaf) {
+		t.Fatalf("unexpected client authentication ticket state: %#v", got)
+	}
+	for length := range len(wire) {
+		if _, err = parseSessionTicketState(wire[:length]); err == nil {
+			t.Fatalf("accepted client authentication ticket truncated to %d bytes", length)
+		}
+	}
+	if _, err = parseSessionTicketState(append(append([]byte(nil), wire...), 0)); err == nil {
+		t.Fatal("accepted client authentication ticket with trailing data")
+	}
+}
+
+func TestClientAuthenticationTicketPolicy(t *testing.T) {
+	certificate, roots := testClientCertificate(t)
+	leaf, err := x509.ParseCertificate(certificate.Certificate[0])
+	if err != nil {
+		t.Fatal(err)
+	}
+	now := leaf.NotBefore.Add(time.Minute)
+	state := &sessionTicketState{
+		clientAuthAt: now.Add(-time.Minute).Unix(), peerCertificates: []*x509.Certificate{leaf},
+		verifiedChains: [][]*x509.Certificate{{leaf}},
+	}
+	config := func(policy tls.ClientAuthType, clientRoots *x509.CertPool) *Config {
+		cfg, err := (&Config{
+			ClientAuth: policy, ClientCAs: clientRoots, SessionTicketLifetime: time.Hour,
+			Time: func() time.Time { return now },
+		}).normalized()
+		if err != nil {
+			t.Fatal(err)
+		}
+		return cfg
+	}
+	tests := []struct {
+		name   string
+		policy tls.ClientAuthType
+		state  *sessionTicketState
+		roots  *x509.CertPool
+		want   bool
+	}{
+		{"NoClientCertWithoutCertificate", tls.NoClientCert, &sessionTicketState{}, roots, true},
+		{"NoClientCertWithCertificate", tls.NoClientCert, state, roots, false},
+		{"RequestWithoutCertificate", tls.RequestClientCert, &sessionTicketState{}, roots, false},
+		{"RequireAnyWithoutCertificate", tls.RequireAnyClientCert, &sessionTicketState{}, roots, false},
+		{"RequireAnyWithCertificate", tls.RequireAnyClientCert, &sessionTicketState{clientAuthAt: state.clientAuthAt, peerCertificates: state.peerCertificates}, roots, true},
+		{"VerifyIfGivenWithoutCertificate", tls.VerifyClientCertIfGiven, &sessionTicketState{}, roots, false},
+		{"VerifyIfGivenWithoutChain", tls.VerifyClientCertIfGiven, &sessionTicketState{clientAuthAt: state.clientAuthAt, peerCertificates: state.peerCertificates}, roots, false},
+		{"VerifyIfGivenWithChain", tls.VerifyClientCertIfGiven, state, roots, true},
+		{"RequireAndVerifyWithChain", tls.RequireAndVerifyClientCert, state, roots, true},
+		{"RequireAndVerifyWithDifferentCA", tls.RequireAndVerifyClientCert, state, x509.NewCertPool(), false},
+	}
+	for _, test := range tests {
+		t.Run(test.name, func(t *testing.T) {
+			if got := validClientAuthenticationTicket(config(test.policy, test.roots), test.state); got != test.want {
+				t.Fatalf("validClientAuthenticationTicket = %v, want %v", got, test.want)
+			}
+		})
+	}
+
+	expiredAuthentication := *state
+	expiredAuthentication.clientAuthAt = now.Add(-2 * time.Hour).Unix()
+	if validClientAuthenticationTicket(config(tls.RequireAndVerifyClientCert, roots), &expiredAuthentication) {
+		t.Fatal("accepted client authentication older than the configured total ticket lifetime")
+	}
+	expiredCertificate := *state
+	expiredCertificate.clientAuthAt = leaf.NotAfter.Add(-time.Minute).Unix()
+	now = leaf.NotAfter.Add(time.Minute)
+	if validClientAuthenticationTicket(config(tls.RequireAndVerifyClientCert, roots), &expiredCertificate) {
+		t.Fatal("accepted an expired client certificate")
 	}
 }
 
@@ -416,21 +510,21 @@ func TestServerSelectsSecondCompatiblePSKIdentity(t *testing.T) {
 		t.Fatal(err)
 	}
 	c := &Conn{config: config}
-	selectedPSK, resumed, selected, err := c.acceptSessionTicket(parsed, body, nil, nil, suite, "")
+	selectedSession, selected, err := c.acceptSessionTicket(parsed, body, nil, nil, suite, "")
 	if err != nil {
 		t.Fatal(err)
 	}
-	if !resumed || selected != 1 || !bytes.Equal(selectedPSK, psk) {
-		t.Fatalf("resumed=%v selected=%d psk_match=%v", resumed, selected, bytes.Equal(selectedPSK, psk))
+	if selectedSession == nil || selected != 1 || !bytes.Equal(selectedSession.psk, psk) {
+		t.Fatalf("resumed=%v selected=%d psk_match=%v", selectedSession != nil, selected, selectedSession != nil && bytes.Equal(selectedSession.psk, psk))
 	}
 	body = replaceClientHelloExtension(t, body, extPSKKeyExchangeModes, []byte{1, 0})
 	parsed, err = parseClientHello(body)
 	if err != nil {
 		t.Fatal(err)
 	}
-	selectedPSK, resumed, _, err = c.acceptSessionTicket(parsed, body, nil, nil, suite, "")
-	if err != nil || resumed || selectedPSK != nil {
-		t.Fatalf("unsupported PSK mode resumed=%v psk=%x err=%v", resumed, selectedPSK, err)
+	selectedSession, _, err = c.acceptSessionTicket(parsed, body, nil, nil, suite, "")
+	if err != nil || selectedSession != nil {
+		t.Fatalf("unsupported PSK mode resumed=%v err=%v", selectedSession != nil, err)
 	}
 }
 
@@ -517,11 +611,11 @@ func TestTicketAgeMismatchRejectsOnlyEarlyData(t *testing.T) {
 		t.Fatal(err)
 	}
 	c := &Conn{config: config}
-	selectedPSK, resumed, selected, err := c.acceptSessionTicket(parsed, body, nil, nil, suite, "")
+	selectedSession, selected, err := c.acceptSessionTicket(parsed, body, nil, nil, suite, "")
 	if err != nil {
 		t.Fatal(err)
 	}
-	if !resumed || selected != 0 || !bytes.Equal(selectedPSK, psk) {
+	if selectedSession == nil || selected != 0 || !bytes.Equal(selectedSession.psk, psk) {
 		t.Fatal("ticket age mismatch incorrectly disabled 1-RTT resumption")
 	}
 	if c.earlyAccepted || c.earlyDataLimit != 0 {

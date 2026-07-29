@@ -6,7 +6,7 @@
 
 `go-dtls` 是一个使用 Go 实现的 DTLS 1.3 库，协议行为以 [RFC 9147](https://www.rfc-editor.org/rfc/rfc9147) 为准。模块导入路径为 `github.com/puernya/go-dtls`，包名为 `dtls13`。
 
-当前实现完成了 RFC 9147、其继承的 TLS 1.3 强制语义，以及 RFC 9147 列出的全部 11 项直接规范性引用审计。本文记录 2026-07-27 当前源码的实现状态、测试证据和性能基线。
+当前实现完成了 RFC 9147、其继承的 TLS 1.3 强制语义，以及 RFC 9147 列出的全部 11 项直接规范性引用审计。TLS 1.3 语义同时对照 2026 年取代 RFC 8446 的 [RFC 9846](https://www.rfc-editor.org/rfc/rfc9846)。本文记录 2026-07-29 当前源码的实现状态、测试证据和性能基线。
 
 > 本项目仍处于活跃开发阶段。RFC 审计完成不等同于第三方合规认证；部署到生产环境前，应根据实际网络、证书体系和对端实现完成独立测试。
 
@@ -222,7 +222,7 @@ deadline、socket 关闭和底层 UDP 错误沿 Go `net` 错误模型返回；�
 
 | 能力 | API / 配置 | 说明 |
 | --- | --- | --- |
-| Session resumption | `ClientSessionCache`、`NewLRUClientSessionCache` | 客户端缓存 NewSessionTicket；服务端由 `SessionTicketKey` 和 ticket 配置控制 |
+| Session resumption | `ClientSessionCache`、`NewLRUClientSessionCache` | 客户端缓存 NewSessionTicket；服务端由 `SessionTicketKey` 和 ticket 配置控制；支持保留客户端认证状态的 mTLS 恢复 |
 | 0-RTT | `WriteEarlyData`、`MaxEarlyData`、`EarlyDataReplayCache` | 仅恢复连接可用；调用方必须处理 `ErrEarlyDataUnavailable` 和 `ErrEarlyDataRejected`，且 early data 必须具备可重放语义 |
 | KeyUpdate | `SendKeyUpdate(requestPeer)` | 可靠发送并在 ACK 后切换发送 epoch；接近 AEAD 使用上限时也会自动触发 |
 | CID | `ConnectionID`、`GetConnectionID`、`SendNewConnectionIDs`、`RequestConnectionIDs`、`UseNextConnectionID` | 支持 RFC 9146 协商、动态更新和 Listener 路由；CID 认证不等于新网络路径已验证 |
@@ -239,7 +239,7 @@ deadline、socket 关闭和底层 UDP 错误沿 Go `net` 错误模型返回；�
 | `Certificates` / `GetCertificate` | 服务端证书；需要证书认证的服务端必须提供 |
 | `RootCAs` / `ServerName` | 客户端服务端证书验证；`Dial` 未设置 `ServerName` 时使用目标主机名 |
 | `ClientCAs` / `ClientAuth` | 服务端客户端证书验证策略 |
-| `VerifyPeerCertificate` | 在标准证书处理后执行附加验证 |
+| `VerifyPeerCertificate` | 在完整握手的标准证书处理后执行附加验证；与 `crypto/tls` 一样，恢复连接不会再次调用 |
 | `InsecureSkipVerify` | 默认 `false`；生产环境不应依赖它跳过身份验证 |
 | `NextProtos` | ALPN 协议列表 |
 | `CipherSuites` | AES-128-GCM、AES-256-GCM、ChaCha20-Poly1305、AES-128-CCM |
@@ -258,6 +258,32 @@ deadline、socket 关闭和底层 UDP 错误沿 Go `net` 错误模型返回；�
 | `SessionTicketLifetime` | 24 小时，最大 7 天 |
 | `MaxEarlyData` | 0，即默认关闭 0-RTT |
 | `MaxConnectionIDs` | 每个方向 8 个 CID |
+
+### mTLS 快速恢复
+
+客户端和服务端沿用普通 mTLS 配置，只需同时启用客户端 session cache 和服务端 ticket：
+
+```go
+clientConfig := &dtls13.Config{
+	Certificates:       []tls.Certificate{clientCertificate},
+	RootCAs:            serverRoots,
+	ServerName:         "server.example",
+	ClientSessionCache: dtls13.NewLRUClientSessionCache(64),
+}
+serverConfig := &dtls13.Config{
+	Certificates:          []tls.Certificate{serverCertificate},
+	ClientAuth:            tls.RequireAndVerifyClientCert,
+	ClientCAs:             clientRoots,
+	SessionTicketKey:      ticketKey,
+	SessionTicketLifetime: time.Hour,
+}
+```
+
+首次连接执行完整 `CertificateRequest -> Certificate -> CertificateVerify` 客户端认证。后续连接用 RFC 9147/RFC 9846 的 PSK 握手恢复，不重新发送证书；服务端从经过 AES-256-GCM 认证加密的 ticket 恢复客户端证书和已验证链，并按当前 `ClientAuth`、`ClientCAs`、证书有效期重新决定是否接受。策略不满足时忽略 ticket 并回退完整握手。
+
+旧格式 ticket 没有保存客户端身份，无法证明原会话是否匿名；因此只在 `ClientAuth == tls.NoClientCert` 时恢复。配置任何客户端证书策略都会回退完整握手，避免升级后静默丢失已有身份。
+
+续签 ticket 保留最初在线 `CertificateVerify` 的时间，`SessionTicketLifetime` 同时限制 ticket 寿命和这次客户端认证的总寿命。`VerifyPeerCertificate` 不在恢复时重跑；应用身份策略变化时应更换 `SessionTicketKey` 或禁用 session ticket。应用必须定期轮换显式 ticket key；本配置只有一个活动 key，更换后旧 ticket 立即失效。握手后的 PHA 不自动签发补充 ticket，需要 PHA 身份进入后续恢复时应重新建立完整 mTLS 连接。
 
 支持的 cipher suite：
 
@@ -307,6 +333,14 @@ deadline、socket 关闭和底层 UDP 错误沿 Go `net` 错误模型返回；�
 | [RFC 9146](https://www.rfc-editor.org/rfc/rfc9146) | DTLS Connection ID | 完成；协商、更新、路由、隔离和资源上限 |
 | [RFC 8446](https://www.rfc-editor.org/rfc/rfc8446) | TLS 1.3 基础协议 | 完成；握手、认证、key schedule、PSK/0-RTT、KeyUpdate、PHA、exporter 和 alert |
 
+### 后续规范
+
+| 规范 | 与本实现的关系 | 状态 |
+| --- | --- | --- |
+| [RFC 9846](https://www.rfc-editor.org/rfc/rfc9846) | 取代 RFC 8446 的 TLS 1.3 规范；明确 ticket 可封装客户端认证状态，并建议限制从在线 `CertificateVerify` 起的总密钥材料寿命 | 已完成适用于现有 DTLS 1.3 功能的变更；mTLS 恢复保留认证状态、当前策略/CA/有效期检查及总认证寿命 |
+| [RFC 9325](https://www.rfc-editor.org/rfc/rfc9325) | TLS/DTLS 部署安全建议；要求 ticket 状态认证加密、合理寿命和定期轮换 key | ticket 使用 AES-256-GCM，寿命限制为 1 秒至 7 天；key 轮换由部署方更换 `SessionTicketKey` 完成 |
+| [RFC 9853](https://www.rfc-editor.org/rfc/rfc9853) | 更新 RFC 9146/9147，为 CID 地址变化定义可选 Return Routability Check | 未实现 RRC 扩展；库不会仅凭新地址上的合法 CID record 自动 rebind，应用仍需自己的路径验证策略 |
+
 ### 范围边界
 
 以下项目不降低 RFC 9147 强制语义完成度，但使用者应明确其边界：
@@ -316,15 +350,17 @@ deadline、socket 关闭和底层 UDP 错误沿 Go `net` 错误模型返回；�
 - 发送端采用一条 record 一个 UDP datagram 的合法模式，未暴露可选的多 record 聚合 API。
 - 未暴露并行多个 NewSessionTicket 或 PHA 请求；RFC 允许但不要求这些并行能力。
 - CID 可从新来源地址路由和认证 record，但不会自动更新回包地址；RFC 9147 不定义路径验证过程。
-- wolfSSL 5.9.2 互通构建未启用 CID 和 0-RTT，因此这两项当前只有自互通与专项压力证据。
+- wolfSSL 5.9.2 互通构建未启用 CID、0-RTT、session ticket 或 `SESSION_CERTS`，因此 mTLS 恢复等组合当前只有本实现端到端测试和标准库 TLS 1.3 协议层对照。
 
 ## Benchmark
 
-以下为 2026-07-27 的代表值，环境为 AMD Ryzen 7 7435H、Go 1.26.3、Windows/amd64。数值用于观察回归，不是跨机器性能保证。
+以下为 2026-07-29 的代表值，环境为 AMD Ryzen 7 7435H、Go 1.26.3、Windows/amd64。数值用于观察回归，不是跨机器性能保证。
 
 | 场景 | 代表结果 |
 | --- | --- |
-| 完整证书握手和关闭 `BenchmarkConnectionHandshakeLifecycle` | 约 642.9 us/op，111420 B/op，874 allocs/op |
+| 普通完整证书握手和关闭 `BenchmarkConnectionHandshakeLifecycle` | A/B 交替 5 轮中位数约 860 us/op，117465 B/op，877 allocs/op；修改前冻结二进制约 911 us/op，117251 B/op，877 allocs/op |
+| 完整 mTLS `BenchmarkMutualTLSHandshakeLifecycle/Full` | 10 轮中位数约 1.265 ms/op，141801 B/op，1171 allocs/op |
+| mTLS 恢复 `BenchmarkMutualTLSHandshakeLifecycle/Resumed` | 10 轮中位数约 815 us/op，118941 B/op，833 allocs/op；相对完整 mTLS 约少 35.6% 时间、16.1% 字节和 28.9% 分配 |
 | AES-128-GCM 1200 B seal | 约 1.50-1.51 GB/s，1 alloc/op |
 | AES-128-GCM 1200 B in-place round trip | 约 862-954 MB/s，1 alloc/op |
 | 未认证 record 错误分类 | 约 12.4-13.7 ns/op，0 allocs/op |
@@ -337,7 +373,7 @@ deadline、socket 关闭和底层 UDP 错误沿 Go `net` 错误模型返回；�
 | 4 KiB / MTU 1200 protected flight 构造 | 约 3.00-3.26 us/op，5616 B/op，6 allocs/op |
 | 4 KiB / MTU 1200 plain flight 构造 | 约 2.15-2.58 us/op，5040 B/op，9 allocs/op |
 
-完整连接 benchmark 是性能验收的主门禁。当前完整连接对同期基线约快 2.2%，少 15 allocs/op；局部优化若只改善微基准但使完整连接退化，会被回退。
+完整连接 benchmark 是性能验收的主门禁。本轮普通完整连接相对冻结基线没有增加分配次数，字节中位数差约 0.2% 且落在运行抖动内，时延中位数约低 5.7%；没有出现“微基准更好、完整连接更差”。
 
 运行全部 benchmark：
 
@@ -349,6 +385,7 @@ go test -run '^$' -bench . -benchmem
 
 ```sh
 go test -run '^$' -bench '^BenchmarkConnectionHandshakeLifecycle$' -benchmem -benchtime=2000x -cpu=1
+go test -run '^$' -bench '^BenchmarkMutualTLSHandshakeLifecycle/(Full|Resumed)$' -benchmem -count=10
 go test -run '^$' -bench '^BenchmarkProtectedRecord(Seal|RoundTripInPlace)$' -benchmem -count=5
 ```
 
@@ -378,11 +415,11 @@ go test -run TestInteropWolfSSL -v -count=10
 
 最近记录的验证结果：
 
-- 全量测试、`go vet` 和 Windows race 于 2026-07-27 通过。
-- 综合双向丢包、延迟、乱序和重复，以及 CH/SH/Finished/ACK/HRR 重传组合，连续 100 次通过。
-- CID、KeyUpdate、恢复、0-RTT、exporter 和 post-handshake authentication 压力组合连续 100 次通过。
+- 全量测试 `-count=10`、`go vet`、golangci-lint v2.12.2 和 Windows race 于 2026-07-29 通过。
+- 综合双向丢包、延迟、乱序和重复，以及 CH/SH/Finished/ACK/HRR/mTLS 恢复组合，连续 100 次通过。
+- mTLS 完整握手、PSK 恢复、0-RTT、CA/策略回退、ticket 续签认证寿命以及现有 CID、KeyUpdate、exporter 和 PHA 测试通过。
 - parser/record fuzz 累计覆盖数百万输入，并包含四套 AEAD 的复制与原地解密差分。
-- wolfSSL 5.9.2 双向互通覆盖 HRR、RSA-PSS 证书握手、Finished ACK、应用数据、AES-GCM 和 AES-128-CCM。
+- wolfSSL 5.9.2 双向互通于 2026-07-29 四个方向/套件用例各 `-count=10` 通过，覆盖 HRR、RSA-PSS 证书握手、Finished ACK、应用数据、AES-GCM 和 AES-128-CCM；该构建未启用 session ticket/`SESSION_CERTS`，未强行声称 mTLS 恢复互通。
 
 协议行为变更必须同步更新本文的完成度、验证证据、性能数据和第三方互通边界。
 

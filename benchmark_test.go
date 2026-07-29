@@ -50,6 +50,95 @@ func BenchmarkConnectionHandshakeLifecycle(b *testing.B) {
 	}
 }
 
+func BenchmarkMutualTLSHandshakeLifecycle(b *testing.B) {
+	serverCertificate, roots := testServerCertificate(b)
+	clientCertificate, clientRoots := testClientCertificate(b)
+	var ticketKey [32]byte
+	copy(ticketKey[:], bytes.Repeat([]byte{0x6e}, 32))
+	serverConfig := &Config{
+		Certificates: []tls.Certificate{serverCertificate}, ClientAuth: tls.RequireAndVerifyClientCert,
+		ClientCAs: clientRoots, SessionTicketKey: ticketKey, SessionTicketLifetime: time.Hour,
+		HandshakeTimeout: time.Second,
+	}
+
+	b.Run("Full", func(b *testing.B) {
+		fullServerConfig := serverConfig.Clone()
+		fullServerConfig.SessionTicketsDisabled = true
+		clientConfig := &Config{
+			RootCAs: roots, ServerName: "server.test", Certificates: []tls.Certificate{clientCertificate},
+			SessionTicketsDisabled: true, HandshakeTimeout: time.Second,
+		}
+		b.ReportAllocs()
+		for b.Loop() {
+			left, right := memoryDatagramPair()
+			client := Client(left, clientConfig)
+			server := Server(right, fullServerConfig)
+			serverDone := make(chan error, 1)
+			go func() { serverDone <- server.Handshake() }()
+			clientErr := client.Handshake()
+			serverErr := <-serverDone
+			_ = left.Close()
+			_ = right.Close()
+			if clientErr != nil || serverErr != nil {
+				b.Fatalf("full mutual TLS handshake failed: client=%v server=%v", clientErr, serverErr)
+			}
+		}
+	})
+
+	cache := NewLRUClientSessionCache(1)
+	clientConfig := &Config{
+		RootCAs: roots, ServerName: "server.test", Certificates: []tls.Certificate{clientCertificate},
+		ClientSessionCache: cache, HandshakeTimeout: time.Second,
+	}
+	left, right := memoryDatagramPair()
+	client := Client(left, clientConfig)
+	server := Server(right, serverConfig)
+	serverDone := make(chan error, 1)
+	go func() { serverDone <- server.Handshake() }()
+	if err := client.Handshake(); err != nil {
+		b.Fatal(err)
+	}
+	if err := <-serverDone; err != nil {
+		b.Fatal(err)
+	}
+	var session *ClientSessionState
+	deadline := time.Now().Add(time.Second)
+	for time.Now().Before(deadline) {
+		if state, ok := cache.Get("server.test"); ok {
+			session = state
+			cache.Put("server.test", nil)
+			break
+		}
+		time.Sleep(time.Millisecond)
+	}
+	_ = client.Close()
+	_ = server.Close()
+	if session == nil {
+		b.Fatal("initial mutual TLS handshake did not produce a session ticket")
+	}
+	clientConfig.Certificates = nil
+
+	b.Run("Resumed", func(b *testing.B) {
+		b.ReportAllocs()
+		for b.Loop() {
+			cache.Put("server.test", session)
+			left, right := memoryDatagramPair()
+			client := Client(left, clientConfig)
+			server := Server(right, serverConfig)
+			serverDone := make(chan error, 1)
+			go func() { serverDone <- server.Handshake() }()
+			clientErr := client.Handshake()
+			serverErr := <-serverDone
+			resumed := client.ConnectionState().DidResume && server.ConnectionState().DidResume
+			_ = left.Close()
+			_ = right.Close()
+			if clientErr != nil || serverErr != nil || !resumed {
+				b.Fatalf("resumed mutual TLS handshake failed: client=%v server=%v resumed=%v", clientErr, serverErr, resumed)
+			}
+		}
+	})
+}
+
 func newBenchmarkRecordCipher(b *testing.B, suiteID uint16, secretByte byte, cidBytes int) *recordCipher {
 	b.Helper()
 	suite, err := cipherSuiteForID(suiteID)

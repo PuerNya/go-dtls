@@ -73,6 +73,17 @@
 // can share [Config.SessionTicketKey] when tickets must remain valid across
 // server instances.
 //
+// A server that authenticated a client certificate stores the presented and
+// verified chains in the encrypted ticket. RFC 9846 PSK resumption does not
+// repeat CertificateRequest, Certificate, or CertificateVerify. Before accepting
+// the ticket, the server enforces the current [Config.ClientAuth] policy, checks
+// certificate validity and [Config.ClientCAs], and limits total authentication
+// age with [Config.SessionTicketLifetime]. Renewing a ticket does not reset the
+// original client CertificateVerify time. [Config.VerifyPeerCertificate] is not
+// called again on resumption, matching [crypto/tls]. Rotate
+// [Config.SessionTicketKey] or disable tickets when existing sessions must be
+// revoked for an application-specific policy change.
+//
 // [Conn.WriteEarlyData] attempts one client 0-RTT datagram using a cached
 // session. The server must configure [Config.MaxEarlyData] and an
 // appropriate replay policy. [Config.EarlyDataReplayCache] controls replay
@@ -134,4 +145,6 @@
 // [RFC 9147]: https://www.rfc-editor.org/rfc/rfc9147
 // [RFC 8446]: https://www.rfc-editor.org/rfc/rfc8446
 // [RFC 9146]: https://www.rfc-editor.org/rfc/rfc9146
+//
+// [RFC 9846]: https://www.rfc-editor.org/rfc/rfc9846
 package dtls13
