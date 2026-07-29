@@ -6,9 +6,9 @@
 
 `go-dtls` 是一个使用 Go 实现的 DTLS 1.3 库，协议行为以 [RFC 9147](https://www.rfc-editor.org/rfc/rfc9147) 为准。模块导入路径为 `github.com/puernya/go-dtls`，包名为 `dtls13`。
 
-当前实现完成了 RFC 9147、其继承的 TLS 1.3 强制语义，以及 RFC 9147 列出的全部 11 项直接规范性引用审计。TLS 1.3 语义同时对照 2026 年取代 RFC 8446 的 [RFC 9846](https://www.rfc-editor.org/rfc/rfc9846)。本文记录 2026-07-29 当前源码的实现状态、测试证据和性能基线。
+当前实现完成了 RFC 9147 的强制语义，并覆盖 RFC 9147 列出的全部 11 项直接规范性引用。TLS 1.3 基线按取代 RFC 8446 的 [RFC 9846](https://www.rfc-editor.org/rfc/rfc9846) 审计；其中适用于现有功能的主体行为已经实现，但仍有下文明确列出的推荐行为和后续规范缺口。本文记录 2026-07-29 当前源码的实现状态、测试证据和性能基线。
 
-> 本项目仍处于活跃开发阶段。RFC 审计完成不等同于第三方合规认证；部署到生产环境前，应根据实际网络、证书体系和对端实现完成独立测试。
+> 本项目仍处于活跃开发阶段。RFC 审计完成不等同于第三方合规认证。当前尚未显式强制 RFC 9325 的 RSA 证书至少 2048 位及所有自签名/信任锚场景的 SHA-1/MD5 禁用策略；生产部署必须通过证书签发策略、配置检查或 `VerifyPeerCertificate` 补足这些约束。
 
 ## 核心语义
 
@@ -297,6 +297,20 @@ serverConfig := &dtls13.Config{
 
 ## RFC 9147 完成度
 
+规范关键字按 BCP 14 解释。项目验收要求 `MUST`、`MUST NOT`、`REQUIRED`、`SHALL` 和 `SHALL NOT` 在客户端与服务端的发送、接收方向都严格执行；`SHOULD` 类要求由本客户端主动实现，本服务端只宽容不削弱认证、机密性、反重放、放大限制和状态一致性的对端偏差。当前未达到该目标的推荐项明确列为缺口。`MAY` 和 `OPTIONAL` 能力未启用时不构成缺陷，但一旦协商，其条件性强制要求必须完整执行。
+
+### 总体状态
+
+| 规范 | 状态 | 当前结论 |
+| --- | --- | --- |
+| [RFC 9147](https://www.rfc-editor.org/rfc/rfc9147) | 完成 | Record、Handshake、epoch、ACK、KeyUpdate、CID update、Application Data 与适用安全要求完成；推荐行为在已启用范围完成 |
+| [RFC 9146](https://www.rfc-editor.org/rfc/rfc9146) | 完成 | CID 协商、方向性 CID、更新、Listener 路由、错误处理和地址保持完成；DTLS 1.2 专属细节不适用 |
+| [RFC 9846](https://www.rfc-editor.org/rfc/rfc9846) | 基本完成 | 当前仍把 `user_canceled(90)` 返回为 `AlertError`，未按 SHOULD 忽略并等待 `close_notify`；`general_error(117)` 尚无命名常量和主动发送策略 |
+| [RFC 9325](https://www.rfc-editor.org/rfc/rfc9325) | 部分实现 | PFS、AEAD、SNI/ALPN、ticket、0-RTT 和 KeyUpdate 策略已覆盖；缺少显式证书强度下限和 OCSP stapling，且本模块有意不实现该 BCP 要求的 DTLS 1.2 |
+| [RFC 9525](https://www.rfc-editor.org/rfc/rfc9525) | 部分实现 | Go X.509 与 `ServerName` 覆盖 DNS-ID/IP-ID；URI-ID、SRV-ID 和应用 service identity 由调用方验证回调承担 |
+| [RFC 9853](https://www.rfc-editor.org/rfc/rfc9853) | 未实现 | 当前不会未经路径验证自动 rebind，因此没有安全降级；但提供 CID 的客户端尚未按 SHOULD 同时提供 Return Routability Check |
+| [RFC 8449](https://www.rfc-editor.org/rfc/rfc8449) | 未实现 | 尚不协商 `record_size_limit`；当前仅有 RFC record 上限和动态 PMTU，两者不能替代该扩展 |
+
 ### 章节覆盖
 
 | RFC 9147 章节 | 状态 | 实现摘要 |
@@ -331,26 +345,49 @@ serverConfig := &dtls13.Config{
 | [RFC 6298](https://www.rfc-editor.org/rfc/rfc6298) | RTO 初值、指数退避和上限 | 完成；默认 1 秒、最大 60 秒，并使用符合 Karn 原则的 RTT 样本 |
 | [RFC 8174](https://www.rfc-editor.org/rfc/rfc8174) | BCP 14 大小写限定 | 审计规则完成 |
 | [RFC 9146](https://www.rfc-editor.org/rfc/rfc9146) | DTLS Connection ID | 完成；协商、更新、路由、隔离和资源上限 |
-| [RFC 8446](https://www.rfc-editor.org/rfc/rfc8446) | TLS 1.3 基础协议 | 完成；握手、认证、key schedule、PSK/0-RTT、KeyUpdate、PHA、exporter 和 alert |
+| [RFC 8446](https://www.rfc-editor.org/rfc/rfc8446) | TLS 1.3 基础协议 | RFC 9147 继承的握手、认证、key schedule、PSK/0-RTT、KeyUpdate、PHA 和 exporter 完成；现行修订按 RFC 9846 的状态单独列出 |
 
 ### 后续规范
 
 | 规范 | 与本实现的关系 | 状态 |
 | --- | --- | --- |
-| [RFC 9846](https://www.rfc-editor.org/rfc/rfc9846) | 取代 RFC 8446 的 TLS 1.3 规范；明确 ticket 可封装客户端认证状态，并建议限制从在线 `CertificateVerify` 起的总密钥材料寿命 | 已完成适用于现有 DTLS 1.3 功能的变更；mTLS 恢复保留认证状态、当前策略/CA/有效期检查及总认证寿命 |
-| [RFC 9325](https://www.rfc-editor.org/rfc/rfc9325) | TLS/DTLS 部署安全建议；要求 ticket 状态认证加密、合理寿命和定期轮换 key | ticket 使用 AES-256-GCM，寿命限制为 1 秒至 7 天；key 轮换由部署方更换 `SessionTicketKey` 完成 |
-| [RFC 9853](https://www.rfc-editor.org/rfc/rfc9853) | 更新 RFC 9146/9147，为 CID 地址变化定义可选 Return Routability Check | 未实现 RRC 扩展；库不会仅凭新地址上的合法 CID record 自动 rebind，应用仍需自己的路径验证策略 |
+| [RFC 9846](https://www.rfc-editor.org/rfc/rfc9846) | 取代 RFC 8446 的 TLS 1.3 规范；修订 KeyShare、PSK/HRR、NST、AEAD limit、KeyUpdate、alert 和 vector 边界 | 主体变更完成；mTLS 恢复保留认证状态、当前策略/CA/有效期及总认证寿命；`user_canceled` 和 `general_error` 差异见总体状态 |
+| [RFC 9325](https://www.rfc-editor.org/rfc/rfc9325) | TLS/DTLS 部署安全 BCP | ticket 使用 AES-256-GCM，寿命限制为 1 秒至 7 天；缺口和 DTLS 1.2 范围例外见总体状态 |
+| [RFC 9525](https://www.rfc-editor.org/rfc/rfc9525) | 服务身份校验 | DNS-ID/IP-ID 默认严格验证；其他 reference identifier 需要调用方实现应用语义 |
+| [RFC 8449](https://www.rfc-editor.org/rfc/rfc8449) | 双向 record size 协商 | 未实现；PMTU API 只解决路径报文大小，不表示对端接收限制 |
+| [RFC 9853](https://www.rfc-editor.org/rfc/rfc9853) | 更新 RFC 9146/9147，为 CID 地址变化定义 Return Routability Check | 未实现；库不会仅凭新地址上的合法 CID record 自动 rebind，应用仍需自己的路径验证策略 |
+| [RFC 8701](https://www.rfc-editor.org/rfc/rfc8701) | GREASE 抗僵化 | 接收端容忍合法未知值并保持 HRR 不变量；发送端不主动生成 GREASE |
+| [RFC 8879](https://www.rfc-editor.org/rfc/rfc8879) | Certificate Compression | 未实现；大证书仍可使用现有 DTLS handshake 分片和重传 |
+| [RFC 9149](https://www.rfc-editor.org/rfc/rfc9149) | Ticket Requests | 未实现；服务端当前每连接最多签发一个 outstanding ticket |
+| [RFC 9257](https://www.rfc-editor.org/rfc/rfc9257) / [RFC 9258](https://www.rfc-editor.org/rfc/rfc9258) | external PSK / PSK importer | 未实现；当前只支持本库签发的 resumption PSK |
+| [RFC 9849](https://www.rfc-editor.org/rfc/rfc9849) | Encrypted ClientHello | 未实现 |
+| [RFC 9954](https://www.rfc-editor.org/rfc/rfc9954) | Hybrid Key Exchange | 未实现；当前仅支持 X25519 和 P-256 |
 
 ### 范围边界
 
 以下项目不降低 RFC 9147 强制语义完成度，但使用者应明确其边界：
 
 - 本模块只实现 DTLS 1.3，不提供 DTLS 1.2 回退。
+- 因上一条范围选择，本模块不声称完整符合 RFC 9325 对通用实现支持 DTLS 1.2 的要求。
+- 当前不会替调用方拒绝所有 RSA 小于 2048 位或自签名/信任锚中的 SHA-1/MD5 证书；部署方必须在证书配置和验证策略中执行该下限。
 - Heartbeat 的 record demux 已实现；完整 Heartbeat 协议由 RFC 6520 定义，不属于 RFC 9147 范围。
 - 发送端采用一条 record 一个 UDP datagram 的合法模式，未暴露可选的多 record 聚合 API。
 - 未暴露并行多个 NewSessionTicket 或 PHA 请求；RFC 允许但不要求这些并行能力。
-- CID 可从新来源地址路由和认证 record，但不会自动更新回包地址；RFC 9147 不定义路径验证过程。
+- CID 可从新来源地址路由和认证 record，但不会自动更新回包地址；RFC 9853 RRC 尚未实现。
+- `record_size_limit`、Certificate Compression、external PSK/importer、ECH、hybrid key exchange 和 Ticket Requests 等后续扩展尚未实现。
 - wolfSSL 5.9.2 互通构建未启用 CID、0-RTT、session ticket 或 `SESSION_CERTS`，因此 mTLS 恢复等组合当前只有本实现端到端测试和标准库 TLS 1.3 协议层对照。
+
+### 开发优先级
+
+| 优先级 | 工作项 | 完成条件摘要 |
+| --- | --- | --- |
+| P0 | RFC 9325 证书安全下限 | 双端拒绝不符合 RSA/SHA-1/MD5 策略的证书，并覆盖自签名、信任锚和恢复连接 |
+| P0 | RFC 9846 alert 语义 | 正确处理 `user_canceled`，并为 `general_error` 增加命名值和发送策略 |
+| P1 | RFC 9853 RRC | CID 客户端默认提供 RRC，完整实现路径挑战、放大限制、计时和 NAT rebind 测试 |
+| P1 | RFC 8449 `record_size_limit` | 完成 CH/EE 协商、双向限制、HRR/恢复保持和超限处理 |
+| P1 | 第三方互通矩阵 | 在对端实际支持时补齐 CID、KeyUpdate、0-RTT、恢复和 PHA 的双向证据 |
+
+其余扩展按实际部署需求和第三方支持推进，不为尚无调用方或标准算法的能力预建空框架。
 
 ## Benchmark
 
@@ -398,7 +435,10 @@ go test -run '^$' -bench '^BenchmarkProtectedRecord(Seal|RoundTripInPlace)$' -be
 ```sh
 go test ./... -count=10 -timeout=10m
 go vet ./...
+golangci-lint run ./...
 ```
+
+GitHub Actions 会在每次 push 和 pull request 上分别执行 lint、test、vet 和 race。CI 固定使用 `go.mod` 指定的 Go 版本及 golangci-lint v2.12.2。
 
 Windows race：
 
@@ -421,7 +461,7 @@ go test -run TestInteropWolfSSL -v -count=10
 - parser/record fuzz 累计覆盖数百万输入，并包含四套 AEAD 的复制与原地解密差分。
 - wolfSSL 5.9.2 双向互通于 2026-07-29 四个方向/套件用例各 `-count=10` 通过，覆盖 HRR、RSA-PSS 证书握手、Finished ACK、应用数据、AES-GCM 和 AES-128-CCM；该构建未启用 session ticket/`SESSION_CERTS`，未强行声称 mTLS 恢复互通。
 
-协议行为变更必须同步更新本文的完成度、验证证据、性能数据和第三方互通边界。
+协议行为变更必须同步更新本文的完成度、验证证据、性能数据、已知差异和第三方互通边界。
 
 ## 许可证
 
