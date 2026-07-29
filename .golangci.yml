@@ -1,0 +1,10 @@
+version: "2"
+
+linters:
+  exclusions:
+    rules:
+      - path: _test\.go
+        text: "Close.*is not checked"
+        source: '^\s*defer .*\.Close\(\)\s*$'
+        linters:
+          - errcheck

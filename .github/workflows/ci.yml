@@ -1,0 +1,38 @@
+name: CI
+
+on:
+  push:
+  pull_request:
+
+permissions:
+  contents: read
+
+jobs:
+  checks:
+    name: ${{ matrix.check }}
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    strategy:
+      fail-fast: false
+      matrix:
+        check: [lint, test, vet, race]
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-go@v5
+        with:
+          go-version-file: go.mod
+          cache: true
+      - name: Lint
+        if: matrix.check == 'lint'
+        uses: golangci/golangci-lint-action@v9.3.0
+        with:
+          version: v2.12.2
+      - name: Test
+        if: matrix.check == 'test'
+        run: go test ./... -count=1
+      - name: Vet
+        if: matrix.check == 'vet'
+        run: go vet ./...
+      - name: Race
+        if: matrix.check == 'race'
+        run: go test -race ./... -count=1

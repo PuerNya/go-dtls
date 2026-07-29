@@ -1,0 +1,24 @@
+# Go build, test, coverage, and profiling artifacts
+*.exe
+*.exe~
+*.dll
+*.so
+*.dylib
+*.test
+*.out
+*.prof
+*.coverprofile
+/coverage.*
+
+# Local Go workspaces
+/go.work
+/go.work.sum
+
+# Windows race helper artifact
+/tools/libkernelbase.a
+
+# Editor and OS metadata
+/.idea/
+/.vscode/
+.DS_Store
+Thumbs.db

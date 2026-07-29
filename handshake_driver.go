@@ -1,0 +1,1708 @@
+package dtls13
+
+import (
+	"context"
+	"crypto"
+	"crypto/tls"
+	"crypto/x509"
+	"errors"
+	"io"
+	"net"
+	"slices"
+	"time"
+)
+
+const (
+	handshakeTypeClientHello    uint8 = 1
+	handshakeTypeServerHello    uint8 = 2
+	handshakeTypeEndOfEarlyData uint8 = 5
+)
+
+type serverHandshakeStage uint8
+
+const (
+	serverExpectEncryptedExtensions serverHandshakeStage = iota
+	serverExpectCertificateRequestOrCertificate
+	serverExpectCertificate
+	serverExpectCertificateVerify
+	serverExpectFinished
+	serverHandshakeComplete
+)
+
+func (s *serverHandshakeStage) accept(typ uint8, resumed bool) error {
+	switch *s {
+	case serverExpectEncryptedExtensions:
+		if typ != handshakeTypeEncryptedExtensions {
+			break
+		}
+		if resumed {
+			*s = serverExpectFinished
+		} else {
+			*s = serverExpectCertificateRequestOrCertificate
+		}
+		return nil
+	case serverExpectCertificateRequestOrCertificate:
+		if typ == handshakeTypeCertificateRequest {
+			*s = serverExpectCertificate
+			return nil
+		}
+		if typ == handshakeTypeCertificate {
+			*s = serverExpectCertificateVerify
+			return nil
+		}
+	case serverExpectCertificate:
+		if typ == handshakeTypeCertificate {
+			*s = serverExpectCertificateVerify
+			return nil
+		}
+	case serverExpectCertificateVerify:
+		if typ == handshakeTypeCertificateVerify {
+			*s = serverExpectFinished
+			return nil
+		}
+	case serverExpectFinished:
+		if typ == handshakeTypeFinished {
+			*s = serverHandshakeComplete
+			return nil
+		}
+	}
+	return alertError(alertUnexpectedMessage, &ProtocolError{"unexpected server handshake message order"})
+}
+
+func (c *Conn) runHandshake(ctx context.Context) (result error) {
+	deadline := c.config.Time().Add(c.config.HandshakeTimeout)
+	if d, ok := ctx.Deadline(); ok && d.Before(deadline) {
+		deadline = d
+	}
+	if err := c.conn.SetDeadline(deadline); err != nil {
+		return err
+	}
+	c.handshakeDeadline = deadline
+	defer func() { _ = c.conn.SetDeadline(time.Time{}) }()
+	defer func() {
+		if description, ok := protocolAlert(result); ok {
+			if c.sendCipher != nil {
+				c.sendFatalAlert(description)
+			} else {
+				var local *localAlertError
+				if errors.As(result, &local) {
+					c.sendPlainFatalAlert(description)
+				}
+			}
+		}
+		if result != nil && !errors.Is(result, io.EOF) {
+			c.clearTrafficSecrets(result)
+		}
+	}()
+	done := make(chan struct{})
+	defer close(done)
+	go func() {
+		select {
+		case <-ctx.Done():
+			_ = c.conn.SetDeadline(time.Now())
+		case <-done:
+		}
+	}()
+	if c.isClient {
+		result = c.clientHandshake(ctx)
+		return result
+	}
+	result = c.serverHandshake(ctx)
+	return result
+}
+
+func (c *Conn) writeFlight(conn io.Writer, f *flight) error {
+	var storage [10][]byte
+	for {
+		var err error
+		records := f.nextUnsentWire(10, storage[:0])
+		if len(records) > 0 {
+			f.noteSend(c.config.Time(), false)
+		}
+		for _, record := range records {
+			if _, err = conn.Write(record); err != nil {
+				break
+			}
+		}
+		if err == nil || !isMessageTooLong(err) {
+			return err
+		}
+		mtu, reduced := c.reducePathMTU()
+		if !reduced {
+			return normalizeDatagramWriteError(err, c.RemoteAddr())
+		}
+		if err = f.resize(mtu); err != nil {
+			return err
+		}
+	}
+}
+
+func (c *Conn) retransmitFlight(conn io.Writer, f *flight) error {
+	var storage [10][]byte
+	records := f.retransmitWire(10, storage[:0])
+	if len(records) > 0 {
+		f.noteSend(c.config.Time(), true)
+	}
+	for _, record := range records {
+		if _, err := conn.Write(record); err != nil {
+			return normalizeDatagramWriteError(err, c.RemoteAddr())
+		}
+	}
+	return nil
+}
+
+func (c *Conn) retransmitPartialFlight(conn io.Writer, f *flight) error {
+	if err := f.refreshPending(); err != nil {
+		return err
+	}
+	if err := c.retransmitFlight(conn, f); err != nil {
+		return err
+	}
+	return c.writeFlight(conn, f)
+}
+
+func (c *Conn) prepareFlightRetransmission(f *flight, timeoutCount int) (bool, error) {
+	if timeoutCount > 0 && timeoutCount%3 == 0 {
+		if mtu, reduced := c.reducePathMTU(); reduced {
+			return true, f.resize(mtu)
+		}
+	}
+	return false, f.refreshPending()
+}
+
+func (c *Conn) receiveHandshakeWithRetransmit(inbox *handshakeInbox, cipher *recordCipher, outgoing *flight) (completedHandshakeBatch, error) {
+	return c.receiveHandshakeWithRetransmitOn(c.conn, inbox, cipher, outgoing)
+}
+
+func (c *Conn) receiveHandshakeWithRetransmitOn(conn net.Conn, inbox *handshakeInbox, cipher *recordCipher, outgoing *flight) (completedHandshakeBatch, error) {
+	return c.receiveHandshakeWithRetransmitOnEarly(conn, inbox, cipher, outgoing, nil, nil, nil)
+}
+
+// receiveHandshakeWithRetransmitOnEarly is the handshake receive loop with an
+// optional epoch-1 cipher. DTLS 1.3 permits early application records to be
+// interleaved with the protected handshake flight, so they must be consumed by
+// the same datagram reader rather than by a second goroutine reading conn.
+func (c *Conn) receiveHandshakeWithRetransmitOnEarly(conn net.Conn, inbox *handshakeInbox, cipher *recordCipher, outgoing *flight, early *recordCipher, onEarly func([]byte) error, ackCipher *recordCipher) (completedHandshakeBatch, error) {
+	interval := c.flightInterval()
+	if interval <= 0 {
+		interval = time.Second
+	}
+	max := c.config.MaxFlightInterval
+	if max < interval {
+		max = interval
+	}
+	timeoutCount := 0
+	for {
+		next := c.config.Time().Add(interval)
+		if next.After(c.handshakeDeadline) {
+			next = c.handshakeDeadline
+		}
+		if err := conn.SetReadDeadline(next); err != nil {
+			return completedHandshakeBatch{}, err
+		}
+		messages, err := receiveHandshakeMessageWithEarlyBatch(conn, inbox, cipher, early, onEarly, outgoing, ackCipher, c.currentMTU(), c)
+		if err == nil {
+			_ = conn.SetReadDeadline(c.handshakeDeadline)
+			return messages, nil
+		}
+		networkErr, ok := err.(net.Error)
+		if !ok || !networkErr.Timeout() || !c.config.Time().Before(c.handshakeDeadline) {
+			return completedHandshakeBatch{}, err
+		}
+		if outgoing != nil {
+			timeoutCount++
+			resized, prepareErr := c.prepareFlightRetransmission(outgoing, timeoutCount)
+			if prepareErr != nil {
+				return completedHandshakeBatch{}, prepareErr
+			}
+			if resized {
+				err = c.writeFlight(conn, outgoing)
+			} else {
+				err = c.retransmitFlight(conn, outgoing)
+			}
+			if err != nil {
+				return completedHandshakeBatch{}, err
+			}
+		}
+		if interval < max {
+			interval *= 2
+			if interval > max {
+				interval = max
+			}
+		}
+	}
+}
+func receiveHandshakeMessage(conn net.Conn, inbox *handshakeInbox, cipher *recordCipher) ([]completedHandshake, error) {
+	batch, err := receiveHandshakeMessageBatch(conn, inbox, cipher)
+	if err != nil {
+		return nil, err
+	}
+	return batch.slice(), nil
+}
+
+func receiveHandshakeMessageBatch(conn net.Conn, inbox *handshakeInbox, cipher *recordCipher) (completedHandshakeBatch, error) {
+	return receiveHandshakeMessageWithEarlyBatch(conn, inbox, cipher, nil, nil, nil, nil, 0, nil)
+}
+
+func (c *Conn) receiveSecondClientHello(conn net.Conn, inbox *handshakeInbox, hrr *flight) (completedHandshakeBatch, error) {
+	buffer := acquireDatagramBuffer()
+	defer releaseDatagramBuffer(buffer)
+	for {
+		datagram := buffer[:]
+		n, err := conn.Read(datagram)
+		if err != nil {
+			return completedHandshakeBatch{}, err
+		}
+		var recordScratch [1]record
+		records, err := parsePlainRecordsViewInto(datagram[:n], recordScratch[:0])
+		if err != nil {
+			continue
+		}
+		for _, record := range records {
+			if record.typ != recordTypeHandshake {
+				continue
+			}
+			var fragmentScratch [1]handshakeFragment
+			fragments, parseErr := parseHandshakeFragmentsViewInto(record.payload, fragmentScratch[:0])
+			if parseErr != nil {
+				return completedHandshakeBatch{}, parseErr
+			}
+			var delivered completedHandshakeBatch
+			retransmitHRR := false
+			for _, fragment := range fragments {
+				if fragment.typ == handshakeTypeClientHello && fragment.messageSequence < inbox.expected {
+					retransmitHRR = true
+					continue
+				}
+				if addErr := inbox.addBatch(&delivered, fragment); addErr != nil {
+					return completedHandshakeBatch{}, addErr
+				}
+			}
+			if retransmitHRR {
+				if err = hrr.refreshPending(); err != nil {
+					return completedHandshakeBatch{}, err
+				}
+				if err = c.retransmitFlight(conn, hrr); err != nil {
+					return completedHandshakeBatch{}, err
+				}
+			}
+			if delivered.len() > 0 {
+				return delivered, nil
+			}
+		}
+	}
+}
+
+func receiveHandshakeMessageWithEarly(conn net.Conn, inbox *handshakeInbox, cipher, early *recordCipher, onEarly func([]byte) error, outgoing *flight, ackCipher *recordCipher, mtu int, owner *Conn) ([]completedHandshake, error) {
+	batch, err := receiveHandshakeMessageWithEarlyBatch(conn, inbox, cipher, early, onEarly, outgoing, ackCipher, mtu, owner)
+	if err != nil {
+		return nil, err
+	}
+	return batch.slice(), nil
+}
+
+func receiveHandshakeMessageWithEarlyBatch(conn net.Conn, inbox *handshakeInbox, cipher, early *recordCipher, onEarly func([]byte) error, outgoing *flight, ackCipher *recordCipher, mtu int, owner *Conn) (completedHandshakeBatch, error) {
+	buffer := acquireDatagramBuffer()
+	defer releaseDatagramBuffer(buffer)
+	for {
+		datagram := buffer[:]
+		n, err := conn.Read(datagram)
+		if err != nil {
+			return completedHandshakeBatch{}, err
+		}
+		datagram = datagram[:n]
+		for len(datagram) > 0 {
+			var payload []byte
+			var typ uint8
+			var consumed int
+			var recordEpoch uint64
+			if cipher == nil {
+				if isUnifiedRecord(datagram) && owner != nil {
+					sequence := owner.plainSendSequence.Add(1) - 1
+					var ackScratch [1][]byte
+					acks, _, ackErr := buildACKRecordsInto(ackScratch[:0], nil, mtu, sequence, nil)
+					if ackErr != nil {
+						return completedHandshakeBatch{}, ackErr
+					}
+					for _, wire := range acks {
+						if _, ackErr = conn.Write(wire); ackErr != nil {
+							return completedHandshakeBatch{}, ackErr
+						}
+					}
+					break
+				}
+				var recordScratch [1]record
+				records, parseErr := parsePlainRecordsViewInto(datagram, recordScratch[:0])
+				if parseErr != nil {
+					break
+				}
+				if len(records) == 0 {
+					break
+				}
+				recordWireLen := plainRecordHeaderLen + len(records[0].payload)
+				typ = records[0].typ
+				payload = records[0].payload
+				consumed = recordWireLen
+			} else {
+				var openErr error
+				if datagram[0] == recordTypeACK {
+					var recordScratch [1]record
+					records, parseErr := parsePlainRecordsViewInto(datagram, recordScratch[:0])
+					if parseErr == nil && len(records) > 0 && records[0].typ == recordTypeACK {
+						consumed = plainRecordHeaderLen + len(records[0].payload)
+						numbers, ackErr := parseACK(records[0].payload)
+						if ackErr != nil {
+							return completedHandshakeBatch{}, ackErr
+						}
+						if len(numbers) == 0 && outgoing != nil && owner != nil {
+							if ackErr = outgoing.refreshPending(); ackErr != nil {
+								return completedHandshakeBatch{}, ackErr
+							}
+							if ackErr = owner.retransmitFlight(conn, outgoing); ackErr != nil {
+								return completedHandshakeBatch{}, ackErr
+							}
+						}
+						datagram = datagram[consumed:]
+						continue
+					}
+				}
+				// Epoch bits are unambiguous during the initial handshake. Try
+				// epoch 1 first for early records and epoch 2 with the normal
+				// handshake cipher otherwise.
+				if early != nil && len(datagram) > 0 && datagram[0]&unifiedHeaderEpochMask == byte(early.epoch&unifiedHeaderEpochMask) {
+					payload, typ, consumed, openErr = early.openInPlace(datagram)
+					recordEpoch = early.epoch
+					if openErr == nil && typ == recordTypeApplicationData && onEarly != nil {
+						if callbackErr := onEarly(payload); callbackErr != nil {
+							return completedHandshakeBatch{}, callbackErr
+						}
+					}
+				} else {
+					payload, typ, consumed, openErr = cipher.openInPlace(datagram)
+					recordEpoch = cipher.epoch
+				}
+				if openErr != nil {
+					if fatalErr := protectedRecordReceiveError(openErr); fatalErr != nil {
+						return completedHandshakeBatch{}, fatalErr
+					}
+					break
+				}
+			}
+			datagram = datagram[consumed:]
+			if typ == recordTypeAlert {
+				alert, parseErr := parseAlert(payload)
+				if parseErr != nil {
+					return completedHandshakeBatch{}, parseErr
+				}
+				if alert.isCloseNotify() {
+					return completedHandshakeBatch{}, io.EOF
+				}
+				return completedHandshakeBatch{}, AlertError(alert.description)
+			}
+			if typ == recordTypeACK && outgoing != nil {
+				var ackScratch [1]recordNumber
+				numbers, parseErr := parseACKInto(payload, ackScratch[:0])
+				if parseErr != nil {
+					return completedHandshakeBatch{}, parseErr
+				}
+				if parseErr = validateACKEpoch(numbers, recordEpoch); parseErr != nil {
+					return completedHandshakeBatch{}, parseErr
+				}
+				outgoing.ack(numbers)
+				if owner != nil && !outgoing.complete() {
+					if sendErr := owner.retransmitPartialFlight(conn, outgoing); sendErr != nil {
+						return completedHandshakeBatch{}, sendErr
+					}
+				}
+				continue
+			}
+			if typ != recordTypeHandshake {
+				continue
+			}
+			var fragmentScratch [1]handshakeFragment
+			fragments, parseErr := parseHandshakeFragmentsViewInto(payload, fragmentScratch[:0])
+			if parseErr != nil {
+				return completedHandshakeBatch{}, parseErr
+			}
+			var delivered completedHandshakeBatch
+			acknowledge := true
+			peerRetransmitted := false
+			for _, fragment := range fragments {
+				if fragment.messageSequence < inbox.expected {
+					acknowledge = false
+					peerRetransmitted = true
+				}
+				if addErr := inbox.addProtectedBatch(&delivered, fragment, recordEpoch); addErr != nil {
+					return completedHandshakeBatch{}, addErr
+				}
+			}
+			if peerRetransmitted && outgoing != nil && !outgoing.hasAcknowledgedRecord() && owner != nil {
+				if retransmitErr := outgoing.refreshPending(); retransmitErr != nil {
+					return completedHandshakeBatch{}, retransmitErr
+				}
+				if retransmitErr := owner.retransmitFlight(conn, outgoing); retransmitErr != nil {
+					return completedHandshakeBatch{}, retransmitErr
+				}
+			}
+			if cipher != nil && ackCipher != nil && acknowledge {
+				number := recordNumber{epoch: cipher.epoch, sequence: cipher.lastOpened}
+				var ackScratch [1][]byte
+				acks, _, ackErr := buildACKRecordsInto(ackScratch[:0], []recordNumber{number}, mtu, 0, ackCipher)
+				if ackErr != nil {
+					return completedHandshakeBatch{}, ackErr
+				}
+				for _, wire := range acks {
+					if _, ackErr = conn.Write(wire); ackErr != nil {
+						return completedHandshakeBatch{}, ackErr
+					}
+				}
+			}
+			if delivered.len() > 0 {
+				return delivered, nil
+			}
+		}
+	}
+}
+
+func receiveACKRecord(conn net.Conn, dst []recordNumber, ciphers ...*recordCipher) ([]recordNumber, error) {
+	buffer := acquireDatagramBuffer()
+	defer releaseDatagramBuffer(buffer)
+	for {
+		datagram := buffer[:]
+		n, err := conn.Read(datagram)
+		if err != nil {
+			return nil, err
+		}
+		if n == 0 || !isUnifiedRecord(datagram[:n]) {
+			continue
+		}
+		lastCipher := -1
+		for i, cipher := range ciphers {
+			if recordCipherMatchesUnifiedEpoch(cipher, datagram[0]) {
+				lastCipher = i
+			}
+		}
+		if lastCipher < 0 {
+			continue
+		}
+		for i, cipher := range ciphers {
+			if !recordCipherMatchesUnifiedEpoch(cipher, datagram[0]) {
+				continue
+			}
+			var content []byte
+			var typ uint8
+			var openErr error
+			if i == lastCipher {
+				content, typ, _, openErr = cipher.openInPlace(datagram[:n])
+			} else {
+				content, typ, _, openErr = cipher.open(datagram[:n])
+			}
+			if openErr != nil {
+				if fatalErr := protectedRecordReceiveError(openErr); fatalErr != nil {
+					return nil, fatalErr
+				}
+				continue
+			}
+			switch typ {
+			case recordTypeACK:
+				numbers, parseErr := parseACKInto(content, dst)
+				if parseErr != nil {
+					return nil, parseErr
+				}
+				if parseErr = validateACKEpoch(numbers, cipher.epoch); parseErr != nil {
+					return nil, parseErr
+				}
+				return numbers, nil
+			case recordTypeAlert:
+				alert, parseErr := parseAlert(content)
+				if parseErr != nil {
+					return nil, parseErr
+				}
+				if alert.isCloseNotify() {
+					return nil, io.EOF
+				}
+				return nil, AlertError(alert.description)
+			}
+		}
+	}
+}
+
+func (c *Conn) receiveACKWithRetransmit(outgoing *flight, ciphers ...*recordCipher) ([]recordNumber, error) {
+	interval := c.flightInterval()
+	if interval <= 0 {
+		interval = time.Second
+	}
+	max := c.config.MaxFlightInterval
+	if max < interval {
+		max = interval
+	}
+	var acknowledged []recordNumber
+	var ackScratch [1]recordNumber
+	timeoutCount := 0
+	for {
+		next := c.config.Time().Add(interval)
+		if next.After(c.handshakeDeadline) {
+			next = c.handshakeDeadline
+		}
+		if err := c.conn.SetReadDeadline(next); err != nil {
+			return nil, err
+		}
+		numbers, err := receiveACKRecord(c.conn, ackScratch[:0], ciphers...)
+		if err == nil {
+			acknowledged = append(acknowledged, numbers...)
+			outgoing.ack(numbers)
+			if outgoing.complete() {
+				c.observeFlightRTT(outgoing)
+				return canonicalRecordNumbers(acknowledged), nil
+			}
+			if err = c.retransmitPartialFlight(c.conn, outgoing); err != nil {
+				return nil, err
+			}
+			continue
+		}
+		networkErr, ok := err.(net.Error)
+		if !ok || !networkErr.Timeout() || !c.config.Time().Before(c.handshakeDeadline) {
+			return nil, err
+		}
+		timeoutCount++
+		resized, prepareErr := c.prepareFlightRetransmission(outgoing, timeoutCount)
+		if prepareErr != nil {
+			return nil, prepareErr
+		}
+		if resized {
+			err = c.writeFlight(c.conn, outgoing)
+		} else {
+			err = c.retransmitFlight(c.conn, outgoing)
+		}
+		if err != nil {
+			return nil, err
+		}
+		if interval < max {
+			interval *= 2
+			if interval > max {
+				interval = max
+			}
+		}
+	}
+}
+
+func (c *Conn) clientHandshake(ctx context.Context) error {
+	var transcriptDigest [maxSupportedHashSize]byte
+	key, err := generateEphemeralKey(c.config.CurvePreferences[0], c.config.Rand)
+	if err != nil {
+		return err
+	}
+	hello := &clientHello{cipherSuites: append([]uint16(nil), c.config.CipherSuites...), keyShares: []keyShareEntry{{group: key.group, data: key.publicBytes()}}, supportedGroups: c.config.CurvePreferences, signatureSchemes: defaultSignatureSchemes(), serverName: c.config.ServerName, alpn: c.config.NextProtos, postHandshakeAuth: c.config.PostHandshakeAuth}
+	if connectionID, offered := c.config.clientConnectionIDOffer(); offered {
+		hello.hasConnectionID = true
+		hello.connectionID = connectionID
+	}
+	if _, err = io.ReadFull(c.config.Rand, hello.random[:]); err != nil {
+		return err
+	}
+	clientSession, sessionSuite := usableClientSession(c.config, c.conn)
+	c.earlyMu.Lock()
+	queuedEarly := append([]byte(nil), c.earlyPending...)
+	c.earlyMu.Unlock()
+	if clientSession != nil {
+		hello.pskIdentity = append([]byte(nil), clientSession.ticket...)
+		hello.obfuscatedAge = obfuscatedTicketAge(clientSession, c.config.Time())
+		if slices.Contains(hello.cipherSuites, sessionSuite.id) && hello.cipherSuites[0] != sessionSuite.id {
+			prioritized := []uint16{sessionSuite.id}
+			for _, id := range hello.cipherSuites {
+				if id != sessionSuite.id {
+					prioritized = append(prioritized, id)
+				}
+			}
+			hello.cipherSuites = prioritized
+		}
+		if len(queuedEarly) > 0 && clientSession.maxEarlyData > 0 {
+			hello.earlyData = true
+		}
+	}
+	var helloBody []byte
+	if clientSession != nil {
+		helloBody, err = marshalClientHelloWithPSKBinder(hello, sessionSuite, clientSession.psk, nil, nil)
+	} else {
+		helloBody, err = hello.marshal()
+	}
+	if err != nil {
+		return err
+	}
+	out, _, err := buildPlainFlight([]handshakeMessage{{typ: handshakeTypeClientHello, sequence: 0, body: helloBody}}, c.currentMTU(), 0, 0)
+	if err != nil {
+		return err
+	}
+	c.plainSendSequence.Store(out.nextRecordSequence())
+	if err = c.writeFlight(c.conn, out); err != nil {
+		return err
+	}
+	if hello.earlyData {
+		// Epoch 1 is derived from the PSK and the complete first ClientHello,
+		// including its binder, and can be sent before ServerHello arrives.
+		earlySchedule := newKeySchedule(sessionSuite, clientSession.psk)
+		transcriptHash := newTranscriptHash(sessionSuite.hash.New())
+		_ = transcriptHash.add(handshakeTypeClientHello, 0, helloBody)
+		earlyCipher, cipherErr := newRecordCipher(sessionSuite, earlySchedule.earlyTrafficSecret(transcriptHash.sumInto(transcriptDigest[:0])), 1, c.config.ReplayWindow)
+		if cipherErr != nil {
+			return cipherErr
+		}
+		if len(queuedEarly) > int(clientSession.maxEarlyData) {
+			c.earlyMu.Lock()
+			c.earlyPending = nil
+			c.earlyRejected = true
+			c.earlyMu.Unlock()
+		} else {
+			c.writeMu.Lock()
+			maxRecord := c.maxApplicationDatagramForCipher(earlyCipher)
+			if maxRecord < 1 {
+				c.writeMu.Unlock()
+				return &ConfigError{"MTU is too small for early application data"}
+			}
+			if len(queuedEarly) > maxRecord {
+				c.writeMu.Unlock()
+				c.earlyMu.Lock()
+				c.earlyPending = nil
+				c.earlyMu.Unlock()
+				return datagramTooLargeError(c.conn.RemoteAddr())
+			}
+			wire, sealErr := earlyCipher.seal(recordTypeApplicationData, queuedEarly)
+			if sealErr != nil {
+				c.writeMu.Unlock()
+				return sealErr
+			}
+			if _, writeErr := c.writeRecord(wire); writeErr != nil {
+				c.writeMu.Unlock()
+				return writeErr
+			}
+			c.writeMu.Unlock()
+			c.earlyMu.Lock()
+			c.earlyPending = nil
+			c.earlySent = true
+			c.earlyMu.Unlock()
+		}
+	}
+	inbox := newHandshakeInbox(0, c.config.MaxHandshakeMessage, c.config.MaxBufferedHandshakeMessages, c.config.MaxBufferedHandshakeBytes)
+	messages, err := c.receiveHandshakeWithRetransmit(inbox, nil, out)
+	if err != nil {
+		return err
+	}
+	if messages.len() != 1 || messages.at(0).typ != handshakeTypeServerHello {
+		return &ProtocolError{"expected ServerHello"}
+	}
+	serverHelloBody := messages.at(0).body
+	serverHelloSequence := uint16(0)
+	clientFinishedSequence := uint16(1)
+	serverHandshakeStart := uint16(1)
+	var helloRetrySuite uint16
+	var transcript *transcriptHash
+	if len(serverHelloBody) >= 34 && string(serverHelloBody[2:34]) == string(helloRetryRequestRandom[:]) {
+		if hello.earlyData {
+			c.earlyMu.Lock()
+			c.earlyRejected = c.earlySent
+			c.earlyMu.Unlock()
+			hello.earlyData = false
+		}
+		hrr, parseErr := parseHelloRetryRequest(serverHelloBody)
+		if parseErr != nil {
+			return parseErr
+		}
+		suite, parseErr := cipherSuiteForID(hrr.cipherSuite)
+		if parseErr != nil {
+			return parseErr
+		}
+		offered := false
+		for _, id := range hello.cipherSuites {
+			if id == hrr.cipherSuite {
+				offered = true
+			}
+		}
+		if !offered {
+			return &ProtocolError{"HelloRetryRequest selected an unoffered cipher suite"}
+		}
+		helloRetrySuite = hrr.cipherSuite
+		if clientSession != nil {
+			hrrSuite, suiteErr := cipherSuiteForID(hrr.cipherSuite)
+			if suiteErr != nil || hrrSuite.hash != sessionSuite.hash {
+				return &ProtocolError{"HelloRetryRequest selected a cipher suite incompatible with the offered PSK"}
+			}
+		}
+		initial := newTranscriptHash(suite.hash.New())
+		_ = initial.add(handshakeTypeClientHello, 0, helloBody)
+		transcript = newTranscriptHash(suite.hash.New())
+		_ = transcript.addHelloRetryRequest(initial.sumInto(transcriptDigest[:0]), serverHelloBody)
+		if hrr.selectedGroup != 0 {
+			supported := false
+			alreadyOffered := false
+			for _, group := range hello.supportedGroups {
+				supported = supported || group == hrr.selectedGroup
+			}
+			for _, share := range hello.keyShares {
+				alreadyOffered = alreadyOffered || share.group == hrr.selectedGroup
+			}
+			if !supported || alreadyOffered {
+				return alertError(alertIllegalParameter, &ProtocolError{"HelloRetryRequest selected an invalid key share group"})
+			}
+			key, parseErr = generateEphemeralKey(hrr.selectedGroup, c.config.Rand)
+			if parseErr != nil {
+				return parseErr
+			}
+			hello.keyShares = []keyShareEntry{{group: key.group, data: key.publicBytes()}}
+		}
+		hello.cookie = hrr.cookie
+		if clientSession != nil {
+			hello.obfuscatedAge = obfuscatedTicketAge(clientSession, c.config.Time())
+			helloBody, parseErr = marshalClientHelloWithPSKBinder(hello, sessionSuite, clientSession.psk, initial.sumInto(transcriptDigest[:0]), serverHelloBody)
+		} else {
+			helloBody, parseErr = hello.marshal()
+		}
+		if parseErr != nil {
+			return parseErr
+		}
+		second, _, parseErr := buildPlainFlight([]handshakeMessage{{typ: handshakeTypeClientHello, sequence: 1, body: helloBody}}, c.currentMTU(), 0, out.nextRecordSequence())
+		if parseErr != nil {
+			return parseErr
+		}
+		c.plainSendSequence.Store(second.nextRecordSequence())
+		if parseErr = c.writeFlight(c.conn, second); parseErr != nil {
+			return parseErr
+		}
+		_ = transcript.add(handshakeTypeClientHello, 1, helloBody)
+		messages, parseErr = c.receiveHandshakeWithRetransmit(inbox, nil, second)
+		if parseErr != nil {
+			return parseErr
+		}
+		if messages.len() != 1 || messages.at(0).typ != handshakeTypeServerHello {
+			return &ProtocolError{"expected ServerHello after HelloRetryRequest"}
+		}
+		serverHelloBody = messages.at(0).body
+		if len(serverHelloBody) >= 34 && string(serverHelloBody[2:34]) == string(helloRetryRequestRandom[:]) {
+			return alertError(alertUnexpectedMessage, &ProtocolError{"received a second HelloRetryRequest"})
+		}
+		serverHelloSequence = 1
+		clientFinishedSequence = 2
+		serverHandshakeStart = 2
+	}
+	sh, err := parseServerHello(serverHelloBody)
+	if err != nil {
+		return err
+	}
+	suite, err := cipherSuiteForID(sh.cipherSuite)
+	if err != nil {
+		return err
+	}
+	offered := false
+	for _, id := range hello.cipherSuites {
+		if id == sh.cipherSuite {
+			offered = true
+		}
+	}
+	if !offered {
+		return &ProtocolError{"server selected an unoffered cipher suite"}
+	}
+	if helloRetrySuite != 0 && sh.cipherSuite != helloRetrySuite {
+		return alertError(alertIllegalParameter, &ProtocolError{"ServerHello changed cipher suite after HelloRetryRequest"})
+	}
+	if len(sh.sessionID) != 0 {
+		return &ProtocolError{"ServerHello legacy session ID must be empty"}
+	}
+	if err = validateServerHelloConnectionID(hello, sh); err != nil {
+		return err
+	}
+	if sh.hasConnectionID {
+		c.connectionIDNegotiated = true
+		c.sendConnectionID = append([]byte(nil), sh.connectionID...)
+		c.receiveConnectionID = append([]byte(nil), hello.connectionID...)
+		c.localCIDUpdatesAllowed = len(c.receiveConnectionID) > 0
+		c.peerCIDUpdatesAllowed = len(c.sendConnectionID) > 0
+	}
+	resumed := sh.selectedIdentity != nil
+	if resumed {
+		if clientSession == nil || *sh.selectedIdentity != 0 {
+			return &ProtocolError{"server selected an invalid PSK identity"}
+		}
+		originalSuite, suiteErr := cipherSuiteForID(clientSession.suite)
+		if suiteErr != nil || suite.hash != originalSuite.hash {
+			return &ProtocolError{"server selected a cipher suite incompatible with the PSK"}
+		}
+	}
+	shared, err := key.sharedSecret(sh.keyShare.group, sh.keyShare.data)
+	if err != nil {
+		return err
+	}
+	if transcript == nil {
+		transcript = newTranscriptHash(suite.hash.New())
+		_ = transcript.add(handshakeTypeClientHello, 0, helloBody)
+	}
+	_ = transcript.add(handshakeTypeServerHello, serverHelloSequence, serverHelloBody)
+	var psk []byte
+	if resumed {
+		psk = clientSession.psk
+	}
+	schedule := newKeySchedule(suite, psk)
+	if err = schedule.deriveHandshake(shared, transcript.sumInto(transcriptDigest[:0])); err != nil {
+		return err
+	}
+	receiveCipher, err := newRecordCipher(suite, schedule.serverHandshakeTraffic, 2, c.config.ReplayWindow)
+	if err != nil {
+		return err
+	}
+	sendCipher, err := newRecordCipher(suite, schedule.clientHandshakeTraffic, 2, c.config.ReplayWindow)
+	if err != nil {
+		return err
+	}
+	if c.connectionIDNegotiated {
+		if err = receiveCipher.setConnectionID(c.receiveConnectionID); err != nil {
+			return err
+		}
+		if err = sendCipher.setConnectionID(c.sendConnectionID); err != nil {
+			return err
+		}
+	}
+	c.sendCipher = sendCipher
+	inbox = newHandshakeInbox(serverHandshakeStart, c.config.MaxHandshakeMessage, c.config.MaxBufferedHandshakeMessages, c.config.MaxBufferedHandshakeBytes)
+	var peerCerts []*x509.Certificate
+	var chains [][]*x509.Certificate
+	if resumed {
+		peerCerts = append([]*x509.Certificate(nil), clientSession.peerCertificates...)
+		chains = make([][]*x509.Certificate, len(clientSession.verifiedChains))
+		for i := range clientSession.verifiedChains {
+			chains[i] = append([]*x509.Certificate(nil), clientSession.verifiedChains[i]...)
+		}
+	}
+	var negotiated string
+	var certificateRequest *certificateRequestMessage
+	verifiedServerSignature := false
+	finished := false
+	serverStage := serverExpectEncryptedExtensions
+	var serverFinishedSequence uint16
+	for !finished {
+		messages, err = receiveHandshakeMessageWithEarlyBatch(c.conn, inbox, receiveCipher, nil, nil, nil, sendCipher, c.currentMTU(), c)
+		if err != nil {
+			return err
+		}
+		for index := 0; index < messages.len(); index++ {
+			message := messages.at(index)
+			if err = serverStage.accept(message.typ, resumed); err != nil {
+				return err
+			}
+			switch message.typ {
+			case handshakeTypeEncryptedExtensions:
+				ee, parseErr := parseEncryptedExtensions(message.body)
+				if parseErr != nil {
+					return parseErr
+				}
+				var acceptedEarly bool
+				negotiated, acceptedEarly, parseErr = validateEncryptedExtensions(hello, ee)
+				if parseErr != nil {
+					return parseErr
+				}
+				if parseErr = validateEarlyDataSelection(acceptedEarly, sh.selectedIdentity); parseErr != nil {
+					return parseErr
+				}
+				if acceptedEarly {
+					c.earlyMu.Lock()
+					c.earlyAccepted = true
+					c.earlyMu.Unlock()
+				} else if hello.earlyData {
+					c.earlyMu.Lock()
+					c.earlyRejected = c.earlySent
+					c.earlyMu.Unlock()
+				}
+				_ = transcript.add(message.typ, message.sequence, message.body)
+			case handshakeTypeCertificate:
+				if resumed {
+					return &ProtocolError{"server sent Certificate in a resumed handshake"}
+				}
+				certMsg, parseErr := parseCertificateMessage(message.body, c.config.MaxHandshakeMessage)
+				if parseErr != nil {
+					return parseErr
+				}
+				if parseErr = validateCertificateMessage(certMsg, nil); parseErr != nil {
+					return parseErr
+				}
+				certificateSchemes := hello.certificateSignatureSchemes
+				if len(certificateSchemes) == 0 {
+					certificateSchemes = hello.signatureSchemes
+				}
+				peerCerts, chains, parseErr = verifyCertificateChain(c.config, certMsg, true, certificateSchemes)
+				if parseErr != nil {
+					return parseErr
+				}
+				_ = transcript.add(message.typ, message.sequence, message.body)
+			case handshakeTypeCertificateRequest:
+				if resumed {
+					return &ProtocolError{"server requested a certificate in a resumed handshake"}
+				}
+				if certificateRequest != nil {
+					return &ProtocolError{"duplicate CertificateRequest"}
+				}
+				certificateRequest, err = parseCertificateRequest(message.body)
+				if err != nil {
+					return err
+				}
+				if len(certificateRequest.requestContext) != 0 {
+					return alertError(alertIllegalParameter, &ProtocolError{"initial CertificateRequest context must be empty"})
+				}
+				_ = transcript.add(message.typ, message.sequence, message.body)
+			case handshakeTypeCertificateVerify:
+				if len(peerCerts) == 0 {
+					return &ProtocolError{"CertificateVerify before Certificate"}
+				}
+				cv, parseErr := parseCertificateVerify(message.body)
+				if parseErr != nil {
+					return parseErr
+				}
+				offered := false
+				for _, scheme := range hello.signatureSchemes {
+					if scheme == cv.algorithm {
+						offered = true
+					}
+				}
+				if !offered {
+					return &ProtocolError{"server selected an unoffered signature scheme"}
+				}
+				if parseErr = verifyCertificateVerify(peerCerts[0].PublicKey, cv.algorithm, suite, transcript.sumInto(transcriptDigest[:0]), cv.signature, true); parseErr != nil {
+					return alertError(alertDecryptError, parseErr)
+				}
+				verifiedServerSignature = true
+				_ = transcript.add(message.typ, message.sequence, message.body)
+			case handshakeTypeFinished:
+				if !resumed && (len(peerCerts) == 0 || !verifiedServerSignature) {
+					return &ProtocolError{"server authentication messages are incomplete"}
+				}
+				verify, parseErr := parseFinished(message.body, suite.hash.Size())
+				if parseErr != nil {
+					return parseErr
+				}
+				if !schedule.verifyFinished(schedule.serverHandshakeTraffic, transcript.sumInto(transcriptDigest[:0]), verify) {
+					return alertError(alertDecryptError, &ProtocolError{"server Finished verification failed"})
+				}
+				_ = transcript.add(message.typ, message.sequence, message.body)
+				serverFinishedSequence = message.sequence
+				finished = true
+			default:
+				return &ProtocolError{"unexpected server handshake message"}
+			}
+		}
+	}
+	if err = schedule.deriveApplication(transcript.sumInto(transcriptDigest[:0])); err != nil {
+		return err
+	}
+	var clientMessages []handshakeMessage
+	nextClientSequence := clientFinishedSequence
+	if certificateRequest != nil {
+		certMessage := &certificateMessage{requestContext: certificateRequest.requestContext}
+		var clientCertificate *tls.Certificate
+		if len(c.config.Certificates) > 0 {
+			candidate := &c.config.Certificates[0]
+			certificateSchemes := certificateRequest.certificateSignatureSchemes
+			if len(certificateSchemes) == 0 {
+				certificateSchemes = certificateRequest.signatureSchemes
+			}
+			if validateConfiguredCertificate(candidate, certificateSchemes) == nil {
+				clientCertificate = candidate
+				for _, der := range clientCertificate.Certificate {
+					certMessage.certificates = append(certMessage.certificates, certificateEntry{data: der})
+				}
+			}
+		}
+		certBody, marshalErr := certMessage.marshal()
+		if marshalErr != nil {
+			return marshalErr
+		}
+		clientMessages = append(clientMessages, handshakeMessage{typ: handshakeTypeCertificate, sequence: nextClientSequence, body: certBody})
+		_ = transcript.add(handshakeTypeCertificate, nextClientSequence, certBody)
+		nextClientSequence++
+		if clientCertificate != nil {
+			signer, ok := clientCertificate.PrivateKey.(crypto.Signer)
+			if !ok {
+				return errors.New("dtls13: client private key does not implement crypto.Signer")
+			}
+			scheme, selectErr := selectSignatureScheme(signer, certificateRequest.signatureSchemes)
+			if selectErr != nil {
+				return selectErr
+			}
+			signature, signErr := signCertificateVerify(c.config.Rand, signer, scheme, suite, transcript.sumInto(transcriptDigest[:0]), false)
+			if signErr != nil {
+				return signErr
+			}
+			cvBody, marshalErr := (&certificateVerifyMessage{algorithm: scheme, signature: signature}).marshal()
+			if marshalErr != nil {
+				return marshalErr
+			}
+			clientMessages = append(clientMessages, handshakeMessage{typ: handshakeTypeCertificateVerify, sequence: nextClientSequence, body: cvBody})
+			_ = transcript.add(handshakeTypeCertificateVerify, nextClientSequence, cvBody)
+			nextClientSequence++
+		}
+	}
+	clientFinishedSequence = nextClientSequence
+	clientFinished := schedule.finishedVerifyData(schedule.clientHandshakeTraffic, transcript.sumInto(transcriptDigest[:0]))
+	_ = transcript.add(handshakeTypeFinished, clientFinishedSequence, clientFinished)
+	clientMessages = append(clientMessages, handshakeMessage{typ: handshakeTypeFinished, sequence: clientFinishedSequence, body: clientFinished})
+	clientFlight, err := buildProtectedFlight(clientMessages, c.currentMTU(), sendCipher)
+	if err != nil {
+		return err
+	}
+	if err = c.writeFlight(c.conn, clientFlight); err != nil {
+		return err
+	}
+	applicationACKCipher, err := newRecordCipher(suite, schedule.serverApplicationTraffic, 3, c.config.ReplayWindow)
+	if err != nil {
+		return err
+	}
+	if c.connectionIDNegotiated {
+		if err = applicationACKCipher.setConnectionID(c.receiveConnectionID); err != nil {
+			return err
+		}
+	}
+	acknowledged, err := c.receiveACKWithRetransmit(clientFlight, receiveCipher, applicationACKCipher)
+	if err != nil {
+		return err
+	}
+	if len(clientFlight.records) == 0 {
+		return &ProtocolError{"empty client Finished flight"}
+	}
+	for _, record := range clientFlight.records {
+		if !record.acknowledgedBy(acknowledged) {
+			return &ProtocolError{"server ACK did not cover complete client flight"}
+		}
+	}
+	if err = c.installApplicationKeysAt(suite, schedule.clientApplicationTraffic, schedule.serverApplicationTraffic, clientFinishedSequence+1); err != nil {
+		return err
+	}
+	if err = schedule.deriveResumption(transcript.sumInto(transcriptDigest[:0])); err != nil {
+		return err
+	}
+	c.resumptionSuite = suite
+	c.resumptionMasterSecret = append([]byte(nil), schedule.resumptionMasterSecret...)
+	c.postHandshakeTranscript = transcript.clone()
+	if err = c.receiveEpochs.install(receiveCipher); err != nil {
+		return err
+	}
+	c.completedPeerFlightStart = serverHandshakeStart
+	c.completedPeerFlightEnd = serverFinishedSequence
+	c.hasCompletedPeerFlight = true
+	c.mu.Lock()
+	c.state = ConnectionState{Version: VersionDTLS13, HandshakeComplete: true, DidResume: resumed, CipherSuite: suite.id, NegotiatedProtocol: negotiated, ServerName: c.config.ServerName, PeerCertificates: peerCerts, VerifiedChains: chains, LocalConnectionID: append([]byte(nil), c.receiveConnectionID...), PeerConnectionID: append([]byte(nil), c.sendConnectionID...), exporter: newExporter(suite, schedule.exporterMasterSecret)}
+	c.mu.Unlock()
+	return nil
+}
+
+func equalClientHelloAfterHRR(initial, second *clientHello, requestedGroup tls.CurveID) bool {
+	if initial == nil || second == nil || second.earlyData {
+		return false
+	}
+	// The second list may only remove identities; retained identities keep
+	// their original order. Ticket ages and binders are recomputed after HRR.
+	matched := 0
+	for _, candidate := range initial.pskIdentities {
+		if matched < len(second.pskIdentities) && equalBytes(candidate.identity, second.pskIdentities[matched].identity) {
+			matched++
+		}
+	}
+	if matched != len(second.pskIdentities) {
+		return false
+	}
+	if requestedGroup != 0 {
+		if len(second.keyShares) != 1 || second.keyShares[0].group != requestedGroup {
+			return false
+		}
+	} else if !equalKeyShareEntries(initial.keyShares, second.keyShares) {
+		return false
+	}
+	return initial.random == second.random &&
+		equalBytes(initial.sessionID, second.sessionID) &&
+		equalBytes(initial.legacyCookie, second.legacyCookie) &&
+		slices.Equal(initial.cipherSuites, second.cipherSuites) &&
+		slices.Equal(initial.signatureSchemes, second.signatureSchemes) &&
+		slices.Equal(initial.certificateSignatureSchemes, second.certificateSignatureSchemes) &&
+		slices.Equal(initial.supportedGroups, second.supportedGroups) &&
+		initial.serverName == second.serverName &&
+		slices.Equal(initial.alpn, second.alpn) &&
+		initial.pskDHE == second.pskDHE &&
+		equalBytes(initial.connectionID, second.connectionID) &&
+		initial.hasConnectionID == second.hasConnectionID &&
+		initial.postHandshakeAuth == second.postHandshakeAuth &&
+		equalExtensionMaps(initial.unknownExtensions, second.unknownExtensions)
+}
+
+func equalKeyShareEntries(left, right []keyShareEntry) bool {
+	return slices.EqualFunc(left, right, func(a, b keyShareEntry) bool {
+		return a.group == b.group && equalBytes(a.data, b.data)
+	})
+}
+
+func equalExtensionMaps(left, right map[uint16][]byte) bool {
+	if len(left) != len(right) {
+		return false
+	}
+	for typ, value := range left {
+		other, ok := right[typ]
+		if !ok || !equalBytes(value, other) {
+			return false
+		}
+	}
+	return true
+}
+
+func removedPSKsAreIncompatible(config *Config, initial, second *clientHello, selectedSuite *cipherSuite) (bool, error) {
+	if initial == nil || second == nil || selectedSuite == nil || len(initial.pskIdentities) == 0 {
+		return true, nil
+	}
+	protector, err := newSessionTicketProtector(config.SessionTicketKey, config.Rand, config.Time)
+	if err != nil {
+		return false, err
+	}
+	retained := make([]bool, len(initial.pskIdentities))
+	next := 0
+	for _, identity := range second.pskIdentities {
+		for next < len(initial.pskIdentities) {
+			index := next
+			next++
+			if equalBytes(initial.pskIdentities[index].identity, identity.identity) {
+				retained[index] = true
+				break
+			}
+		}
+	}
+	for index, identity := range initial.pskIdentities {
+		if retained[index] {
+			continue
+		}
+		state, openErr := protector.open(identity.identity)
+		if openErr != nil {
+			continue
+		}
+		ticketSuite, suiteErr := cipherSuiteForID(state.suite)
+		if suiteErr == nil && ticketSuite.hash == selectedSuite.hash {
+			return false, nil
+		}
+	}
+	return true, nil
+}
+
+func requireCertificateSignatureAlgorithms(hello *clientHello, resumed bool) error {
+	if !resumed && (hello == nil || len(hello.signatureSchemes) == 0) {
+		return alertError(alertMissingExtension, &ProtocolError{"certificate authentication requires signature_algorithms"})
+	}
+	return nil
+}
+
+func (c *Conn) serverHandshake(ctx context.Context) error {
+	var transcriptDigest [maxSupportedHashSize]byte
+	var amplification amplificationGuard
+	preValidationConn := &amplificationConn{Conn: c.conn, guard: &amplification}
+	inbox := newHandshakeInbox(0, c.config.MaxHandshakeMessage, c.config.MaxBufferedHandshakeMessages, c.config.MaxBufferedHandshakeBytes)
+	messages, err := receiveHandshakeMessageBatch(preValidationConn, inbox, nil)
+	if err != nil {
+		return err
+	}
+	if messages.len() != 1 || messages.at(0).typ != handshakeTypeClientHello {
+		return &ProtocolError{"expected ClientHello"}
+	}
+	helloBody := messages.at(0).body
+	ch, err := parseClientHello(helloBody)
+	if err != nil {
+		return err
+	}
+	c.postHandshakeAuthOffered = ch.postHandshakeAuth
+	initialClientHello := *ch
+	initialClientHello.cookie = nil
+	initialClientHello.pskBinder = nil
+	initialClientHello.pskBinders = nil
+	suite, err := selectCipherSuite(c.config.CipherSuites, ch.cipherSuites)
+	if err != nil {
+		return err
+	}
+	hrrUsed := true
+	serverSequenceOffset := uint16(1)
+	clientFinishedSequence := uint16(2)
+	initialHashTranscript := newTranscriptHash(suite.hash.New())
+	_ = initialHashTranscript.add(handshakeTypeClientHello, 0, helloBody)
+	var hrrBody []byte
+	var hrrFlight *flight
+	var requestedGroup tls.CurveID
+	var psk []byte
+	var resumed bool
+	var share keyShareEntry
+	var negotiated string
+	var shared []byte
+	var serverKey *ephemeralKey
+	var selectedPSKIdentity uint16
+
+	// A server may skip the cookie exchange for a resumed PSK handshake in a
+	// trusted environment. This is the only path on which epoch-1 data is
+	// accepted; the default remains the RFC-recommended HRR/cookie exchange.
+	if c.config.AllowEarlyDataWithoutCookie && ch.earlyData && len(ch.pskIdentity) > 0 {
+		_, selectErr := selectKeyShare(c.config.CurvePreferences, ch.keyShares)
+		if selectErr == nil {
+			candidateProtocol, protocolErr := negotiateALPN(c.config.NextProtos, ch.alpn)
+			if protocolErr == nil {
+				candidatePSK, candidateResumed, candidateIdentity, acceptErr := c.acceptSessionTicket(ch, helloBody, initialHashTranscript.sumInto(transcriptDigest[:0]), nil, suite, candidateProtocol)
+				if acceptErr != nil {
+					return acceptErr
+				}
+				if candidateResumed {
+					psk, resumed, selectedPSKIdentity = candidatePSK, true, candidateIdentity
+					hrrUsed = false
+					serverSequenceOffset = 0
+					clientFinishedSequence = 1
+				}
+			}
+		}
+	}
+
+	if hrrUsed {
+		if err = ensureCookieProtector(c.config); err != nil {
+			return err
+		}
+		protector := c.config.cookieProtector
+		address := []byte(c.conn.RemoteAddr().String())
+		cookie, cookieErr := protector.seal(address, initialHashTranscript.sumInto(transcriptDigest[:0]))
+		if cookieErr != nil {
+			return cookieErr
+		}
+		if _, shareErr := selectKeyShare(c.config.CurvePreferences, ch.keyShares); shareErr != nil {
+			for _, preference := range c.config.CurvePreferences {
+				for _, supported := range ch.supportedGroups {
+					if preference == supported {
+						requestedGroup = preference
+						break
+					}
+				}
+				if requestedGroup != 0 {
+					break
+				}
+			}
+			if requestedGroup == 0 {
+				return shareErr
+			}
+		}
+		hrrBody, err = (&helloRetryRequest{cipherSuite: suite.id, cookie: cookie, selectedGroup: requestedGroup}).marshal()
+		if err != nil {
+			return err
+		}
+		hrrFlight, _, err = buildPlainFlight([]handshakeMessage{{typ: handshakeTypeServerHello, sequence: 0, body: hrrBody}}, c.currentMTU(), 0, 0)
+		if err != nil {
+			return err
+		}
+		if err = c.writeFlight(preValidationConn, hrrFlight); err != nil {
+			return err
+		}
+		messages, err = c.receiveSecondClientHello(preValidationConn, inbox, hrrFlight)
+		if err != nil {
+			return err
+		}
+		if messages.len() != 1 || messages.at(0).typ != handshakeTypeClientHello {
+			return &ProtocolError{"expected second ClientHello"}
+		}
+		secondBody := messages.at(0).body
+		second, parseErr := parseClientHello(secondBody)
+		if parseErr != nil {
+			return parseErr
+		}
+		if !equalClientHelloAfterHRR(&initialClientHello, second, requestedGroup) {
+			return &ProtocolError{"second ClientHello changed fields other than cookie"}
+		}
+		compatibleRemoval, removalErr := removedPSKsAreIncompatible(c.config, &initialClientHello, second, suite)
+		if removalErr != nil {
+			return removalErr
+		}
+		if !compatibleRemoval {
+			return alertError(alertIllegalParameter, &ProtocolError{"second ClientHello removed a PSK compatible with the HelloRetryRequest cipher suite"})
+		}
+		cookieHash, cookieErr := protector.open(address, second.cookie)
+		if cookieErr != nil {
+			return alertError(alertIllegalParameter, &ProtocolError{"invalid HelloRetryRequest cookie"})
+		}
+		if string(cookieHash) != string(initialHashTranscript.sumInto(transcriptDigest[:0])) {
+			return alertError(alertIllegalParameter, &ProtocolError{"HelloRetryRequest cookie transcript mismatch"})
+		}
+		amplification.validate()
+		helloBody = secondBody
+		ch = second
+		suite, err = selectCipherSuite(c.config.CipherSuites, ch.cipherSuites)
+		if err != nil {
+			return err
+		}
+		share, err = selectKeyShare(c.config.CurvePreferences, ch.keyShares)
+		if err != nil {
+			return err
+		}
+		negotiated, err = negotiateALPN(c.config.NextProtos, ch.alpn)
+		if err != nil {
+			return err
+		}
+		psk, resumed, selectedPSKIdentity, err = c.acceptSessionTicket(ch, helloBody, initialHashTranscript.sumInto(transcriptDigest[:0]), hrrBody, suite, negotiated)
+		if err != nil {
+			return err
+		}
+	} else {
+		serverKeyShare, selectErr := selectKeyShare(c.config.CurvePreferences, ch.keyShares)
+		if selectErr != nil {
+			return selectErr
+		}
+		share = serverKeyShare
+		negotiated, err = negotiateALPN(c.config.NextProtos, ch.alpn)
+		if err != nil {
+			return err
+		}
+	}
+	serverKey, err = generateEphemeralKey(share.group, c.config.Rand)
+	if err != nil {
+		return err
+	}
+	shared, err = serverKey.sharedSecret(share.group, share.data)
+	if err != nil {
+		return err
+	}
+	var cert *tls.Certificate
+	var signer crypto.Signer
+	var scheme tls.SignatureScheme
+	if !resumed {
+		if err = requireCertificateSignatureAlgorithms(ch, false); err != nil {
+			return err
+		}
+		cert, err = c.serverCertificate(ch)
+		if err != nil {
+			return err
+		}
+		var ok bool
+		signer, ok = cert.PrivateKey.(crypto.Signer)
+		if !ok {
+			return errors.New("dtls13: server private key does not implement crypto.Signer")
+		}
+		certificateSchemes := ch.certificateSignatureSchemes
+		if len(certificateSchemes) == 0 {
+			certificateSchemes = ch.signatureSchemes
+		}
+		if validateErr := validateConfiguredCertificate(cert, certificateSchemes); validateErr != nil {
+			return alertError(alertHandshakeFailure, validateErr)
+		}
+		scheme, err = selectSignatureScheme(signer, ch.signatureSchemes)
+		if err != nil {
+			return err
+		}
+	}
+	// DTLS 1.3 does not use TLS compatibility mode; the server MUST NOT
+	// echo legacy_session_id (RFC 9147 section 5).
+	sh := &serverHello{cipherSuite: suite.id, keyShare: keyShareEntry{group: share.group, data: serverKey.publicBytes()}}
+	if ch.hasConnectionID && c.config.ConnectionID != nil {
+		c.connectionIDNegotiated = true
+		c.sendConnectionID = append([]byte(nil), ch.connectionID...)
+		c.receiveConnectionID = append([]byte(nil), c.config.ConnectionID...)
+		c.localCIDUpdatesAllowed = len(c.receiveConnectionID) > 0
+		c.peerCIDUpdatesAllowed = len(c.sendConnectionID) > 0
+		sh.hasConnectionID = true
+		sh.connectionID = append([]byte(nil), c.receiveConnectionID...)
+	}
+	if resumed {
+		selected := selectedPSKIdentity
+		sh.selectedIdentity = &selected
+	}
+	if _, err = io.ReadFull(c.config.Rand, sh.random[:]); err != nil {
+		return err
+	}
+	shBody, err := sh.marshal()
+	if err != nil {
+		return err
+	}
+	transcript := newTranscriptHash(suite.hash.New())
+	serverHelloSequence := uint16(0)
+	firstPlainRecordSequence := uint64(0)
+	if hrrUsed {
+		_ = transcript.addHelloRetryRequest(initialHashTranscript.sumInto(transcriptDigest[:0]), hrrBody)
+		_ = transcript.add(handshakeTypeClientHello, 1, helloBody)
+		serverHelloSequence = 1
+		if hrrFlight != nil {
+			firstPlainRecordSequence = hrrFlight.nextRecordSequence()
+		}
+	} else {
+		_ = transcript.add(handshakeTypeClientHello, 0, helloBody)
+	}
+	_ = transcript.add(handshakeTypeServerHello, serverHelloSequence, shBody)
+	schedule := newKeySchedule(suite, psk)
+	if err = schedule.deriveHandshake(shared, transcript.sumInto(transcriptDigest[:0])); err != nil {
+		return err
+	}
+	serverCipher, err := newRecordCipher(suite, schedule.serverHandshakeTraffic, 2, c.config.ReplayWindow)
+	if err != nil {
+		return err
+	}
+	clientCipher, err := newRecordCipher(suite, schedule.clientHandshakeTraffic, 2, c.config.ReplayWindow)
+	if err != nil {
+		return err
+	}
+	if c.connectionIDNegotiated {
+		if err = serverCipher.setConnectionID(c.sendConnectionID); err != nil {
+			return err
+		}
+		if err = clientCipher.setConnectionID(c.receiveConnectionID); err != nil {
+			return err
+		}
+	}
+	c.sendCipher = serverCipher
+	var earlyCipher *recordCipher
+	if !hrrUsed && c.earlyAccepted {
+		earlySchedule := newKeySchedule(suite, psk)
+		earlyCipher, err = newRecordCipher(suite, earlySchedule.earlyTrafficSecret(initialHashTranscript.sumInto(transcriptDigest[:0])), 1, c.config.ReplayWindow)
+		if err != nil {
+			return err
+		}
+	}
+	plain, _, err := buildPlainFlight([]handshakeMessage{{typ: handshakeTypeServerHello, sequence: serverHelloSequence, body: shBody}}, c.currentMTU(), 0, firstPlainRecordSequence)
+	if err != nil {
+		return err
+	}
+	serverFlightConn := net.Conn(c.conn)
+	if !hrrUsed {
+		serverFlightConn = preValidationConn
+	}
+	ee := &encryptedExtensions{}
+	if negotiated != "" || c.earlyAccepted {
+		ee.extensions = make(map[uint16][]byte, 2)
+	}
+	if negotiated != "" {
+		ee.extensions[extALPN], err = marshalALPN([]string{negotiated})
+		if err != nil {
+			return err
+		}
+	}
+	if c.earlyAccepted {
+		ee.extensions[extEarlyData] = nil
+	}
+	eeBody, _ := ee.marshal()
+	serverSequence := uint16(1 + serverSequenceOffset)
+	serverMessages := []handshakeMessage{{typ: handshakeTypeEncryptedExtensions, sequence: serverSequence, body: eeBody}}
+	_ = transcript.add(handshakeTypeEncryptedExtensions, serverSequence, eeBody)
+	serverSequence++
+	var clientSignatureSchemes []tls.SignatureScheme
+	var clientCertificateSchemes []tls.SignatureScheme
+	if !resumed && c.config.ClientAuth != tls.NoClientCert {
+		request := &certificateRequestMessage{signatureSchemes: defaultSignatureSchemes()}
+		clientSignatureSchemes = append([]tls.SignatureScheme(nil), request.signatureSchemes...)
+		clientCertificateSchemes = request.certificateSignatureSchemes
+		if len(clientCertificateSchemes) == 0 {
+			clientCertificateSchemes = append([]tls.SignatureScheme(nil), request.signatureSchemes...)
+		}
+		requestBody, requestErr := request.marshal()
+		if requestErr != nil {
+			return requestErr
+		}
+		serverMessages = append(serverMessages, handshakeMessage{typ: handshakeTypeCertificateRequest, sequence: serverSequence, body: requestBody})
+		_ = transcript.add(handshakeTypeCertificateRequest, serverSequence, requestBody)
+		serverSequence++
+	}
+	if !resumed {
+		certMsg := &certificateMessage{}
+		for _, der := range cert.Certificate {
+			certMsg.certificates = append(certMsg.certificates, certificateEntry{data: der})
+		}
+		certBody, err := certMsg.marshal()
+		if err != nil {
+			return err
+		}
+		serverMessages = append(serverMessages, handshakeMessage{typ: handshakeTypeCertificate, sequence: serverSequence, body: certBody})
+		_ = transcript.add(handshakeTypeCertificate, serverSequence, certBody)
+		serverSequence++
+		signature, err := signCertificateVerify(c.config.Rand, signer, scheme, suite, transcript.sumInto(transcriptDigest[:0]), true)
+		if err != nil {
+			return err
+		}
+		cvBody, err := (&certificateVerifyMessage{algorithm: scheme, signature: signature}).marshal()
+		if err != nil {
+			return err
+		}
+		serverMessages = append(serverMessages, handshakeMessage{typ: handshakeTypeCertificateVerify, sequence: serverSequence, body: cvBody})
+		_ = transcript.add(handshakeTypeCertificateVerify, serverSequence, cvBody)
+		serverSequence++
+	}
+	finishedBody := schedule.finishedVerifyData(schedule.serverHandshakeTraffic, transcript.sumInto(transcriptDigest[:0]))
+	serverMessages = append(serverMessages, handshakeMessage{typ: handshakeTypeFinished, sequence: serverSequence, body: finishedBody})
+	_ = transcript.add(handshakeTypeFinished, serverSequence, finishedBody)
+	protected, err := buildProtectedFlight(serverMessages, c.currentMTU(), serverCipher)
+	if err != nil {
+		return err
+	}
+	serverFlight := combineFlights(plain, protected)
+	if err = c.writeFlight(serverFlightConn, serverFlight); err != nil {
+		return err
+	}
+	if err = schedule.deriveApplication(transcript.sumInto(transcriptDigest[:0])); err != nil {
+		return err
+	}
+	clientFinalFlightStart := clientFinishedSequence
+	inbox = newHandshakeInbox(clientFinalFlightStart, c.config.MaxHandshakeMessage, c.config.MaxBufferedHandshakeMessages, c.config.MaxBufferedHandshakeBytes)
+	var clientCerts []*x509.Certificate
+	var clientChains [][]*x509.Certificate
+	var clientRecords []recordNumber
+	sawClientCertificate := false
+	verifiedClientSignature := false
+	clientDone := false
+	const (
+		clientExpectCertificate = iota
+		clientExpectCertificateVerify
+		clientExpectFinished
+		clientHandshakeComplete
+	)
+	clientStage := clientExpectFinished
+	if c.config.ClientAuth != tls.NoClientCert {
+		clientStage = clientExpectCertificate
+	}
+	for !clientDone {
+		receiveConn := c.conn
+		if !hrrUsed {
+			receiveConn = preValidationConn
+		}
+		messages, err = c.receiveHandshakeWithRetransmitOnEarly(receiveConn, inbox, clientCipher, serverFlight, earlyCipher, c.queueEarlyApplicationData, serverCipher)
+		if err != nil {
+			return err
+		}
+		clientRecords = append(clientRecords, recordNumber{epoch: 2, sequence: clientCipher.lastOpened})
+		for index := 0; index < messages.len(); index++ {
+			message := messages.at(index)
+			switch message.typ {
+			case handshakeTypeCertificate:
+				if clientStage != clientExpectCertificate {
+					return &ProtocolError{"unexpected client Certificate"}
+				}
+				certMessage, parseErr := parseCertificateMessage(message.body, c.config.MaxHandshakeMessage)
+				if parseErr != nil {
+					return parseErr
+				}
+				if parseErr = validateCertificateMessage(certMessage, nil); parseErr != nil {
+					return parseErr
+				}
+				sawClientCertificate = true
+				if len(certMessage.certificates) > 0 {
+					clientCerts, clientChains, parseErr = verifyClientCertificate(c.config, certMessage, clientCertificateSchemes)
+					if parseErr != nil {
+						return parseErr
+					}
+				}
+				if len(certMessage.certificates) > 0 {
+					clientStage = clientExpectCertificateVerify
+				} else {
+					clientStage = clientExpectFinished
+				}
+				_ = transcript.add(message.typ, message.sequence, message.body)
+			case handshakeTypeCertificateVerify:
+				if clientStage != clientExpectCertificateVerify || len(clientCerts) == 0 {
+					return &ProtocolError{"client CertificateVerify without certificate"}
+				}
+				cv, parseErr := parseCertificateVerify(message.body)
+				if parseErr != nil {
+					return parseErr
+				}
+				offered := false
+				for _, scheme := range clientSignatureSchemes {
+					offered = offered || scheme == cv.algorithm
+				}
+				if !offered {
+					return alertError(alertIllegalParameter, &ProtocolError{"client selected an unoffered signature scheme"})
+				}
+				if parseErr = verifyCertificateVerify(clientCerts[0].PublicKey, cv.algorithm, suite, transcript.sumInto(transcriptDigest[:0]), cv.signature, false); parseErr != nil {
+					return alertError(alertDecryptError, parseErr)
+				}
+				verifiedClientSignature = true
+				clientStage = clientExpectFinished
+				_ = transcript.add(message.typ, message.sequence, message.body)
+			case handshakeTypeFinished:
+				if clientStage != clientExpectFinished {
+					return alertError(alertUnexpectedMessage, &ProtocolError{"unexpected client Finished"})
+				}
+				clientFinishedSequence = message.sequence
+				if c.config.ClientAuth != tls.NoClientCert && !sawClientCertificate {
+					return &ProtocolError{"client omitted Certificate message"}
+				}
+				required := c.config.ClientAuth == tls.RequireAnyClientCert || c.config.ClientAuth == tls.RequireAndVerifyClientCert
+				if required && len(clientCerts) == 0 {
+					return alertError(alertCertificateRequired, &ProtocolError{"client certificate is required"})
+				}
+				if len(clientCerts) > 0 && !verifiedClientSignature {
+					return &ProtocolError{"client omitted CertificateVerify"}
+				}
+				verify, parseErr := parseFinished(message.body, suite.hash.Size())
+				if parseErr != nil {
+					return parseErr
+				}
+				if !schedule.verifyFinished(schedule.clientHandshakeTraffic, transcript.sumInto(transcriptDigest[:0]), verify) {
+					return alertError(alertDecryptError, &ProtocolError{"client Finished verification failed"})
+				}
+				_ = transcript.add(message.typ, message.sequence, message.body)
+				clientStage = clientHandshakeComplete
+				clientDone = true
+			default:
+				return &ProtocolError{"unexpected client handshake message"}
+			}
+		}
+	}
+	if !hrrUsed {
+		// A valid Finished proves address reachability for the no-cookie path.
+		amplification.validate()
+	}
+	ackRecords, _, err := buildACKRecords(clientRecords, c.currentMTU(), 0, serverCipher)
+	if err != nil {
+		return err
+	}
+	for _, wire := range ackRecords {
+		if _, err = c.writeRecord(wire); err != nil {
+			return err
+		}
+	}
+	if err = c.installApplicationKeysAt(suite, schedule.clientApplicationTraffic, schedule.serverApplicationTraffic, serverSequence+1); err != nil {
+		return err
+	}
+	if err = schedule.deriveResumption(transcript.sumInto(transcriptDigest[:0])); err != nil {
+		return err
+	}
+	c.postHandshakeTranscript = transcript.clone()
+	if err = c.receiveEpochs.install(clientCipher); err != nil {
+		return err
+	}
+	if err = c.promoteEarlyApplicationData(); err != nil {
+		return err
+	}
+	c.finishedACKCipher = serverCipher
+	c.finishedFlightStart = clientFinalFlightStart
+	c.finishedMessageSequence = clientFinishedSequence
+	c.completedPeerFlightStart = clientFinalFlightStart
+	c.completedPeerFlightEnd = clientFinishedSequence
+	c.hasCompletedPeerFlight = true
+	c.mu.Lock()
+	c.state = ConnectionState{Version: VersionDTLS13, HandshakeComplete: true, DidResume: resumed, CipherSuite: suite.id, NegotiatedProtocol: negotiated, PeerCertificates: clientCerts, VerifiedChains: clientChains, LocalConnectionID: append([]byte(nil), c.receiveConnectionID...), PeerConnectionID: append([]byte(nil), c.sendConnectionID...), exporter: newExporter(suite, schedule.exporterMasterSecret)}
+	c.mu.Unlock()
+	if validated, ok := c.conn.(interface{ handshakeValidated() }); ok {
+		validated.handshakeValidated()
+	}
+	if err = c.sendNewSessionTicket(schedule, suite, ch.serverName, negotiated); err != nil {
+		return err
+	}
+	return nil
+}
+
+func verifyClientCertificate(config *Config, message *certificateMessage, signatureSchemes []tls.SignatureScheme) ([]*x509.Certificate, [][]*x509.Certificate, error) {
+	copyConfig := config.Clone()
+	if config.ClientAuth == tls.RequestClientCert || config.ClientAuth == tls.RequireAnyClientCert {
+		copyConfig.InsecureSkipVerify = true
+	}
+	return verifyCertificateChain(copyConfig, message, false, signatureSchemes)
+}
+
+func (c *Conn) serverCertificate(ch *clientHello) (*tls.Certificate, error) {
+	if c.config.GetCertificate != nil {
+		certificate, err := c.config.GetCertificate(&ClientHelloInfo{ServerName: ch.serverName, SupportedProtos: ch.alpn, Conn: c})
+		if err != nil {
+			return nil, err
+		}
+		if certificate == nil {
+			return nil, errors.New("dtls13: GetCertificate returned nil")
+		}
+		return certificate, nil
+	}
+	if len(c.config.Certificates) == 0 {
+		return nil, errors.New("dtls13: server has no certificates")
+	}
+	return &c.config.Certificates[0], nil
+}
