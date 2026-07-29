@@ -1,0 +1,37 @@
+name: Conventional Commits
+
+on:
+  pull_request:
+
+permissions:
+  contents: read
+
+jobs:
+  commits:
+    name: commit messages
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+      - name: Check Conventional Commits
+        env:
+          BASE_SHA: ${{ github.event.pull_request.base.sha }}
+          HEAD_SHA: ${{ github.event.pull_request.head.sha }}
+        shell: bash
+        run: |
+          pattern='^[a-z][a-z0-9-]*(\([[:alnum:]./_-]+\))?!?: [^[:space:]].*$'
+          failed=0
+
+          while IFS=$'\t' read -r sha subject; do
+            if [[ ! $subject =~ $pattern ]]; then
+              echo "::error title=Invalid Conventional Commit::$sha: $subject"
+              failed=1
+            fi
+          done < <(git log --reverse --format=$'%H\t%s' "$BASE_SHA..$HEAD_SHA")
+
+          if ((failed)); then
+            echo 'Expected: type(scope)!: description'
+            exit 1
+          fi
