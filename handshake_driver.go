@@ -70,6 +70,8 @@ func (s *serverHandshakeStage) accept(typ uint8, resumed bool) error {
 }
 
 func (c *Conn) runHandshake(ctx context.Context) (result error) {
+	c.localRecordSizeLimit = defaultRecordSizeLimit
+	c.peerRecordSizeLimit = defaultRecordSizeLimit
 	deadline := c.config.Time().Add(c.config.HandshakeTimeout)
 	if d, ok := ctx.Deadline(); ok && d.Before(deadline) {
 		deadline = d
@@ -152,11 +154,13 @@ func (c *Conn) retransmitFlight(conn io.Writer, f *flight) error {
 }
 
 func (c *Conn) retransmitPartialFlight(conn io.Writer, f *flight) error {
-	if err := f.refreshPending(); err != nil {
-		return err
-	}
-	if err := c.retransmitFlight(conn, f); err != nil {
-		return err
+	if f.claimPartialRetransmission() {
+		if err := f.refreshPending(); err != nil {
+			return err
+		}
+		if err := c.retransmitFlight(conn, f); err != nil {
+			return err
+		}
 	}
 	return c.writeFlight(conn, f)
 }
@@ -605,7 +609,7 @@ func (c *Conn) clientHandshake(ctx context.Context) error {
 	if err != nil {
 		return err
 	}
-	hello := &clientHello{cipherSuites: append([]uint16(nil), c.config.CipherSuites...), keyShares: []keyShareEntry{{group: key.group, data: key.publicBytes()}}, supportedGroups: c.config.CurvePreferences, signatureSchemes: defaultSignatureSchemes(), serverName: c.config.ServerName, alpn: c.config.NextProtos, postHandshakeAuth: c.config.PostHandshakeAuth}
+	hello := &clientHello{cipherSuites: append([]uint16(nil), c.config.CipherSuites...), keyShares: []keyShareEntry{{group: key.group, data: key.publicBytes()}}, supportedGroups: c.config.CurvePreferences, signatureSchemes: defaultSignatureSchemes(), serverName: c.config.ServerName, alpn: c.config.NextProtos, postHandshakeAuth: c.config.PostHandshakeAuth, recordSizeLimit: c.config.RecordSizeLimit, hasRecordSizeLimit: true}
 	if connectionID, offered := c.config.clientConnectionIDOffer(); offered {
 		hello.hasConnectionID = true
 		hello.connectionID = connectionID
@@ -661,6 +665,7 @@ func (c *Conn) clientHandshake(ctx context.Context) error {
 		if cipherErr != nil {
 			return cipherErr
 		}
+		earlyCipher.setPlaintextLimit(clientSession.recordSizeLimit)
 		if len(queuedEarly) > int(clientSession.maxEarlyData) {
 			c.earlyMu.Lock()
 			c.earlyPending = nil
@@ -915,6 +920,13 @@ func (c *Conn) clientHandshake(ctx context.Context) error {
 				if parseErr != nil {
 					return parseErr
 				}
+				if ee.hasRecordSizeLimit {
+					c.recordSizeLimitNegotiated = true
+					c.localRecordSizeLimit = c.config.RecordSizeLimit
+					c.peerRecordSizeLimit = ee.recordSizeLimit
+					receiveCipher.setPlaintextLimit(c.localRecordSizeLimit)
+					sendCipher.setPlaintextLimit(c.peerRecordSizeLimit)
+				}
 				if parseErr = validateEarlyDataSelection(acceptedEarly, sh.selectedIdentity); parseErr != nil {
 					return parseErr
 				}
@@ -1069,6 +1081,7 @@ func (c *Conn) clientHandshake(ctx context.Context) error {
 	if err != nil {
 		return err
 	}
+	applicationACKCipher.setPlaintextLimit(c.localRecordSizeLimit)
 	if c.connectionIDNegotiated {
 		if err = applicationACKCipher.setConnectionID(c.receiveConnectionID); err != nil {
 			return err
@@ -1102,7 +1115,7 @@ func (c *Conn) clientHandshake(ctx context.Context) error {
 	c.completedPeerFlightEnd = serverFinishedSequence
 	c.hasCompletedPeerFlight = true
 	c.mu.Lock()
-	c.state = ConnectionState{Version: VersionDTLS13, HandshakeComplete: true, DidResume: resumed, CipherSuite: suite.id, NegotiatedProtocol: negotiated, ServerName: c.config.ServerName, PeerCertificates: peerCerts, VerifiedChains: chains, LocalConnectionID: append([]byte(nil), c.receiveConnectionID...), PeerConnectionID: append([]byte(nil), c.sendConnectionID...), ReturnRoutabilityCheck: c.returnRoutabilityCheckNegotiated, exporter: newExporter(suite, schedule.exporterMasterSecret)}
+	c.state = ConnectionState{Version: VersionDTLS13, HandshakeComplete: true, DidResume: resumed, CipherSuite: suite.id, NegotiatedProtocol: negotiated, ServerName: c.config.ServerName, PeerCertificates: peerCerts, VerifiedChains: chains, LocalConnectionID: append([]byte(nil), c.receiveConnectionID...), PeerConnectionID: append([]byte(nil), c.sendConnectionID...), ReturnRoutabilityCheck: c.returnRoutabilityCheckNegotiated, RecordSizeLimitNegotiated: c.recordSizeLimitNegotiated, LocalRecordSizeLimit: c.localRecordSizeLimit, PeerRecordSizeLimit: c.peerRecordSizeLimit, exporter: newExporter(suite, schedule.exporterMasterSecret)}
 	c.mu.Unlock()
 	return nil
 }
@@ -1143,6 +1156,8 @@ func equalClientHelloAfterHRR(initial, second *clientHello, requestedGroup tls.C
 		initial.hasConnectionID == second.hasConnectionID &&
 		initial.returnRoutability == second.returnRoutability &&
 		initial.postHandshakeAuth == second.postHandshakeAuth &&
+		initial.recordSizeLimit == second.recordSizeLimit &&
+		initial.hasRecordSizeLimit == second.hasRecordSizeLimit &&
 		equalExtensionMaps(initial.unknownExtensions, second.unknownExtensions)
 }
 
@@ -1373,6 +1388,11 @@ func (c *Conn) serverHandshake(ctx context.Context) error {
 			return err
 		}
 	}
+	if ch.hasRecordSizeLimit {
+		c.recordSizeLimitNegotiated = true
+		c.localRecordSizeLimit = c.config.RecordSizeLimit
+		c.peerRecordSizeLimit = effectiveRecordSizeLimit(ch.recordSizeLimit)
+	}
 	serverKey, err = generateEphemeralKey(share.group, c.config.Rand)
 	if err != nil {
 		return err
@@ -1462,6 +1482,8 @@ func (c *Conn) serverHandshake(ctx context.Context) error {
 	if err != nil {
 		return err
 	}
+	serverCipher.setPlaintextLimit(c.peerRecordSizeLimit)
+	clientCipher.setPlaintextLimit(c.localRecordSizeLimit)
 	if c.connectionIDNegotiated {
 		if err = serverCipher.setConnectionID(c.sendConnectionID); err != nil {
 			return err
@@ -1477,6 +1499,7 @@ func (c *Conn) serverHandshake(ctx context.Context) error {
 		if err != nil {
 			return err
 		}
+		earlyCipher.setPlaintextLimit(resumedSession.recordSizeLimit)
 	}
 	plain, _, err := buildPlainFlight([]handshakeMessage{{typ: handshakeTypeServerHello, sequence: serverHelloSequence, body: shBody}}, c.currentMTU(), 0, firstPlainRecordSequence)
 	if err != nil {
@@ -1486,7 +1509,7 @@ func (c *Conn) serverHandshake(ctx context.Context) error {
 	if !hrrUsed {
 		serverFlightConn = preValidationConn
 	}
-	ee := &encryptedExtensions{}
+	ee := &encryptedExtensions{recordSizeLimit: c.config.RecordSizeLimit, hasRecordSizeLimit: ch.hasRecordSizeLimit}
 	if negotiated != "" || c.earlyAccepted {
 		ee.extensions = make(map[uint16][]byte, 2)
 	}
@@ -1705,7 +1728,7 @@ func (c *Conn) serverHandshake(ctx context.Context) error {
 	c.completedPeerFlightEnd = clientFinishedSequence
 	c.hasCompletedPeerFlight = true
 	c.mu.Lock()
-	c.state = ConnectionState{Version: VersionDTLS13, HandshakeComplete: true, DidResume: resumed, CipherSuite: suite.id, NegotiatedProtocol: negotiated, PeerCertificates: clientCerts, VerifiedChains: clientChains, LocalConnectionID: append([]byte(nil), c.receiveConnectionID...), PeerConnectionID: append([]byte(nil), c.sendConnectionID...), ReturnRoutabilityCheck: c.returnRoutabilityCheckNegotiated, exporter: newExporter(suite, schedule.exporterMasterSecret)}
+	c.state = ConnectionState{Version: VersionDTLS13, HandshakeComplete: true, DidResume: resumed, CipherSuite: suite.id, NegotiatedProtocol: negotiated, PeerCertificates: clientCerts, VerifiedChains: clientChains, LocalConnectionID: append([]byte(nil), c.receiveConnectionID...), PeerConnectionID: append([]byte(nil), c.sendConnectionID...), ReturnRoutabilityCheck: c.returnRoutabilityCheckNegotiated, RecordSizeLimitNegotiated: c.recordSizeLimitNegotiated, LocalRecordSizeLimit: c.localRecordSizeLimit, PeerRecordSizeLimit: c.peerRecordSizeLimit, exporter: newExporter(suite, schedule.exporterMasterSecret)}
 	c.mu.Unlock()
 	if validated, ok := c.conn.(interface{ handshakeValidated() }); ok {
 		validated.handshakeValidated()

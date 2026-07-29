@@ -645,6 +645,58 @@ func TestEndToEndAES128CCM(t *testing.T) {
 	}
 }
 
+func TestRecordSizeLimitNegotiationIsDirectional(t *testing.T) {
+	certificate, roots := testServerCertificate(t)
+	left, right := memoryDatagramPair()
+	defer left.Close()
+	defer right.Close()
+	client := Client(left, &Config{
+		RootCAs: roots, ServerName: "server.test", RecordSizeLimit: 64,
+		SessionTicketsDisabled: true, HandshakeTimeout: 2 * time.Second, FlightInterval: 5 * time.Millisecond,
+	})
+	server := Server(right, &Config{
+		Certificates: []tls.Certificate{certificate}, RecordSizeLimit: 96,
+		SessionTicketsDisabled: true, HandshakeTimeout: 2 * time.Second, FlightInterval: 5 * time.Millisecond,
+	})
+	serverDone := make(chan error, 1)
+	go func() { serverDone <- server.Handshake() }()
+	clientErr := client.Handshake()
+	serverErr := <-serverDone
+	if clientErr != nil || serverErr != nil {
+		t.Fatalf("client handshake: %v; server handshake: %v", clientErr, serverErr)
+	}
+	clientState, serverState := client.ConnectionState(), server.ConnectionState()
+	if !clientState.RecordSizeLimitNegotiated || clientState.LocalRecordSizeLimit != 64 || clientState.PeerRecordSizeLimit != 96 {
+		t.Fatalf("client state: %+v", clientState)
+	}
+	if !serverState.RecordSizeLimitNegotiated || serverState.LocalRecordSizeLimit != 96 || serverState.PeerRecordSizeLimit != 64 {
+		t.Fatalf("server state: %+v", serverState)
+	}
+
+	clientPayload := bytes.Repeat([]byte{1}, 95)
+	if _, err := client.WriteDatagram(clientPayload); err != nil {
+		t.Fatal(err)
+	}
+	buffer := make([]byte, 96)
+	if n, _, err := server.ReadDatagram(buffer); err != nil || !bytes.Equal(buffer[:n], clientPayload) {
+		t.Fatalf("server read %d bytes, err=%v", n, err)
+	}
+	if n, err := client.WriteDatagram(make([]byte, 96)); n != 0 || !errors.Is(err, ErrDatagramTooLarge) {
+		t.Fatalf("client oversized write = %d, %v", n, err)
+	}
+
+	serverPayload := bytes.Repeat([]byte{2}, 63)
+	if _, err := server.WriteDatagram(serverPayload); err != nil {
+		t.Fatal(err)
+	}
+	if n, _, err := client.ReadDatagram(buffer); err != nil || !bytes.Equal(buffer[:n], serverPayload) {
+		t.Fatalf("client read %d bytes, err=%v", n, err)
+	}
+	if n, err := server.WriteDatagram(make([]byte, 64)); n != 0 || !errors.Is(err, ErrDatagramTooLarge) {
+		t.Fatalf("server oversized write = %d, %v", n, err)
+	}
+}
+
 func TestPostHandshakeClientAuthentication(t *testing.T) {
 	serverCertificate, roots := testServerCertificate(t)
 	clientCertificate, clientRoots := testClientCertificate(t)
@@ -1746,6 +1798,60 @@ func issueEarlyDataTicket(t *testing.T, clientConfig, serverConfig *Config) *Cli
 	}
 	t.Fatal("initial handshake did not produce an early-data ticket")
 	return nil
+}
+
+func TestSmallerCurrentRecordSizeLimitRejectsOnlyEarlyData(t *testing.T) {
+	certificate, roots := testServerCertificate(t)
+	initialCache := NewLRUClientSessionCache(1)
+	var ticketKey [32]byte
+	copy(ticketKey[:], bytes.Repeat([]byte{0x6d}, 32))
+	initialClient := &Config{
+		RootCAs: roots, ServerName: "server.test", ClientSessionCache: initialCache,
+		HandshakeTimeout: 2 * time.Second, FlightInterval: 5 * time.Millisecond,
+	}
+	initialServer := &Config{
+		Certificates: []tls.Certificate{certificate}, SessionTicketKey: ticketKey,
+		SessionTicketLifetime: time.Hour, MaxEarlyData: 1024, RecordSizeLimit: 256,
+		HandshakeTimeout: 2 * time.Second, FlightInterval: 5 * time.Millisecond,
+	}
+	ticket := issueEarlyDataTicket(t, initialClient, initialServer)
+	if ticket.recordSizeLimit != 256 {
+		t.Fatalf("cached record_size_limit=%d", ticket.recordSizeLimit)
+	}
+	cache := NewLRUClientSessionCache(1)
+	cache.Put("server.test", ticket)
+	clientConfig := &Config{
+		RootCAs: roots, ServerName: "server.test", ClientSessionCache: cache,
+		HandshakeTimeout: 2 * time.Second, FlightInterval: 5 * time.Millisecond,
+	}
+	serverConfig := &Config{
+		Certificates: []tls.Certificate{certificate}, SessionTicketKey: ticketKey,
+		SessionTicketLifetime: time.Hour, MaxEarlyData: 1024, AllowEarlyDataWithoutCookie: true,
+		EarlyDataReplayCache: NewLRUEarlyDataReplayCache(8), RecordSizeLimit: 128,
+		HandshakeTimeout: 2 * time.Second, FlightInterval: 5 * time.Millisecond,
+	}
+	left, right := memoryDatagramPair()
+	defer left.Close()
+	defer right.Close()
+	client := Client(left, clientConfig)
+	server := Server(right, serverConfig)
+	serverDone := make(chan error, 1)
+	go func() { serverDone <- server.Handshake() }()
+	if n, err := client.WriteEarlyData(bytes.Repeat([]byte{1}, 200)); n != 0 || !errors.Is(err, ErrEarlyDataRejected) {
+		t.Fatalf("WriteEarlyData = %d, %v", n, err)
+	}
+	if err := <-serverDone; err != nil {
+		t.Fatal(err)
+	}
+	if !client.ConnectionState().DidResume || !server.ConnectionState().DidResume {
+		t.Fatal("record size change disabled 1-RTT resumption")
+	}
+	if server.ConnectionState().LocalRecordSizeLimit != 128 || client.ConnectionState().PeerRecordSizeLimit != 128 {
+		t.Fatalf("resumed limits: client=%+v server=%+v", client.ConnectionState(), server.ConnectionState())
+	}
+	if server.earlyAccepted || len(server.earlyReadDatagrams) != 0 {
+		t.Fatal("server accepted early data under a smaller current record_size_limit")
+	}
 }
 
 func TestEarlyDataRejectedAfterHelloRetryRequest(t *testing.T) {

@@ -106,6 +106,15 @@ type Config struct {
 	// This option does not change handshake or post-handshake flight
 	// fragmentation, retransmission, or PMTU backoff.
 	IgnorePathMTU bool
+	// RecordSizeLimit is the maximum complete protected plaintext, including
+	// the inner content type, that this endpoint accepts. Zero selects the
+	// DTLS 1.3 maximum of 2^14+1 bytes. Values from 64 through 2^14+1 are
+	// advertised with the RFC 8449 record_size_limit extension. The peer's
+	// independently advertised limit controls outgoing records.
+	//
+	// This limit is independent of MTU and does not include record headers or
+	// AEAD expansion.
+	RecordSizeLimit uint16
 	// FlightInterval is the initial handshake and post-handshake retransmission
 	// timeout. Zero selects one second.
 	FlightInterval time.Duration
@@ -264,6 +273,12 @@ func (c *Config) normalized() (*Config, error) {
 	}
 	if x.MTU < 256 {
 		return nil, &ConfigError{"MTU must be at least 256"}
+	}
+	if x.RecordSizeLimit == 0 {
+		x.RecordSizeLimit = defaultRecordSizeLimit
+	}
+	if x.RecordSizeLimit < minRecordSizeLimit || x.RecordSizeLimit > defaultRecordSizeLimit {
+		return nil, &ConfigError{"RecordSizeLimit must be between 64 and 2^14+1"}
 	}
 	if x.FlightInterval == 0 {
 		x.FlightInterval = time.Second

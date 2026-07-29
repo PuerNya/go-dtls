@@ -33,22 +33,25 @@ func TestValidateEncryptedExtensions(t *testing.T) {
 		t.Fatal(err)
 	}
 	hello := &clientHello{
-		serverName:      "example.test",
-		alpn:            []string{"coap", "h3"},
-		earlyData:       true,
-		supportedGroups: []tls.CurveID{tls.X25519},
+		serverName:         "example.test",
+		alpn:               []string{"coap", "h3"},
+		earlyData:          true,
+		supportedGroups:    []tls.CurveID{tls.X25519},
+		recordSizeLimit:    512,
+		hasRecordSizeLimit: true,
 	}
 	message := &encryptedExtensions{extensions: map[uint16][]byte{
 		extServerName:      nil,
 		extALPN:            alpn,
 		extEarlyData:       nil,
 		extSupportedGroups: groups,
+		extRecordSizeLimit: {0x01, 0x00},
 	}}
 	protocol, earlyData, err := validateEncryptedExtensions(hello, message)
 	if err != nil {
 		t.Fatal(err)
 	}
-	if protocol != "h3" || !earlyData {
+	if protocol != "h3" || !earlyData || !message.hasRecordSizeLimit || message.recordSizeLimit != 256 {
 		t.Fatalf("unexpected negotiation result: protocol=%q early_data=%v", protocol, earlyData)
 	}
 }
@@ -64,6 +67,36 @@ func TestValidateEncryptedExtensionsRejectsInvalidExtensions(t *testing.T) {
 		extensions map[uint16][]byte
 		wantAlert  uint8
 	}{
+		{
+			name:       "record size limit with max fragment length",
+			hello:      &clientHello{hasRecordSizeLimit: true},
+			extensions: map[uint16][]byte{extRecordSizeLimit: {0, 64}, extMaxFragmentLength: {1}},
+			wantAlert:  alertIllegalParameter,
+		},
+		{
+			name:       "unoffered record size limit",
+			hello:      &clientHello{},
+			extensions: map[uint16][]byte{extRecordSizeLimit: {0, 64}},
+			wantAlert:  alertUnsupportedExtension,
+		},
+		{
+			name:       "short record size limit",
+			hello:      &clientHello{hasRecordSizeLimit: true},
+			extensions: map[uint16][]byte{extRecordSizeLimit: {64}},
+			wantAlert:  alertDecodeError,
+		},
+		{
+			name:       "record size limit below 64",
+			hello:      &clientHello{hasRecordSizeLimit: true},
+			extensions: map[uint16][]byte{extRecordSizeLimit: {0, 63}},
+			wantAlert:  alertIllegalParameter,
+		},
+		{
+			name:       "record size limit above DTLS 1.3 maximum",
+			hello:      &clientHello{hasRecordSizeLimit: true},
+			extensions: map[uint16][]byte{extRecordSizeLimit: {0xff, 0xff}},
+			wantAlert:  alertIllegalParameter,
+		},
 		{
 			name:       "unoffered ALPN",
 			hello:      &clientHello{},

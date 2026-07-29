@@ -123,6 +123,7 @@ func (s *sendingTraffic) beginKeyUpdate(requestUpdate bool) (wire []byte, number
 	if err != nil {
 		return nil, recordNumber{}, err
 	}
+	s.pendingCipher.setPlaintextLimit(s.cipher.plaintextLimit)
 	if s.hasConnectionID {
 		if err = s.pendingCipher.setConnectionID(s.connectionID); err != nil {
 			return nil, recordNumber{}, err
@@ -179,6 +180,7 @@ type receivingTraffic struct {
 	hasUpdateSequence  bool
 	connectionID       []byte
 	hasConnectionID    bool
+	plaintextLimit     uint16
 	acceptedCIDs       [][]byte
 	secrets            map[uint64][]byte
 }
@@ -221,8 +223,17 @@ func newReceivingTrafficWithCipher(suite *cipherSuite, secret []byte, cipher *re
 	}
 	return &receivingTraffic{
 		suite: suite, secret: secret, epochs: epochs, current: epoch, replaySize: replaySize,
-		secrets: map[uint64][]byte{epoch: secret},
+		plaintextLimit: cipher.plaintextLimit, secrets: map[uint64][]byte{epoch: secret},
 	}, nil
+}
+
+func (r *receivingTraffic) setPlaintextLimit(limit uint16) {
+	r.plaintextLimit = limit
+	r.epochs.mu.Lock()
+	defer r.epochs.mu.Unlock()
+	for _, cipher := range r.epochs.ciphers {
+		cipher.setPlaintextLimit(limit)
+	}
 }
 func (r *receivingTraffic) setConnectionID(connectionID []byte) error {
 	r.connectionID = append([]byte(nil), connectionID...)
@@ -295,6 +306,7 @@ func (r *receivingTraffic) processKeyUpdate(sequence uint16, body []byte) (keyUp
 	if err != nil {
 		return keyUpdateMessage{}, false, err
 	}
+	cipher.setPlaintextLimit(r.plaintextLimit)
 	if r.hasConnectionID {
 		if err = cipher.setConnectionID(r.connectionID); err != nil {
 			return keyUpdateMessage{}, false, err

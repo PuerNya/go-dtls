@@ -84,7 +84,11 @@ func buildACKRecordsInto(dst [][]byte, numbers []recordNumber, mtu int, plainSeq
 		overhead = cipher.headerLen16() + cipher.aead.Overhead() + 1 + 2
 	}
 	maxEntries := (mtu - overhead) / 16
-	if recordMaximum := (maxRecordContent - 2) / 16; maxEntries > recordMaximum {
+	recordContentMaximum := maxRecordContent
+	if cipher != nil {
+		recordContentMaximum = cipher.maxContent()
+	}
+	if recordMaximum := (recordContentMaximum - 2) / 16; maxEntries > recordMaximum {
 		maxEntries = recordMaximum
 	}
 	if maxEntries < 1 {

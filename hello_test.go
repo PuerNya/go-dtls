@@ -621,6 +621,8 @@ func TestSecondClientHelloRejectsChangedInvariantFields(t *testing.T) {
 		hasConnectionID:             true,
 		returnRoutability:           true,
 		postHandshakeAuth:           true,
+		recordSizeLimit:             512,
+		hasRecordSizeLimit:          true,
 		unknownExtensions:           map[uint16][]byte{0xffa5: {4}},
 	}
 	initial.random[0] = 5
@@ -643,6 +645,8 @@ func TestSecondClientHelloRejectsChangedInvariantFields(t *testing.T) {
 		{"connection-id-presence", func(h *clientHello) { h.hasConnectionID = false }},
 		{"return-routability", func(h *clientHello) { h.returnRoutability = false }},
 		{"post-handshake-auth", func(h *clientHello) { h.postHandshakeAuth = false }},
+		{"record-size-limit", func(h *clientHello) { h.recordSizeLimit++ }},
+		{"record-size-limit-presence", func(h *clientHello) { h.hasRecordSizeLimit = false }},
 		{"unknown-extension", func(h *clientHello) { h.unknownExtensions = map[uint16][]byte{0xffa5: {9}} }},
 	} {
 		t.Run(test.name, func(t *testing.T) {
@@ -653,6 +657,53 @@ func TestSecondClientHelloRejectsChangedInvariantFields(t *testing.T) {
 				t.Fatal("accepted changed invariant field")
 			}
 		})
+	}
+}
+
+func TestClientHelloRecordSizeLimitValidation(t *testing.T) {
+	hello := &clientHello{
+		cipherSuites: []uint16{TLS_AES_128_GCM_SHA256}, signatureSchemes: defaultSignatureSchemes(),
+		supportedGroups: []tls.CurveID{tls.X25519},
+		keyShares:       []keyShareEntry{{group: tls.X25519, data: bytes.Repeat([]byte{1}, 32)}},
+		recordSizeLimit: minRecordSizeLimit, hasRecordSizeLimit: true,
+	}
+	body, err := hello.marshal()
+	if err != nil {
+		t.Fatal(err)
+	}
+	parsed, err := parseClientHello(body)
+	if err != nil || !parsed.hasRecordSizeLimit || parsed.recordSizeLimit != minRecordSizeLimit {
+		t.Fatalf("record_size_limit round trip = %d, %v, %v", parsed.recordSizeLimit, parsed.hasRecordSizeLimit, err)
+	}
+	for _, test := range []struct {
+		name      string
+		value     []byte
+		wantAlert uint8
+	}{
+		{"bad length", []byte{64}, alertDecodeError},
+		{"below minimum", []byte{0, 63}, alertIllegalParameter},
+	} {
+		t.Run(test.name, func(t *testing.T) {
+			wire := replaceClientHelloExtension(t, body, extRecordSizeLimit, test.value)
+			_, parseErr := parseClientHello(wire)
+			description, ok := protocolAlert(parseErr)
+			if !ok || description != test.wantAlert {
+				t.Fatalf("alert=%d ok=%v err=%v", description, ok, parseErr)
+			}
+		})
+	}
+	high := replaceClientHelloExtension(t, body, extRecordSizeLimit, []byte{0xff, 0xff})
+	parsed, err = parseClientHello(high)
+	if err != nil || parsed.recordSizeLimit != 0xffff {
+		t.Fatalf("server rejected future client limit: %#v, %v", parsed, err)
+	}
+	hello.recordSizeLimit = minRecordSizeLimit - 1
+	if _, err = hello.marshal(); err == nil {
+		t.Fatal("marshaled record_size_limit below 64")
+	}
+	hello.recordSizeLimit = defaultRecordSizeLimit + 1
+	if _, err = hello.marshal(); err == nil {
+		t.Fatal("marshaled record_size_limit above the DTLS 1.3 maximum")
 	}
 }
 

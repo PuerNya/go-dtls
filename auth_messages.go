@@ -2,6 +2,7 @@ package dtls13
 
 import (
 	"crypto/tls"
+	"encoding/binary"
 	"slices"
 )
 
@@ -13,16 +14,43 @@ const (
 )
 
 type encryptedExtensions struct {
-	extensions     map[uint16][]byte
-	parsedStorage  [8]orderedExtension
-	parsedOverflow []orderedExtension
-	parsedCount    int
+	extensions         map[uint16][]byte
+	recordSizeLimit    uint16
+	hasRecordSizeLimit bool
+	parsedStorage      [8]orderedExtension
+	parsedOverflow     []orderedExtension
+	parsedCount        int
 }
 
 func (m *encryptedExtensions) marshal() ([]byte, error) {
-	var storage [8]uint16
-	order := sortedExtensionTypesInto(storage[:0], m.extensions)
-	return marshalExtensions(m.extensions, order)
+	if !m.hasRecordSizeLimit {
+		var storage [8]uint16
+		order := sortedExtensionTypesInto(storage[:0], m.extensions)
+		return marshalExtensions(m.extensions, order)
+	}
+	if m.recordSizeLimit < minRecordSizeLimit || m.recordSizeLimit > defaultRecordSizeLimit {
+		return nil, &ProtocolError{"invalid record_size_limit"}
+	}
+	if _, duplicate := m.extensions[extRecordSizeLimit]; duplicate {
+		return nil, &ProtocolError{"duplicate record_size_limit extension"}
+	}
+	var limit [2]byte
+	binary.BigEndian.PutUint16(limit[:], m.recordSizeLimit)
+	var typeStorage [8]uint16
+	order := sortedExtensionTypesInto(typeStorage[:0], m.extensions)
+	var extensionStorage [9]orderedExtension
+	extensions := extensionStorage[:0]
+	for _, typ := range order {
+		extensions = append(extensions, orderedExtension{typ: typ, value: m.extensions[typ]})
+	}
+	extensions = append(extensions, orderedExtension{typ: extRecordSizeLimit, value: limit[:]})
+	length, err := orderedExtensionsWireLength(extensions)
+	if err != nil {
+		return nil, err
+	}
+	w := newWireBuilder(length)
+	appendOrderedExtensions(&w, extensions)
+	return w.b, w.err
 }
 func parseEncryptedExtensions(b []byte) (*encryptedExtensions, error) {
 	m := &encryptedExtensions{}
@@ -88,7 +116,36 @@ func validateEncryptedExtensions(hello *clientHello, message *encryptedExtension
 	if hello == nil || message == nil {
 		return "", false, &ProtocolError{"missing EncryptedExtensions context"}
 	}
+	hasRecordSizeLimit, hasMaxFragmentLength := false, false
+	if message.extensions != nil {
+		_, hasRecordSizeLimit = message.extensions[extRecordSizeLimit]
+		_, hasMaxFragmentLength = message.extensions[extMaxFragmentLength]
+	} else {
+		parsed := message.parsedOverflow
+		if parsed == nil {
+			parsed = message.parsedStorage[:message.parsedCount]
+		}
+		for _, extension := range parsed {
+			hasRecordSizeLimit = hasRecordSizeLimit || extension.typ == extRecordSizeLimit
+			hasMaxFragmentLength = hasMaxFragmentLength || extension.typ == extMaxFragmentLength
+		}
+	}
+	if hasRecordSizeLimit && hasMaxFragmentLength {
+		return "", false, alertError(alertIllegalParameter, &ProtocolError{"record_size_limit and max_fragment_length cannot both be negotiated"})
+	}
 	validate := func(typ uint16, raw []byte) error {
+		if typ == extRecordSizeLimit {
+			if !hello.hasRecordSizeLimit {
+				return alertError(alertUnsupportedExtension, &ProtocolError{"unsolicited record_size_limit"})
+			}
+			limit, parseErr := parseRecordSizeLimit(raw, true)
+			if parseErr != nil {
+				return parseErr
+			}
+			message.recordSizeLimit = limit
+			message.hasRecordSizeLimit = true
+			return nil
+		}
 		selected, accepted, validateErr := validateEncryptedExtension(hello, typ, raw)
 		if selected != "" {
 			protocol = selected

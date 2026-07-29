@@ -65,6 +65,32 @@ func TestProtectedRecordRejectsOversizedAuthenticatedInnerPlaintext(t *testing.T
 	}
 }
 
+func TestProtectedRecordEnforcesNegotiatedPlaintextLimit(t *testing.T) {
+	sender, _ := recordCipherPair(t, TLS_AES_128_GCM_SHA256, 3)
+	sender.setPlaintextLimit(minRecordSizeLimit)
+	if _, err := sender.seal(recordTypeApplicationData, make([]byte, minRecordSizeLimit-1)); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := sender.seal(recordTypeApplicationData, make([]byte, minRecordSizeLimit)); err == nil {
+		t.Fatal("sent content whose inner plaintext exceeds record_size_limit")
+	}
+
+	oversizedSender, limitedReceiver := recordCipherPair(t, TLS_AES_128_GCM_SHA256, 3)
+	limitedReceiver.setPlaintextLimit(minRecordSizeLimit)
+	wire, err := oversizedSender.seal(recordTypeApplicationData, make([]byte, minRecordSizeLimit))
+	if err != nil {
+		t.Fatal(err)
+	}
+	_, _, _, err = limitedReceiver.open(wire)
+	var authenticatedErr *authenticatedRecordError
+	if !errors.As(err, &authenticatedErr) || authenticatedErr.description != alertRecordOverflow {
+		t.Fatalf("oversized authenticated record returned %v", err)
+	}
+	if limitedReceiver.replay.nextExpected() != 0 {
+		t.Fatal("record_size_limit failure committed replay state")
+	}
+}
+
 func TestProtectedRecordRejectsZeroLengthHandshakeAndAlert(t *testing.T) {
 	for _, contentType := range []uint8{recordTypeHandshake, recordTypeAlert} {
 		sender, receiver := recordCipherPair(t, TLS_AES_128_GCM_SHA256, 3)

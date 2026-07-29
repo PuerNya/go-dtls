@@ -19,6 +19,12 @@
 // Applications that need messages larger than the available payload must
 // define their own fragmentation and recovery protocol.
 //
+// Endpoints advertise the [RFC 8449] record_size_limit extension by default.
+// [Config.RecordSizeLimit] sets the complete protected plaintext this endpoint
+// accepts independently of PMTU; the peer's separately advertised value limits
+// outgoing records. [ConnectionState] reports whether the extension was
+// negotiated and the effective limit in each direction.
+//
 // Each successful call to ReadDatagram consumes exactly one authenticated
 // Application Data record. If the destination is too small, the unread bytes
 // are discarded and [DatagramInfo.Truncated] is true. [DatagramInfo.FullLength]
@@ -150,6 +156,7 @@
 //
 // [RFC 9147]: https://www.rfc-editor.org/rfc/rfc9147
 // [RFC 8446]: https://www.rfc-editor.org/rfc/rfc8446
+// [RFC 8449]: https://www.rfc-editor.org/rfc/rfc8449
 // [RFC 9146]: https://www.rfc-editor.org/rfc/rfc9146
 // [RFC 9853]: https://www.rfc-editor.org/rfc/rfc9853
 //

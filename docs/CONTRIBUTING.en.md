@@ -60,8 +60,7 @@ For retransmission, handshake, or protocol-state-machine changes, run the releva
 
 Prioritize the following work:
 
-1. RFC 8449 `record_size_limit`: cover ClientHello/EncryptedExtensions negotiation, bidirectional record limits, HRR/resumption state retention, and over-limit handling.
-2. Third-party interoperability matrix: when peers support them, add bidirectional evidence for CID, KeyUpdate, 0-RTT, resumption, and PHA.
+1. Third-party interoperability matrix: when peers support them, add bidirectional evidence for CID, KeyUpdate, 0-RTT, resumption, and PHA.
 
 Other optional extensions require a concrete deployment need and a testable protocol design. Do not add placeholder APIs or empty frameworks in advance.
 

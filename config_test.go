@@ -10,7 +10,7 @@ func TestConfigDefaults(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if c.MTU != 1200 || c.ReplayWindow != 64 || c.MaxHandshakeMessage != 1<<20 || c.MaxBufferedHandshakeMessages != 8 || c.MaxBufferedHandshakeBytes != 4<<20 || c.MaxBufferedApplicationData != 1<<20 || c.MaxBufferedApplicationDatagrams != 1024 || c.MaxConnectionIDs != 8 {
+	if c.MTU != 1200 || c.RecordSizeLimit != defaultRecordSizeLimit || c.ReplayWindow != 64 || c.MaxHandshakeMessage != 1<<20 || c.MaxBufferedHandshakeMessages != 8 || c.MaxBufferedHandshakeBytes != 4<<20 || c.MaxBufferedApplicationData != 1<<20 || c.MaxBufferedApplicationDatagrams != 1024 || c.MaxConnectionIDs != 8 {
 		t.Fatalf("unexpected defaults: %#v", c)
 	}
 	if len(c.CurvePreferences) != 2 || c.CurvePreferences[0] != tls.X25519 {
@@ -21,6 +21,20 @@ func TestConfigDefaults(t *testing.T) {
 	}
 	if cid, offered := c.clientConnectionIDOffer(); !offered || cid == nil || len(cid) != 0 {
 		t.Fatalf("default client CID offer=%x, %v", cid, offered)
+	}
+}
+
+func TestConfigRecordSizeLimitRange(t *testing.T) {
+	for _, limit := range []uint16{minRecordSizeLimit, defaultRecordSizeLimit} {
+		config, err := (&Config{RecordSizeLimit: limit}).normalized()
+		if err != nil || config.RecordSizeLimit != limit {
+			t.Fatalf("RecordSizeLimit=%d normalized to %d, %v", limit, config.RecordSizeLimit, err)
+		}
+	}
+	for _, limit := range []uint16{1, minRecordSizeLimit - 1, defaultRecordSizeLimit + 1} {
+		if _, err := (&Config{RecordSizeLimit: limit}).normalized(); err == nil {
+			t.Fatalf("accepted RecordSizeLimit=%d", limit)
+		}
 	}
 }
 

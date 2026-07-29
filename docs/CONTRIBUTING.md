@@ -60,8 +60,7 @@ GitHub Actions 会在每次 push 和 pull request 上分别执行四个必需检
 
 优先完成以下工作：
 
-1. RFC 8449 `record_size_limit`：覆盖 ClientHello/EncryptedExtensions 协商、双向 record 限制、HRR/恢复状态保持和超限处理。
-2. 第三方互通矩阵：在对端支持时补齐 CID、KeyUpdate、0-RTT、恢复和 PHA 的双向证据。
+1. 第三方互通矩阵：在对端支持时补齐 CID、KeyUpdate、0-RTT、恢复和 PHA 的双向证据。
 
 其他可选扩展应以明确的部署需求和可测试的协议设计为前提，不提前加入占位 API 或空框架。
 

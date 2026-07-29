@@ -152,6 +152,16 @@ type flight struct {
 	retransmitted   bool
 }
 
+func (f *flight) claimPartialRetransmission() bool {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	if f.retransmitted {
+		return false
+	}
+	f.retransmitted = true
+	return true
+}
+
 func (f *flight) noteSend(now time.Time, retransmission bool) {
 	f.mu.Lock()
 	defer f.mu.Unlock()
@@ -295,7 +305,7 @@ func buildProtectedFlight(messages []handshakeMessage, mtu int, cipher *recordCi
 		return nil, &ProtocolError{"missing flight record cipher"}
 	}
 	maxFragment := mtu - cipher.headerLen16() - cipher.aead.Overhead() - 1 - handshakeHeaderLen
-	if recordMaximum := maxRecordContent - handshakeHeaderLen; maxFragment > recordMaximum {
+	if recordMaximum := cipher.maxContent() - handshakeHeaderLen; maxFragment > recordMaximum {
 		maxFragment = recordMaximum
 	}
 	if maxFragment < 1 {

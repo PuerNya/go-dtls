@@ -7,12 +7,14 @@ import (
 
 const (
 	extServerName              uint16 = 0
+	extMaxFragmentLength       uint16 = 1
 	extSupportedGroups         uint16 = 10
 	extSupportedVersions       uint16 = 43
 	extKeyShare                uint16 = 51
 	extSignatureAlgorithms     uint16 = 13
 	extALPN                    uint16 = 16
 	extPadding                 uint16 = 21
+	extRecordSizeLimit         uint16 = 28
 	extPreSharedKey            uint16 = 41
 	extCookie                  uint16 = 44
 	extPSKKeyExchangeModes     uint16 = 45
@@ -25,7 +27,7 @@ const (
 func knownExtensionType(typ uint16) bool {
 	switch typ {
 	case extServerName, extSupportedGroups, extSupportedVersions, extKeyShare,
-		extSignatureAlgorithms, extALPN, extPadding, extPreSharedKey, extEarlyData,
+		extSignatureAlgorithms, extALPN, extPadding, extRecordSizeLimit, extPreSharedKey, extEarlyData,
 		extCookie, extPSKKeyExchangeModes, extPostHandshakeAuth,
 		extSignatureAlgorithmsCert, extConnectionID, extReturnRoutability:
 		return true
@@ -66,6 +68,8 @@ type clientHello struct {
 	hasConnectionID             bool
 	returnRoutability           bool
 	postHandshakeAuth           bool
+	recordSizeLimit             uint16
+	hasRecordSizeLimit          bool
 	unknownExtensions           map[uint16][]byte
 }
 type serverHello struct {
@@ -855,6 +859,9 @@ func (h *clientHello) marshal() ([]byte, error) {
 	if len(h.cipherSuites) == 0 {
 		return nil, &ProtocolError{"ClientHello has no cipher suites"}
 	}
+	if h.hasRecordSizeLimit && (h.recordSizeLimit < minRecordSizeLimit || h.recordSizeLimit > defaultRecordSizeLimit) {
+		return nil, &ProtocolError{"invalid record_size_limit"}
+	}
 	ks, err := marshalKeyShares(h.keyShares, true)
 	if err != nil {
 		return nil, err
@@ -919,7 +926,11 @@ func (h *clientHello) marshal() ([]byte, error) {
 	} else if len(h.pskBinder) > 0 || len(h.pskBinders) > 0 {
 		return nil, &ProtocolError{"PSK binder without identity"}
 	}
-	var extensionStorage [14]orderedExtension
+	var recordSizeLimit [2]byte
+	if h.hasRecordSizeLimit {
+		binary.BigEndian.PutUint16(recordSizeLimit[:], h.recordSizeLimit)
+	}
+	var extensionStorage [15]orderedExtension
 	extensions := extensionStorage[:0]
 	if serverName != nil {
 		extensions = append(extensions, orderedExtension{typ: extServerName, value: serverName})
@@ -933,6 +944,9 @@ func (h *clientHello) marshal() ([]byte, error) {
 	}
 	if alpn != nil {
 		extensions = append(extensions, orderedExtension{typ: extALPN, value: alpn})
+	}
+	if h.hasRecordSizeLimit {
+		extensions = append(extensions, orderedExtension{typ: extRecordSizeLimit, value: recordSizeLimit[:]})
 	}
 	extensions = append(extensions, orderedExtension{typ: extSupportedVersions, value: clientSupportedVersionsStorage[:]})
 	if cookie != nil {
@@ -1008,14 +1022,14 @@ func parseClientHello(b []byte) (*clientHello, error) {
 		h.cipherSuites = append(h.cipherSuites, binary.BigEndian.Uint16(suites))
 		suites = suites[2:]
 	}
-	var extensionStorage [14]orderedExtension
+	var extensionStorage [15]orderedExtension
 	exts, err := parseOrderedExtensionsView(extBytes, extensionStorage[:0])
 	if err != nil {
 		return nil, err
 	}
 	for _, extension := range exts {
 		switch extension.typ {
-		case extServerName, extSupportedGroups, extSignatureAlgorithms, extSignatureAlgorithmsCert, extALPN, extPadding,
+		case extServerName, extSupportedGroups, extSignatureAlgorithms, extSignatureAlgorithmsCert, extALPN, extPadding, extRecordSizeLimit,
 			extSupportedVersions, extCookie, extKeyShare, extPostHandshakeAuth,
 			extConnectionID, extReturnRoutability, extEarlyData, extPSKKeyExchangeModes, extPreSharedKey:
 		default:
@@ -1090,6 +1104,13 @@ func parseClientHello(b []byte) (*clientHello, error) {
 			return nil, err
 		}
 	}
+	if raw, ok := orderedExtensionValue(exts, extRecordSizeLimit); ok {
+		h.recordSizeLimit, err = parseRecordSizeLimit(raw, false)
+		if err != nil {
+			return nil, err
+		}
+		h.hasRecordSizeLimit = true
+	}
 	if raw, ok := orderedExtensionValue(exts, extCookie); ok {
 		h.cookie, err = parseCookie(raw)
 		if err != nil {
@@ -1160,6 +1181,17 @@ func parseClientHello(b []byte) (*clientHello, error) {
 		return nil, alertError(alertMissingExtension, &ProtocolError{"certificate ClientHello has no supported_groups or key_share"})
 	}
 	return h, nil
+}
+
+func parseRecordSizeLimit(raw []byte, rejectAboveMaximum bool) (uint16, error) {
+	if len(raw) != 2 {
+		return 0, alertError(alertDecodeError, &ProtocolError{"invalid record_size_limit extension length"})
+	}
+	limit := binary.BigEndian.Uint16(raw)
+	if limit < minRecordSizeLimit || (rejectAboveMaximum && limit > defaultRecordSizeLimit) {
+		return 0, alertError(alertIllegalParameter, &ProtocolError{"invalid record_size_limit value"})
+	}
+	return limit, nil
 }
 
 func (h *serverHello) marshal() ([]byte, error) {

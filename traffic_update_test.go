@@ -17,12 +17,17 @@ func TestACKGatedTrafficUpdate(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
+	sender.cipher.setPlaintextLimit(minRecordSizeLimit)
+	receiver.setPlaintextLimit(minRecordSizeLimit)
 	wire, number, err := sender.beginKeyUpdate(true)
 	if err != nil {
 		t.Fatal(err)
 	}
 	if sender.cipher.epoch != 3 {
 		t.Fatal("sender changed epoch before ACK")
+	}
+	if sender.pendingCipher.plaintextLimit != minRecordSizeLimit {
+		t.Fatal("sending KeyUpdate did not preserve record_size_limit")
 	}
 	content, typ, epoch, _, err := receiver.epochs.open(wire)
 	if err != nil {
@@ -41,6 +46,9 @@ func TestACKGatedTrafficUpdate(t *testing.T) {
 	}
 	if receiver.current != 4 {
 		t.Fatal("receiver did not prepare epoch 4")
+	}
+	if receiver.epochs.ciphers[4].plaintextLimit != minRecordSizeLimit {
+		t.Fatal("receiving KeyUpdate did not preserve record_size_limit")
 	}
 	retransmitted, retransmittedNumber, err := sender.retransmitKeyUpdate()
 	if err != nil {

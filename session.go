@@ -199,6 +199,7 @@ type ClientSessionState struct {
 	serverName       string
 	protocol         string
 	maxEarlyData     uint32
+	recordSizeLimit  uint16
 	peerCertificates []*x509.Certificate
 	verifiedChains   [][]*x509.Certificate
 }
@@ -300,6 +301,7 @@ type sessionTicketState struct {
 	protocol         string
 	ageAdd           uint32
 	maxEarlyData     uint32
+	recordSizeLimit  uint16
 	clientAuthAt     int64
 	peerCertificates []*x509.Certificate
 	verifiedChains   [][]*x509.Certificate
@@ -323,19 +325,26 @@ func (s *sessionTicketState) marshal() ([]byte, error) {
 	}
 	version := 1
 	if s.maxEarlyData != 0 {
-		version = 2
+		version = 4
 	}
 	if len(s.peerCertificates) > 0 {
 		if s.clientAuthAt == 0 {
 			return nil, errors.New("dtls13: client authentication time is missing")
 		}
 		version = 3
+		if s.maxEarlyData != 0 {
+			version = 5
+		}
 	}
+	recordSizeLimit := effectiveRecordSizeLimit(s.recordSizeLimit)
 	capacity := 2 + 8 + 4 + 4 + 2 + 1 + len(s.psk) + 2 + len(s.serverName) + 1 + len(s.protocol)
 	if version >= 2 {
 		capacity += 4
 	}
-	if version >= 3 {
+	if version >= 4 {
+		capacity += 2
+	}
+	if version == 3 || version == 5 {
 		capacity += 8 + 2 + 2
 		for _, cert := range s.peerCertificates {
 			if cert == nil || len(cert.Raw) == 0 {
@@ -368,7 +377,10 @@ func (s *sessionTicketState) marshal() ([]byte, error) {
 	if version >= 2 {
 		w.u32(s.maxEarlyData)
 	}
-	if version >= 3 {
+	if version >= 4 {
+		w.u16(int(recordSizeLimit))
+	}
+	if version == 3 || version == 5 {
 		w.b = binary.BigEndian.AppendUint64(w.b, uint64(s.clientAuthAt))
 		certificates := w.startVector16()
 		for _, cert := range s.peerCertificates {
@@ -391,7 +403,7 @@ func (s *sessionTicketState) marshal() ([]byte, error) {
 func parseSessionTicketState(b []byte) (*sessionTicketState, error) {
 	p := wireParser{b: b}
 	version := p.u16()
-	if version != 1 && version != 2 && version != 3 {
+	if version < 1 || version > 5 {
 		return nil, errors.New("dtls13: unsupported session ticket version")
 	}
 	created := p.take(8)
@@ -408,7 +420,14 @@ func parseSessionTicketState(b []byte) (*sessionTicketState, error) {
 	if version >= 2 {
 		state.maxEarlyData = uint32(p.u32())
 	}
-	if version >= 3 {
+	state.recordSizeLimit = defaultRecordSizeLimit
+	if version >= 4 {
+		state.recordSizeLimit = uint16(p.u16())
+		if state.recordSizeLimit < minRecordSizeLimit || state.recordSizeLimit > defaultRecordSizeLimit {
+			return nil, errors.New("dtls13: invalid record size limit in session ticket")
+		}
+	}
+	if version == 3 || version == 5 {
 		authenticated := p.take(8)
 		if len(authenticated) == 8 {
 			state.clientAuthAt = int64(binary.BigEndian.Uint64(authenticated))
@@ -450,7 +469,7 @@ func parseSessionTicketState(b []byte) (*sessionTicketState, error) {
 	if err := p.done(); err != nil {
 		return nil, err
 	}
-	if state.lifetime == 0 || len(state.psk) == 0 || (version >= 3 && (state.clientAuthAt == 0 || len(state.peerCertificates) == 0)) {
+	if state.lifetime == 0 || len(state.psk) == 0 || ((version == 3 || version == 5) && (state.clientAuthAt == 0 || len(state.peerCertificates) == 0)) {
 		return nil, errors.New("dtls13: invalid session ticket state")
 	}
 	return state, nil
@@ -706,7 +725,7 @@ func (c *Conn) acceptSessionTicket(hello *clientHello, clientHelloBody, initialC
 	if err = verifyClientHelloPSKBinderAt(clientHelloBody, suite, state.psk, initialClientHelloHash, hrrBody, selected); err != nil {
 		return nil, 0, err
 	}
-	if selected == 0 && state.suite == suite.id && ageWithinTolerance && hello.earlyData && state.maxEarlyData > 0 && c.config.MaxEarlyData >= state.maxEarlyData && hrrBody == nil && c.config.AllowEarlyDataWithoutCookie {
+	if selected == 0 && state.suite == suite.id && ageWithinTolerance && hello.earlyData && state.maxEarlyData > 0 && c.config.MaxEarlyData >= state.maxEarlyData && c.config.RecordSizeLimit >= effectiveRecordSizeLimit(state.recordSizeLimit) && hrrBody == nil && c.config.AllowEarlyDataWithoutCookie {
 		limit := state.maxEarlyData
 		cache := c.config.EarlyDataReplayCache
 		if cache == nil {
@@ -849,7 +868,7 @@ func (c *Conn) sendNewSessionTicket(schedule *keySchedule, suite *cipherSuite, s
 	lifetime := uint32(c.config.SessionTicketLifetime / time.Second)
 	ticket, err := protector.seal(&sessionTicketState{
 		createdAt: c.config.Time().Unix(), lifetime: lifetime, suite: suite.id, psk: psk,
-		serverName: serverName, protocol: protocol, ageAdd: ageAdd, maxEarlyData: c.config.MaxEarlyData,
+		serverName: serverName, protocol: protocol, ageAdd: ageAdd, maxEarlyData: c.config.MaxEarlyData, recordSizeLimit: c.localRecordSizeLimit,
 		clientAuthAt: clientAuthAt, peerCertificates: peerCertificates, verifiedChains: verifiedChains,
 	})
 	if err != nil {
@@ -930,7 +949,7 @@ func (c *Conn) processNewSessionTicket(body []byte) error {
 		ticket: append([]byte(nil), message.ticket...), psk: psk, nonce: append([]byte(nil), message.nonce...),
 		suite: c.resumptionSuite.id, receivedAt: c.config.Time(), lifetime: message.lifetime,
 		ageAdd: message.ageAdd, serverName: c.config.ServerName, protocol: state.NegotiatedProtocol,
-		maxEarlyData: message.maxEarlyData, peerCertificates: state.PeerCertificates, verifiedChains: state.VerifiedChains,
+		maxEarlyData: message.maxEarlyData, recordSizeLimit: state.PeerRecordSizeLimit, peerCertificates: state.PeerCertificates, verifiedChains: state.VerifiedChains,
 	})
 	return nil
 }

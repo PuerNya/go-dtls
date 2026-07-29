@@ -175,7 +175,7 @@ func serve(conn *dtls13.Conn) {
 | `ReadDatagram` | 读取一条认证报文，并返回来源、完整长度和截断状态 |
 | `WriteDatagram` | 向 association 的认证对端发送一条报文 |
 | `SetDeadline` / `SetReadDeadline` / `SetWriteDeadline` | 设置底层报文 I/O deadline |
-| `ConnectionState` | 获取版本、套件、ALPN、证书、恢复状态、当前 CID 和 RRC 协商状态 |
+| `ConnectionState` | 获取版本、套件、ALPN、证书、恢复状态、当前 CID、RRC 及 RFC 8449 双向 record limit 协商状态 |
 | `Close` | 发送 `close_notify`、清除 traffic/resumption secrets 并关闭底层连接 |
 
 ### 报文大小与截断
@@ -201,7 +201,7 @@ if _, err := conn.WriteDatagram(payload); errors.Is(err, dtls13.ErrDatagramTooLa
 `IgnorePathMTU: true`。此时 `WriteDatagram` 和 `WriteEarlyData` 跳过库内
 PMTU payload 检查，把单个完整 DTLS record 直接交给底层 transport；握手、
 ACK 和 post-handshake flight 仍按 PMTU 分片、重传和退避。该选项不会放宽
-`2^14` 字节 record content 上限，底层仍可能分片、丢包或返回
+`2^14` 字节 record content 上限或协商后的 `record_size_limit`，底层仍可能分片、丢包或返回
 `ErrDatagramTooLarge`，库不会降低 PMTU 或自动重发该应用 datagram。
 
 `ReadDatagram` 的短缓冲不是流式读取。`Truncated=true` 时，该 record 的未读部分已经丢弃，下一次读取会返回下一条 record。
@@ -256,6 +256,7 @@ deadline、socket 关闭和底层 UDP 错误沿 Go `net` 错误模型返回；�
 | `CurvePreferences` | X25519、P-256 |
 | `MTU` | 1200 字节 UDP payload；最小 256 |
 | `IgnorePathMTU` | 默认 `false`；仅让 Application Data 跳过库内 PMTU 检查，握手不受影响 |
+| `RecordSizeLimit` | `0` 表示默认 `2^14+1`；可配置 `64..2^14+1`，作为本端接收的完整 `DTLSInnerPlaintext` 上限并通过 RFC 8449 主动协商；与 PMTU 独立 |
 | `FlightInterval` | 1 秒初始握手重传间隔 |
 | `MaxFlightInterval` | 60 秒指数退避上限 |
 | `HandshakeTimeout` | 30 秒 |
@@ -316,6 +317,7 @@ serverConfig := &dtls13.Config{
 | --- | --- | --- |
 | [RFC 9147](https://www.rfc-editor.org/rfc/rfc9147) | 完成 | Record、Handshake、epoch、ACK、KeyUpdate、CID update、Application Data 与适用安全要求完成；推荐行为在已启用范围完成 |
 | [RFC 9146](https://www.rfc-editor.org/rfc/rfc9146) | 完成 | CID 协商、方向性 CID、更新、Listener 路由、错误处理和地址保持完成；DTLS 1.2 专属细节不适用 |
+| [RFC 8449](https://www.rfc-editor.org/rfc/rfc8449) | 完成 | 默认 CH/EE 协商、方向独立限制、最小 64、超限 fatal `record_overflow`、HRR、恢复、0-RTT、KeyUpdate、ACK 与 PMTU 独立性完成 |
 | [RFC 9846](https://www.rfc-editor.org/rfc/rfc9846) | 完成（已启用范围） | 握手内、final ACK 等待和握手后均忽略 `user_canceled(90)` 并继续等 `close_notify`；没有更具体 alert 的本地加密失败发送 `general_error(117)`，具体协议 alert 始终优先 |
 | [RFC 9325](https://www.rfc-editor.org/rfc/rfc9325) | 部分实现 | PFS、AEAD、SNI/ALPN、ticket、0-RTT、KeyUpdate 和证书安全下限已覆盖；缺少 OCSP stapling，且本模块有意不实现该 BCP 要求的 DTLS 1.2 |
 | [RFC 9525](https://www.rfc-editor.org/rfc/rfc9525) | 部分实现 | Go X.509 与 `ServerName` 覆盖 DNS-ID/IP-ID；URI-ID、SRV-ID 和应用 service identity 由调用方验证回调承担 |
@@ -362,12 +364,13 @@ serverConfig := &dtls13.Config{
 | 规范 | 与本实现的关系 | 状态 |
 | --- | --- | --- |
 | [RFC 9846](https://www.rfc-editor.org/rfc/rfc9846) | TLS 1.3 的 KeyShare、PSK/HRR、NST、AEAD limit、KeyUpdate、alert 和 vector 边界 | 已启用范围完成；mTLS 恢复保留认证状态、策略/CA/有效期及总认证寿命；`user_canceled` 和 `general_error` 语义见总体状态 |
+| [RFC 8449](https://www.rfc-editor.org/rfc/rfc8449) | TLS/DTLS `record_size_limit` | 客户端默认主动提供，服务端仅响应收到的 offer；发送服从 peer limit、接收服从 local limit，未协商时保持协议最大值；PMTU 仍独立取更小约束 |
 | [RFC 9325](https://www.rfc-editor.org/rfc/rfc9325) | TLS/DTLS 部署安全 BCP | ticket 使用 AES-256-GCM，寿命限制为 1 秒至 7 天；RSA 2048 位及 SHA-1/MD5 证书下限在完整握手、信任锚和恢复路径统一执行；OCSP 和 DTLS 1.2 范围例外见总体状态 |
 | [RFC 9525](https://www.rfc-editor.org/rfc/rfc9525) | 服务身份校验 | DNS-ID/IP-ID 默认严格验证；其他 reference identifier 需要调用方实现应用语义 |
 | [RFC 9853](https://www.rfc-editor.org/rfc/rfc9853) | CID 地址变化的 Return Routability Check | 完成；默认 enhanced check，旧路径失效后执行 basic check，验证成功才 rebind；候选路径执行独立放大限制，并在可用时使用 spare CID 探测 |
 | [RFC 8701](https://www.rfc-editor.org/rfc/rfc8701) | GREASE 抗僵化 | 接收端容忍合法未知值并保持 HRR 不变量；发送端不主动生成 GREASE |
 
-未实现的可选扩展包括 RFC 8449 `record_size_limit`、RFC 8879 Certificate Compression、RFC 9149 Ticket Requests、RFC 9257/9258 external PSK、RFC 9849 ECH 和 RFC 9954 Hybrid Key Exchange。
+未实现的可选扩展包括 RFC 8879 Certificate Compression、RFC 9149 Ticket Requests、RFC 9257/9258 external PSK、RFC 9849 ECH 和 RFC 9954 Hybrid Key Exchange。
 
 ### 范围边界
 
@@ -386,11 +389,11 @@ serverConfig := &dtls13.Config{
 
 | 场景 | 代表结果 |
 | --- | --- |
-| 普通完整证书握手和关闭 `BenchmarkConnectionHandshakeLifecycle` | 约 `646.3 us/op`、`111838 B/op`、`872 allocs/op` |
-| 完整 mTLS `BenchmarkMutualTLSHandshakeLifecycle/Full` | 约 `868.7 us/op`、`135791 B/op`、`1165 allocs/op` |
-| mTLS 恢复 `BenchmarkMutualTLSHandshakeLifecycle/Resumed` | 约 `439.8 us/op`、`117434 B/op`、`821-822 allocs/op` |
-| AES-128-GCM 1200 B seal | 约 1.50-1.51 GB/s，1 alloc/op |
-| AES-128-GCM 1200 B in-place round trip | 约 862-954 MB/s，1 alloc/op |
+| 普通完整证书握手和关闭 `BenchmarkConnectionHandshakeLifecycle` | 约 `612.0 us/op`、`99757 B/op`、`762 allocs/op` |
+| 完整 mTLS `BenchmarkMutualTLSHandshakeLifecycle/Full` | 约 `854.6 us/op`、`116144 B/op`、`977 allocs/op` |
+| mTLS 恢复 `BenchmarkMutualTLSHandshakeLifecycle/Resumed` | 约 `442.9 us/op`、`115417 B/op`、`802 allocs/op` |
+| AES-128-GCM 1200 B seal | 约 1.86 GB/s，1 alloc/op |
+| AES-128-GCM 1200 B in-place round trip | 约 1.05 GB/s，1 alloc/op |
 | 未认证 record 错误分类 | 约 12.4-13.7 ns/op，0 allocs/op |
 | Extension marshal | 约 316.5-358.0 ns/op，128 B/op，1 alloc/op |
 | Extension ordered-view parse | 约 69.8-80.1 ns/op，0 B/op，0 allocs/op |
@@ -398,7 +401,7 @@ serverConfig := &dtls13.Config{
 | ClientHello marshal | 约 436-519 ns/op，424 B/op，7 allocs/op |
 | ServerHello marshal | 约 72-91 ns/op，112 B/op，1 alloc/op |
 | 1200 B 单分片握手重组 | 约 0.47-0.60 us/op，1280 B/op，1 alloc/op |
-| 4 KiB / MTU 1200 protected flight 构造 | 约 3.00-3.26 us/op，5616 B/op，6 allocs/op |
+| 4 KiB / MTU 1200 protected flight 构造 | 约 2.89 us/op，5616 B/op，6 allocs/op |
 | 4 KiB / MTU 1200 plain flight 构造 | 约 2.15-2.58 us/op，5040 B/op，9 allocs/op |
 
 完整连接数据使用 `-cpu=1`、每轮 500 次测得。
@@ -422,6 +425,7 @@ go test -run '^$' -bench '^BenchmarkProtectedRecord(Seal|RoundTripInPlace)$' -be
 ## 测试覆盖
 
 - RFC 9325 证书策略专项覆盖服务端配置、客户端接收、自签名、未发送信任锚、`InsecureSkipVerify`、普通恢复和 mTLS 恢复，并与 `crypto/x509` 对 1024 位 RSA/SHA-1 trust anchor 的行为做差分。
+- RFC 8449 测试覆盖 CH/EE、最小 64、方向独立限制、非法值与扩展组合、authenticated 超限、HRR、恢复、0-RTT、KeyUpdate、ACK、PMTU 独立性和未协商第三方兼容性。
 - 弱网测试覆盖双向丢包、延迟、乱序和重复，以及 CH/SH/Finished/ACK/HRR/mTLS 恢复组合。
 - mTLS 测试覆盖完整握手、PSK 恢复、0-RTT、CA/策略回退和 ticket 续签认证寿命。
 - RFC 9846 alert 测试覆盖握手、final ACK 等待、握手后乱序、`close_notify` 和本地加密失败。

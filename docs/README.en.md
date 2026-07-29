@@ -175,7 +175,7 @@ func serve(conn *dtls13.Conn) {
 | `ReadDatagram` | Read one authenticated datagram and return its source, full length, and truncation status |
 | `WriteDatagram` | Send one datagram to the authenticated peer of the association |
 | `SetDeadline` / `SetReadDeadline` / `SetWriteDeadline` | Set deadlines for the underlying datagram I/O |
-| `ConnectionState` | Get the version, suite, ALPN, certificates, resumption state, active CIDs, and RRC negotiation state |
+| `ConnectionState` | Get the version, suite, ALPN, certificates, resumption state, active CIDs, RRC state, and negotiated RFC 8449 limits in both directions |
 | `Close` | Send `close_notify`, clear traffic/resumption secrets, and close the underlying connection |
 
 ### Datagram Size and Truncation
@@ -197,7 +197,7 @@ if _, err := conn.WriteDatagram(payload); errors.Is(err, dtls13.ErrDatagramTooLa
 }
 ```
 
-Set `IgnorePathMTU: true` when the application actively probes PMTU or explicitly relies on IP fragmentation. `WriteDatagram` and `WriteEarlyData` then skip the library PMTU payload check and pass one complete DTLS record directly to the underlying transport. Handshake, ACK, and post-handshake flights still use PMTU fragmentation, retransmission, and backoff. This option does not relax the `2^14`-byte record content limit. The transport can still fragment, drop, or return `ErrDatagramTooLarge`; the library does not reduce PMTU or automatically retransmit that application datagram.
+Set `IgnorePathMTU: true` when the application actively probes PMTU or explicitly relies on IP fragmentation. `WriteDatagram` and `WriteEarlyData` then skip the library PMTU payload check and pass one complete DTLS record directly to the underlying transport. Handshake, ACK, and post-handshake flights still use PMTU fragmentation, retransmission, and backoff. This option does not relax the `2^14`-byte record content limit or a negotiated `record_size_limit`. The transport can still fragment, drop, or return `ErrDatagramTooLarge`; the library does not reduce PMTU or automatically retransmit that application datagram.
 
 A short `ReadDatagram` buffer is not a streaming read. When `Truncated=true`, the unread part of that record has already been discarded, and the next read returns the next record.
 
@@ -251,6 +251,7 @@ Where TLS 1.3 semantics match, `Config` follows `crypto/tls.Config`. A configura
 | `CurvePreferences` | X25519, P-256 |
 | `MTU` | 1200-byte UDP payload; minimum 256 |
 | `IgnorePathMTU` | `false` by default; only Application Data skips the library PMTU check, while handshake behavior is unchanged |
+| `RecordSizeLimit` | `0` selects the `2^14+1` default; values from `64..2^14+1` set the complete `DTLSInnerPlaintext` this endpoint accepts and are advertised with RFC 8449 independently of PMTU |
 | `FlightInterval` | One-second initial handshake retransmission interval |
 | `MaxFlightInterval` | 60-second exponential-backoff cap |
 | `HandshakeTimeout` | 30 seconds |
@@ -311,6 +312,7 @@ Normative keywords are interpreted according to BCP 14. `MUST`, `MUST NOT`, `REQ
 | --- | --- | --- |
 | [RFC 9147](https://www.rfc-editor.org/rfc/rfc9147) | Complete | Record, Handshake, epochs, ACK, KeyUpdate, CID update, Application Data, and applicable security requirements; recommended behavior is complete for enabled features |
 | [RFC 9146](https://www.rfc-editor.org/rfc/rfc9146) | Complete | CID negotiation, directional CIDs, updates, Listener routing, error handling, and address retention; DTLS 1.2-only details do not apply |
+| [RFC 8449](https://www.rfc-editor.org/rfc/rfc8449) | Complete | Default CH/EE negotiation, directional limits, minimum 64, fatal `record_overflow`, HRR, resumption, 0-RTT, KeyUpdate, ACK, and PMTU independence |
 | [RFC 9846](https://www.rfc-editor.org/rfc/rfc9846) | Complete for enabled features | Ignores `user_canceled(90)` and continues waiting for `close_notify` during the handshake, final-ACK wait, and post-handshake processing; local cryptographic failure without a more specific alert sends `general_error(117)`, while a specific protocol alert always takes precedence |
 | [RFC 9325](https://www.rfc-editor.org/rfc/rfc9325) | Partial | PFS, AEAD, SNI/ALPN, tickets, 0-RTT, KeyUpdate, and certificate security limits are covered; OCSP stapling is absent, and this module intentionally does not implement the DTLS 1.2 support required by the BCP |
 | [RFC 9525](https://www.rfc-editor.org/rfc/rfc9525) | Partial | Go X.509 and `ServerName` cover DNS-ID/IP-ID; URI-ID, SRV-ID, and application service identities are delegated to caller verification callbacks |
@@ -357,12 +359,13 @@ This table contains all 11 `Normative References` from the RFC Editor XML for RF
 | Specification | Relationship to this implementation | Status |
 | --- | --- | --- |
 | [RFC 9846](https://www.rfc-editor.org/rfc/rfc9846) | TLS 1.3 KeyShare, PSK/HRR, NST, AEAD limits, KeyUpdate, alerts, and vector bounds | Complete for enabled features; mTLS resumption preserves authentication state, policy/CA/validity, and total authentication lifetime; see Overall Status for `user_canceled` and `general_error` |
+| [RFC 8449](https://www.rfc-editor.org/rfc/rfc8449) | TLS/DTLS `record_size_limit` | Clients advertise it by default; servers respond only to an offer. Sending follows the peer limit, receiving follows the local limit, absence restores the protocol maximum, and PMTU remains an independent lower bound |
 | [RFC 9325](https://www.rfc-editor.org/rfc/rfc9325) | TLS/DTLS deployment security BCP | Tickets use AES-256-GCM and are limited to one second through seven days; RSA 2048-bit and SHA-1/MD5 certificate limits are enforced on full handshakes, trust anchors, and resumption paths; see Overall Status for the OCSP and DTLS 1.2 scope exceptions |
 | [RFC 9525](https://www.rfc-editor.org/rfc/rfc9525) | Service identity verification | DNS-ID/IP-ID are verified strictly by default; callers implement application semantics for other reference identifiers |
 | [RFC 9853](https://www.rfc-editor.org/rfc/rfc9853) | Return Routability Check for CID address changes | Complete; enhanced check by default, basic check after the old path fails, rebind only after validation, independent candidate-path amplification limit, and spare-CID probing when available |
 | [RFC 8701](https://www.rfc-editor.org/rfc/rfc8701) | GREASE anti-ossification | Receivers tolerate valid unknown values while preserving HRR invariants; senders do not actively generate GREASE |
 
-Unsupported optional extensions include RFC 8449 `record_size_limit`, RFC 8879 Certificate Compression, RFC 9149 Ticket Requests, RFC 9257/9258 external PSK, RFC 9849 ECH, and RFC 9954 Hybrid Key Exchange.
+Unsupported optional extensions include RFC 8879 Certificate Compression, RFC 9149 Ticket Requests, RFC 9257/9258 external PSK, RFC 9849 ECH, and RFC 9954 Hybrid Key Exchange.
 
 ### Scope Boundaries
 
@@ -381,11 +384,11 @@ The following representative results were measured on an AMD Ryzen 7 7435H with 
 
 | Scenario | Representative result |
 | --- | --- |
-| Full certificate handshake and close, `BenchmarkConnectionHandshakeLifecycle` | About `646.3 us/op`, `111838 B/op`, `872 allocs/op` |
-| Full mTLS, `BenchmarkMutualTLSHandshakeLifecycle/Full` | About `868.7 us/op`, `135791 B/op`, `1165 allocs/op` |
-| Resumed mTLS, `BenchmarkMutualTLSHandshakeLifecycle/Resumed` | About `439.8 us/op`, `117434 B/op`, `821-822 allocs/op` |
-| AES-128-GCM 1200 B seal | About 1.50-1.51 GB/s, 1 alloc/op |
-| AES-128-GCM 1200 B in-place round trip | About 862-954 MB/s, 1 alloc/op |
+| Full certificate handshake and close, `BenchmarkConnectionHandshakeLifecycle` | About `612.0 us/op`, `99757 B/op`, `762 allocs/op` |
+| Full mTLS, `BenchmarkMutualTLSHandshakeLifecycle/Full` | About `854.6 us/op`, `116144 B/op`, `977 allocs/op` |
+| Resumed mTLS, `BenchmarkMutualTLSHandshakeLifecycle/Resumed` | About `442.9 us/op`, `115417 B/op`, `802 allocs/op` |
+| AES-128-GCM 1200 B seal | About 1.86 GB/s, 1 alloc/op |
+| AES-128-GCM 1200 B in-place round trip | About 1.05 GB/s, 1 alloc/op |
 | Unauthenticated record error classification | About 12.4-13.7 ns/op, 0 allocs/op |
 | Extension marshal | About 316.5-358.0 ns/op, 128 B/op, 1 alloc/op |
 | Extension ordered-view parse | About 69.8-80.1 ns/op, 0 B/op, 0 allocs/op |
@@ -393,7 +396,7 @@ The following representative results were measured on an AMD Ryzen 7 7435H with 
 | ClientHello marshal | About 436-519 ns/op, 424 B/op, 7 allocs/op |
 | ServerHello marshal | About 72-91 ns/op, 112 B/op, 1 alloc/op |
 | 1200 B single-fragment handshake reassembly | About 0.47-0.60 us/op, 1280 B/op, 1 alloc/op |
-| 4 KiB / MTU 1200 protected-flight construction | About 3.00-3.26 us/op, 5616 B/op, 6 allocs/op |
+| 4 KiB / MTU 1200 protected-flight construction | About 2.89 us/op, 5616 B/op, 6 allocs/op |
 | 4 KiB / MTU 1200 plain-flight construction | About 2.15-2.58 us/op, 5040 B/op, 9 allocs/op |
 
 Full-connection results use `-cpu=1` with 500 iterations per run.
@@ -417,6 +420,7 @@ The repository also includes focused benchmarks for cipher suites, ACK, records/
 ## Test Coverage
 
 - RFC 9325 certificate-policy tests cover server configuration, client reception, self-signed certificates, unsent trust anchors, `InsecureSkipVerify`, ordinary resumption, and mTLS resumption, with differential behavior against `crypto/x509` for 1024-bit RSA/SHA-1 trust anchors.
+- RFC 8449 tests cover CH/EE, the minimum of 64, directional limits, invalid values and extension combinations, authenticated overflow, HRR, resumption, 0-RTT, KeyUpdate, ACK, PMTU independence, and compatibility with third parties that do not negotiate it.
 - Weak-network tests cover bidirectional loss, delay, reordering, and duplication, including CH/SH/Finished/ACK/HRR/mTLS-resumption combinations.
 - mTLS tests cover full handshakes, PSK resumption, 0-RTT, CA/policy fallback, and renewed-ticket authentication lifetime.
 - RFC 9846 alert tests cover handshake processing, final-ACK waiting, post-handshake reordering, `close_notify`, and local cryptographic failure.

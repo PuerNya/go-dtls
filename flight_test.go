@@ -709,3 +709,45 @@ func TestActivePartialACKRetransmitsAndFillsProtectedWindow(t *testing.T) {
 		t.Fatal("partial ACK did not fill the protected-record window")
 	}
 }
+
+func TestRepeatedPartialACKAdvancesProtectedWindowWithoutRepeatedRetransmission(t *testing.T) {
+	sender, _ := recordCipherPair(t, TLS_AES_128_GCM_SHA256, 2)
+	messages := make([]handshakeMessage, 21)
+	for i := range messages {
+		messages[i] = handshakeMessage{typ: handshakeTypeCertificate, sequence: uint16(i), body: []byte{byte(i)}}
+	}
+	f, err := buildProtectedFlight(messages, 1200, sender)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got := len(f.nextUnsentWire(10, nil)); got != 10 {
+		t.Fatalf("initial window=%d", got)
+	}
+	firstNumbers := make([]recordNumber, 10)
+	for i := range firstNumbers {
+		firstNumbers[i] = f.records[i].number
+	}
+	var first bytes.Buffer
+	c := &Conn{config: &Config{Time: time.Now}}
+	f.ack([]recordNumber{firstNumbers[0]})
+	if err = c.retransmitPartialFlight(&first, f); err != nil {
+		t.Fatal(err)
+	}
+	if first.Len() == 0 || !f.records[10].sent {
+		t.Fatal("first partial ACK did not retransmit and advance the window")
+	}
+	for i := 1; i < 10; i++ {
+		firstNumbers[i] = f.records[i].number
+	}
+	var second bytes.Buffer
+	f.ack([]recordNumber{firstNumbers[1]})
+	if err = c.retransmitPartialFlight(&second, f); err != nil {
+		t.Fatal(err)
+	}
+	if !f.records[11].sent {
+		t.Fatal("second partial ACK did not advance the protected window")
+	}
+	if second.Len() != len(f.records[11].wire) {
+		t.Fatalf("second partial ACK wrote %d bytes, want only the next %d-byte record", second.Len(), len(f.records[11].wire))
+	}
+}

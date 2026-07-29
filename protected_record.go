@@ -71,6 +71,7 @@ type recordCipher struct {
 	authFailures     uint64
 	connectionID     []byte
 	hasConnectionID  bool
+	plaintextLimit   uint16
 	acceptedCIDs     [][]byte
 	lastConnectionID []byte
 	recordLimit      uint64
@@ -180,6 +181,21 @@ func newRecordCipher(suite *cipherSuite, trafficSecret []byte, epoch uint64, rep
 	return record, nil
 }
 
+func (c *recordCipher) setPlaintextLimit(limit uint16) {
+	limit = effectiveRecordSizeLimit(limit)
+	if limit == defaultRecordSizeLimit {
+		limit = 0
+	}
+	c.plaintextLimit = limit
+}
+
+func (c *recordCipher) maxContent() int {
+	if c.plaintextLimit == 0 {
+		return maxRecordContent
+	}
+	return int(c.plaintextLimit) - 1
+}
+
 func (c *recordCipher) nonce(sequence uint64) []byte {
 	return c.nonceInto(sequence, make([]byte, c.ivLen))
 }
@@ -232,8 +248,8 @@ func (c *recordCipher) sealWithHeaderBuilderInto(dst []byte, contentType uint8, 
 	if contentLen == 0 && (contentType == recordTypeHandshake || contentType == recordTypeAlert) {
 		return nil, &ProtocolError{"zero-length protected Handshake or Alert content"}
 	}
-	if contentLen < 0 || contentLen > maxRecordContent {
-		return nil, &ProtocolError{"protected record content exceeds 2^14 bytes"}
+	if contentLen < 0 || contentLen > maxRecordContent || (c.plaintextLimit != 0 && contentLen >= int(c.plaintextLimit)) {
+		return nil, &ProtocolError{"protected record content exceeds record_size_limit"}
 	}
 	sequence := c.nextSequence
 	plainLen := contentLen + 1
@@ -391,8 +407,8 @@ func (c *recordCipher) openRecord(datagram []byte, inPlace bool) (content []byte
 		}
 		return nil, 0, 0, &ProtocolError{"protected record authentication failed"}
 	}
-	if len(plain) > maxRecordContent+1 {
-		return nil, 0, 0, authenticatedRecordAlert(alertRecordOverflow, &ProtocolError{"DTLSInnerPlaintext exceeds 2^14+1 bytes"})
+	if len(plain) > maxRecordContent+1 || (c.plaintextLimit != 0 && len(plain) > int(c.plaintextLimit)) {
+		return nil, 0, 0, authenticatedRecordAlert(alertRecordOverflow, &ProtocolError{"DTLSInnerPlaintext exceeds record_size_limit"})
 	}
 	i := len(plain) - 1
 	for i >= 0 && plain[i] == 0 {

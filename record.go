@@ -13,7 +13,16 @@ const (
 	dtlsLegacyVersion           uint16 = 0xfefd
 	plainRecordHeaderLen               = 13
 	maxRecordContent                   = 1 << 14
+	minRecordSizeLimit          uint16 = 64
+	defaultRecordSizeLimit      uint16 = maxRecordContent + 1
 )
+
+func effectiveRecordSizeLimit(limit uint16) uint16 {
+	if limit < minRecordSizeLimit || limit > defaultRecordSizeLimit {
+		return defaultRecordSizeLimit
+	}
+	return limit
+}
 
 type record struct {
 	typ      uint8

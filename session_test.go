@@ -194,7 +194,7 @@ func TestSessionTicketStateClientAuthenticationRoundTrip(t *testing.T) {
 	want := &sessionTicketState{
 		createdAt: 1700000000, lifetime: 3600, suite: TLS_AES_128_GCM_SHA256,
 		psk: bytes.Repeat([]byte{0x42}, 32), serverName: "server.test", protocol: "coap", ageAdd: 7,
-		maxEarlyData: 1024, clientAuthAt: 1699999990,
+		maxEarlyData: 1024, recordSizeLimit: 256, clientAuthAt: 1699999990,
 		peerCertificates: []*x509.Certificate{leaf}, verifiedChains: [][]*x509.Certificate{{leaf}},
 	}
 	wire, err := want.marshal()
@@ -205,7 +205,7 @@ func TestSessionTicketStateClientAuthenticationRoundTrip(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if got.createdAt != want.createdAt || got.clientAuthAt != want.clientAuthAt || got.maxEarlyData != want.maxEarlyData || len(got.peerCertificates) != 1 || len(got.verifiedChains) != 1 || len(got.verifiedChains[0]) != 1 || !got.peerCertificates[0].Equal(leaf) || !got.verifiedChains[0][0].Equal(leaf) {
+	if got.createdAt != want.createdAt || got.clientAuthAt != want.clientAuthAt || got.maxEarlyData != want.maxEarlyData || got.recordSizeLimit != want.recordSizeLimit || len(got.peerCertificates) != 1 || len(got.verifiedChains) != 1 || len(got.verifiedChains[0]) != 1 || !got.peerCertificates[0].Equal(leaf) || !got.verifiedChains[0][0].Equal(leaf) {
 		t.Fatalf("unexpected client authentication ticket state: %#v", got)
 	}
 	for length := range len(wire) {

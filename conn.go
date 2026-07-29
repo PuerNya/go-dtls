@@ -59,7 +59,18 @@ type ConnectionState struct {
 	// ReturnRoutabilityCheck is true when RFC 9853 was negotiated together with
 	// Connection ID for this association.
 	ReturnRoutabilityCheck bool
-	exporter               *exporterState
+	// RecordSizeLimitNegotiated is true when RFC 8449 record_size_limit was
+	// negotiated for this connection.
+	RecordSizeLimitNegotiated bool
+	// LocalRecordSizeLimit is the maximum complete protected plaintext this
+	// endpoint accepts. It is the DTLS 1.3 protocol maximum when the extension
+	// was not negotiated.
+	LocalRecordSizeLimit uint16
+	// PeerRecordSizeLimit is the maximum complete protected plaintext this
+	// endpoint sends. It is the DTLS 1.3 protocol maximum when the extension
+	// was not negotiated or the peer advertised a larger future value.
+	PeerRecordSizeLimit uint16
+	exporter            *exporterState
 }
 
 // ExportKeyingMaterial returns exporter output for the completed connection,
@@ -143,6 +154,9 @@ type Conn struct {
 	receiveConnectionID              []byte
 	connectionIDNegotiated           bool
 	returnRoutabilityCheckNegotiated bool
+	recordSizeLimitNegotiated        bool
+	localRecordSizeLimit             uint16
+	peerRecordSizeLimit              uint16
 	localCIDUpdatesAllowed           bool
 	peerCIDUpdatesAllowed            bool
 	newConnectionIDFlight            *flight
@@ -1195,12 +1209,13 @@ func (c *Conn) maxApplicationDatagramLocked() int {
 }
 
 func (c *Conn) maxApplicationDatagramForCipher(cipher *recordCipher) int {
+	maximum := cipher.maxContent()
 	if c.config.IgnorePathMTU {
-		return maxRecordContent
+		return maximum
 	}
-	maximum := c.currentMTU() - cipher.headerLen16() - cipher.aead.Overhead() - 1
-	if maximum > maxRecordContent {
-		maximum = maxRecordContent
+	pathMaximum := c.currentMTU() - cipher.headerLen16() - cipher.aead.Overhead() - 1
+	if pathMaximum < maximum {
+		maximum = pathMaximum
 	}
 	return maximum
 }
@@ -1437,6 +1452,8 @@ func (c *Conn) installApplicationKeysAt(suite *cipherSuite, clientSecret, server
 		clear(secretStorage)
 		return err
 	}
+	sending.cipher.setPlaintextLimit(c.peerRecordSizeLimit)
+	receiving.setPlaintextLimit(c.localRecordSizeLimit)
 	if c.connectionIDNegotiated {
 		if err = sending.setConnectionID(c.sendConnectionID); err != nil {
 			sending.clearSecrets()

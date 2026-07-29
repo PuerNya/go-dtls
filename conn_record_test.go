@@ -279,6 +279,19 @@ func TestConnDatagramWriteRespectsRecordLimitWithLargeMTU(t *testing.T) {
 	if len(sink.writes) != 0 {
 		t.Fatalf("large application datagram generated %d records", len(sink.writes))
 	}
+	client.sendCipher.setPlaintextLimit(256)
+	if n, err = client.WriteDatagram(make([]byte, 256)); n != 0 || !errors.Is(err, ErrDatagramTooLarge) {
+		t.Fatalf("negotiated record_size_limit write = %d, %v", n, err)
+	}
+	if len(sink.writes) != 0 {
+		t.Fatalf("record_size_limit violation generated %d records", len(sink.writes))
+	}
+	if n, err = client.WriteDatagram(make([]byte, 255)); err != nil || n != 255 {
+		t.Fatalf("maximum record_size_limit write = %d, %v", n, err)
+	}
+	if len(sink.writes) != 1 {
+		t.Fatalf("maximum record_size_limit write generated %d records", len(sink.writes))
+	}
 }
 
 func TestConnDropsDelayedEarlyDataAfterApplicationKeys(t *testing.T) {
