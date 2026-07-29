@@ -31,7 +31,9 @@ type Config struct {
 	// server uses the first certificate unless GetCertificate is set. A client
 	// considers the first certificate when the server requests client
 	// authentication and sends it when compatible. The leaf certificate must be
-	// followed by any intermediates, as in tls.Certificate.
+	// followed by any intermediates, as in tls.Certificate. SHA-1 and MD5
+	// certificate signatures are rejected. An RSA server leaf must have a
+	// modulus of at least 2048 bits.
 	Certificates []tls.Certificate
 	// GetCertificate selects a server certificate after the ClientHello has
 	// been parsed. It must return a non-nil certificate or an error. When set,
@@ -50,7 +52,8 @@ type Config struct {
 	ServerName string
 	// InsecureSkipVerify disables built-in certificate-chain and hostname
 	// verification. Certificate signatures within the DTLS handshake are still
-	// checked. This should be used only for tests or together with
+	// checked, and the RFC 9325 RSA and SHA-1/MD5 security floors still apply.
+	// This should be used only for tests or together with
 	// VerifyPeerCertificate that implements equivalent identity verification.
 	InsecureSkipVerify bool
 	// VerifyPeerCertificate, when non-nil, is called after normal certificate

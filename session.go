@@ -555,6 +555,14 @@ func usableClientSession(config *Config, conn net.Conn) (*ClientSessionState, *c
 	if !ok || state == nil || len(state.ticket) == 0 || len(state.psk) == 0 {
 		return nil, nil
 	}
+	if validateCertificateSecurityPolicy(state.peerCertificates, true) != nil {
+		return nil, nil
+	}
+	for _, chain := range state.verifiedChains {
+		if validateCertificateSecurityPolicy(chain, true) != nil {
+			return nil, nil
+		}
+	}
 	age := config.Time().Sub(state.receivedAt)
 	if age < 0 || age > time.Duration(state.lifetime)*time.Second || state.serverName != config.ServerName {
 		config.ClientSessionCache.Put(key, nil)
@@ -598,6 +606,9 @@ func validClientAuthenticationTicket(config *Config, state *sessionTicketState) 
 		// authentication state that their format did not preserve.
 		return config.ClientAuth == tls.NoClientCert
 	}
+	if validateCertificateSecurityPolicy(state.peerCertificates, false) != nil {
+		return false
+	}
 	now := config.Time()
 	if state.clientAuthAt == 0 || now.Before(time.Unix(state.clientAuthAt, 0)) || now.Sub(time.Unix(state.clientAuthAt, 0)) > config.SessionTicketLifetime {
 		return false
@@ -623,11 +634,17 @@ func validClientAuthenticationTicket(config *Config, state *sessionTicketState) 
 		for i := 1; i+1 < len(chain); i++ {
 			intermediates.AddCert(chain[i])
 		}
-		if _, err := chain[0].Verify(x509.VerifyOptions{
+		verified, err := chain[0].Verify(x509.VerifyOptions{
 			Roots: config.ClientCAs, Intermediates: intermediates, CurrentTime: now,
 			KeyUsages: []x509.ExtKeyUsage{x509.ExtKeyUsageClientAuth},
-		}); err == nil {
-			return true
+		})
+		if err != nil {
+			continue
+		}
+		for _, verifiedChain := range verified {
+			if validateCertificateSecurityPolicy(verifiedChain, false) == nil {
+				return true
+			}
 		}
 	}
 	return false

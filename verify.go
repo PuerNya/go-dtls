@@ -3,6 +3,7 @@ package dtls13
 import (
 	"bytes"
 	"crypto"
+	"crypto/rsa"
 	"crypto/tls"
 	"crypto/x509"
 	"encoding/asn1"
@@ -11,6 +12,29 @@ import (
 )
 
 var oidExtensionKeyUsage = asn1.ObjectIdentifier{2, 5, 29, 15}
+
+func validateCertificateSecurityPolicy(certificates []*x509.Certificate, serverAuth bool) error {
+	if len(certificates) == 0 {
+		return nil
+	}
+	for _, certificate := range certificates {
+		if certificate == nil {
+			return errors.New("dtls13: certificate chain contains a nil certificate")
+		}
+	}
+	if serverAuth {
+		if key, ok := certificates[0].PublicKey.(*rsa.PublicKey); ok && (key.N == nil || key.N.BitLen() < 2048) {
+			return errors.New("dtls13: RSA server certificate key is smaller than 2048 bits")
+		}
+	}
+	for _, certificate := range certificates {
+		switch certificate.SignatureAlgorithm {
+		case x509.MD2WithRSA, x509.MD5WithRSA, x509.SHA1WithRSA, x509.DSAWithSHA1, x509.ECDSAWithSHA1:
+			return fmt.Errorf("dtls13: certificate uses prohibited signature algorithm %v", certificate.SignatureAlgorithm)
+		}
+	}
+	return nil
+}
 
 func verifyCertificateChain(config *Config, message *certificateMessage, peerIsServer bool, signatureSchemes []tls.SignatureScheme) ([]*x509.Certificate, [][]*x509.Certificate, error) {
 	if len(message.certificates) == 0 {
@@ -28,6 +52,9 @@ func verifyCertificateChain(config *Config, message *certificateMessage, peerIsS
 			return nil, nil, alertError(alertBadCertificate, fmt.Errorf("dtls13: parse peer certificate %d: %w", i, err))
 		}
 		certs[i] = cert
+	}
+	if err := validateCertificateSecurityPolicy(certs, peerIsServer); err != nil {
+		return nil, nil, alertError(alertBadCertificate, err)
 	}
 	for _, extension := range certs[0].Extensions {
 		if extension.Id.Equal(oidExtensionKeyUsage) && certs[0].KeyUsage&x509.KeyUsageDigitalSignature == 0 {
@@ -61,7 +88,21 @@ func verifyCertificateChain(config *Config, message *certificateMessage, peerIsS
 			}
 			return nil, nil, alertError(description, fmt.Errorf("dtls13: verify peer certificate: %w", err))
 		}
-		chains = verified
+		var policyErr error
+		chains = verified[:0]
+		for _, chain := range verified {
+			if err := validateCertificateSecurityPolicy(chain, peerIsServer); err == nil {
+				chains = append(chains, chain)
+			} else if policyErr == nil {
+				policyErr = err
+			}
+		}
+		if len(chains) == 0 {
+			if policyErr == nil {
+				policyErr = errors.New("dtls13: certificate verification returned no chains")
+			}
+			return nil, nil, alertError(alertBadCertificate, policyErr)
+		}
 	}
 	if config.VerifyPeerCertificate != nil {
 		if err := config.VerifyPeerCertificate(raw, chains); err != nil {
@@ -124,7 +165,7 @@ func validateCertificateSignatureAlgorithms(certificates []*x509.Certificate, of
 	return nil
 }
 
-func validateConfiguredCertificate(certificate *tls.Certificate, offered []tls.SignatureScheme) error {
+func validateConfiguredCertificate(certificate *tls.Certificate, offered []tls.SignatureScheme, serverAuth bool) error {
 	if certificate == nil || len(certificate.Certificate) == 0 {
 		return errors.New("dtls13: configured certificate chain is empty")
 	}
@@ -135,6 +176,9 @@ func validateConfiguredCertificate(certificate *tls.Certificate, offered []tls.S
 			return fmt.Errorf("dtls13: parse configured certificate %d: %w", i, err)
 		}
 		parsed[i] = cert
+	}
+	if err := validateCertificateSecurityPolicy(parsed, serverAuth); err != nil {
+		return err
 	}
 	for _, extension := range parsed[0].Extensions {
 		if extension.Id.Equal(oidExtensionKeyUsage) && parsed[0].KeyUsage&x509.KeyUsageDigitalSignature == 0 {

@@ -184,7 +184,7 @@ func (c *Conn) processPostHandshakeCertificateRequest(sequence uint16, body []by
 		if len(certificateSchemes) == 0 {
 			certificateSchemes = request.signatureSchemes
 		}
-		if validateConfiguredCertificate(candidate, certificateSchemes) == nil {
+		if validateConfiguredCertificate(candidate, certificateSchemes, false) == nil {
 			local = candidate
 			for _, der := range local.Certificate {
 				certificate.certificates = append(certificate.certificates, certificateEntry{data: der})

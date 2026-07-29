@@ -8,7 +8,7 @@
 
 当前实现完成了 RFC 9147 的强制语义，并覆盖 RFC 9147 列出的全部 11 项直接规范性引用。TLS 1.3 基线按取代 RFC 8446 的 [RFC 9846](https://www.rfc-editor.org/rfc/rfc9846) 审计；其中适用于现有功能的主体行为已经实现，但仍有下文明确列出的推荐行为和后续规范缺口。本文记录 2026-07-29 当前源码的实现状态、测试证据和性能基线。
 
-> 本项目仍处于活跃开发阶段。RFC 审计完成不等同于第三方合规认证。当前尚未显式强制 RFC 9325 的 RSA 证书至少 2048 位及所有自签名/信任锚场景的 SHA-1/MD5 禁用策略；生产部署必须通过证书签发策略、配置检查或 `VerifyPeerCertificate` 补足这些约束。
+> 本项目仍处于活跃开发阶段。RFC 审计完成不等同于第三方合规认证。RFC 9325 的证书安全下限默认强制执行：RSA 服务端认证 leaf 不得小于 2048 位，SHA-1/MD5 证书不能通过自签名、信任锚、`InsecureSkipVerify` 或 session resumption 绕过。
 
 ## 核心语义
 
@@ -236,7 +236,7 @@ deadline、socket 关闭和底层 UDP 错误沿 Go `net` 错误模型返回；�
 
 | 配置 | 默认值 / 行为 |
 | --- | --- |
-| `Certificates` / `GetCertificate` | 服务端证书；需要证书认证的服务端必须提供 |
+| `Certificates` / `GetCertificate` | 服务端证书；RSA leaf 必须至少 2048 位，整条证书链不得使用 SHA-1/MD5 |
 | `RootCAs` / `ServerName` | 客户端服务端证书验证；`Dial` 未设置 `ServerName` 时使用目标主机名 |
 | `ClientCAs` / `ClientAuth` | 服务端客户端证书验证策略 |
 | `VerifyPeerCertificate` | 在完整握手的标准证书处理后执行附加验证；与 `crypto/tls` 一样，恢复连接不会再次调用 |
@@ -306,7 +306,7 @@ serverConfig := &dtls13.Config{
 | [RFC 9147](https://www.rfc-editor.org/rfc/rfc9147) | 完成 | Record、Handshake、epoch、ACK、KeyUpdate、CID update、Application Data 与适用安全要求完成；推荐行为在已启用范围完成 |
 | [RFC 9146](https://www.rfc-editor.org/rfc/rfc9146) | 完成 | CID 协商、方向性 CID、更新、Listener 路由、错误处理和地址保持完成；DTLS 1.2 专属细节不适用 |
 | [RFC 9846](https://www.rfc-editor.org/rfc/rfc9846) | 基本完成 | 当前仍把 `user_canceled(90)` 返回为 `AlertError`，未按 SHOULD 忽略并等待 `close_notify`；`general_error(117)` 尚无命名常量和主动发送策略 |
-| [RFC 9325](https://www.rfc-editor.org/rfc/rfc9325) | 部分实现 | PFS、AEAD、SNI/ALPN、ticket、0-RTT 和 KeyUpdate 策略已覆盖；缺少显式证书强度下限和 OCSP stapling，且本模块有意不实现该 BCP 要求的 DTLS 1.2 |
+| [RFC 9325](https://www.rfc-editor.org/rfc/rfc9325) | 部分实现 | PFS、AEAD、SNI/ALPN、ticket、0-RTT、KeyUpdate 和证书安全下限已覆盖；缺少 OCSP stapling，且本模块有意不实现该 BCP 要求的 DTLS 1.2 |
 | [RFC 9525](https://www.rfc-editor.org/rfc/rfc9525) | 部分实现 | Go X.509 与 `ServerName` 覆盖 DNS-ID/IP-ID；URI-ID、SRV-ID 和应用 service identity 由调用方验证回调承担 |
 | [RFC 9853](https://www.rfc-editor.org/rfc/rfc9853) | 未实现 | 当前不会未经路径验证自动 rebind，因此没有安全降级；但提供 CID 的客户端尚未按 SHOULD 同时提供 Return Routability Check |
 | [RFC 8449](https://www.rfc-editor.org/rfc/rfc8449) | 未实现 | 尚不协商 `record_size_limit`；当前仅有 RFC record 上限和动态 PMTU，两者不能替代该扩展 |
@@ -352,7 +352,7 @@ serverConfig := &dtls13.Config{
 | 规范 | 与本实现的关系 | 状态 |
 | --- | --- | --- |
 | [RFC 9846](https://www.rfc-editor.org/rfc/rfc9846) | 取代 RFC 8446 的 TLS 1.3 规范；修订 KeyShare、PSK/HRR、NST、AEAD limit、KeyUpdate、alert 和 vector 边界 | 主体变更完成；mTLS 恢复保留认证状态、当前策略/CA/有效期及总认证寿命；`user_canceled` 和 `general_error` 差异见总体状态 |
-| [RFC 9325](https://www.rfc-editor.org/rfc/rfc9325) | TLS/DTLS 部署安全 BCP | ticket 使用 AES-256-GCM，寿命限制为 1 秒至 7 天；缺口和 DTLS 1.2 范围例外见总体状态 |
+| [RFC 9325](https://www.rfc-editor.org/rfc/rfc9325) | TLS/DTLS 部署安全 BCP | ticket 使用 AES-256-GCM，寿命限制为 1 秒至 7 天；RSA 2048 位及 SHA-1/MD5 证书下限在完整握手、信任锚和恢复路径统一执行；OCSP 和 DTLS 1.2 范围例外见总体状态 |
 | [RFC 9525](https://www.rfc-editor.org/rfc/rfc9525) | 服务身份校验 | DNS-ID/IP-ID 默认严格验证；其他 reference identifier 需要调用方实现应用语义 |
 | [RFC 8449](https://www.rfc-editor.org/rfc/rfc8449) | 双向 record size 协商 | 未实现；PMTU API 只解决路径报文大小，不表示对端接收限制 |
 | [RFC 9853](https://www.rfc-editor.org/rfc/rfc9853) | 更新 RFC 9146/9147，为 CID 地址变化定义 Return Routability Check | 未实现；库不会仅凭新地址上的合法 CID record 自动 rebind，应用仍需自己的路径验证策略 |
@@ -369,7 +369,6 @@ serverConfig := &dtls13.Config{
 
 - 本模块只实现 DTLS 1.3，不提供 DTLS 1.2 回退。
 - 因上一条范围选择，本模块不声称完整符合 RFC 9325 对通用实现支持 DTLS 1.2 的要求。
-- 当前不会替调用方拒绝所有 RSA 小于 2048 位或自签名/信任锚中的 SHA-1/MD5 证书；部署方必须在证书配置和验证策略中执行该下限。
 - Heartbeat 的 record demux 已实现；完整 Heartbeat 协议由 RFC 6520 定义，不属于 RFC 9147 范围。
 - 发送端采用一条 record 一个 UDP datagram 的合法模式，未暴露可选的多 record 聚合 API。
 - 未暴露并行多个 NewSessionTicket 或 PHA 请求；RFC 允许但不要求这些并行能力。
@@ -381,7 +380,6 @@ serverConfig := &dtls13.Config{
 
 | 优先级 | 工作项 | 完成条件摘要 |
 | --- | --- | --- |
-| P0 | RFC 9325 证书安全下限 | 双端拒绝不符合 RSA/SHA-1/MD5 策略的证书，并覆盖自签名、信任锚和恢复连接 |
 | P0 | RFC 9846 alert 语义 | 正确处理 `user_canceled`，并为 `general_error` 增加命名值和发送策略 |
 | P1 | RFC 9853 RRC | CID 客户端默认提供 RRC，完整实现路径挑战、放大限制、计时和 NAT rebind 测试 |
 | P1 | RFC 8449 `record_size_limit` | 完成 CH/EE 协商、双向限制、HRR/恢复保持和超限处理 |
@@ -455,6 +453,7 @@ go test -run TestInteropWolfSSL -v -count=10
 
 最近记录的验证结果：
 
+- RFC 9325 证书策略专项覆盖服务端配置、客户端接收、自签名、未发送信任锚、`InsecureSkipVerify`、普通恢复和 mTLS 恢复，并与 `crypto/x509` 对 1024 位 RSA/SHA-1 trust anchor 的行为做差分。
 - 全量测试 `-count=10`、`go vet`、golangci-lint v2.12.2 和 Windows race 于 2026-07-29 通过。
 - 综合双向丢包、延迟、乱序和重复，以及 CH/SH/Finished/ACK/HRR/mTLS 恢复组合，连续 100 次通过。
 - mTLS 完整握手、PSK 恢复、0-RTT、CA/策略回退、ticket 续签认证寿命以及现有 CID、KeyUpdate、exporter 和 PHA 测试通过。

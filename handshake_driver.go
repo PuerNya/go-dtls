@@ -1000,7 +1000,7 @@ func (c *Conn) clientHandshake(ctx context.Context) error {
 			if len(certificateSchemes) == 0 {
 				certificateSchemes = certificateRequest.signatureSchemes
 			}
-			if validateConfiguredCertificate(candidate, certificateSchemes) == nil {
+			if validateConfiguredCertificate(candidate, certificateSchemes, false) == nil {
 				clientCertificate = candidate
 				for _, der := range clientCertificate.Certificate {
 					certMessage.certificates = append(certMessage.certificates, certificateEntry{data: der})
@@ -1382,7 +1382,7 @@ func (c *Conn) serverHandshake(ctx context.Context) error {
 		if len(certificateSchemes) == 0 {
 			certificateSchemes = ch.signatureSchemes
 		}
-		if validateErr := validateConfiguredCertificate(cert, certificateSchemes); validateErr != nil {
+		if validateErr := validateConfiguredCertificate(cert, certificateSchemes, true); validateErr != nil {
 			return alertError(alertHandshakeFailure, validateErr)
 		}
 		scheme, err = selectSignatureScheme(signer, ch.signatureSchemes)
