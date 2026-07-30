@@ -8,6 +8,7 @@ import (
 	"crypto/x509"
 	"errors"
 	"fmt"
+	"io"
 	"net"
 	"os"
 	"os/exec"
@@ -201,7 +202,7 @@ func (b *lockedBuffer) String() string {
 	return b.Buffer.String()
 }
 
-func wolfSSLPaths(t *testing.T) (root, server, client string) {
+func wolfSSLPaths(t testing.TB) (root, server, client string) {
 	t.Helper()
 	root = os.Getenv("WOLFSSL_ROOT")
 	if root == "" {
@@ -217,7 +218,7 @@ func wolfSSLPaths(t *testing.T) (root, server, client string) {
 	return root, server, client
 }
 
-func unusedUDPPort(t *testing.T) int {
+func unusedUDPPort(t testing.TB) int {
 	t.Helper()
 	conn, err := net.ListenUDP("udp4", &net.UDPAddr{IP: net.IPv4(127, 0, 0, 1)})
 	if err != nil {
@@ -257,6 +258,23 @@ func TestInteropWolfSSLServerCertificateCompressionOffer(t *testing.T) {
 
 func TestInteropWolfSSLServerExternalPSK(t *testing.T) {
 	testInteropWolfSSLServer(t, "TLS13-AES128-GCM-SHA256", []uint16{TLS_AES_128_GCM_SHA256}, false, wolfSSLExternalPSK(t))
+}
+
+func TestInteropWolfSSLServerHybridKeyExchange(t *testing.T) {
+	for _, test := range wolfSSLHybridGroups {
+		t.Run(test.name, func(t *testing.T) {
+			if !test.wolfSSLServer {
+				t.Skip("wolfSSL server does not complete this DTLS 1.3 hybrid handshake")
+			}
+			testInteropWolfSSLServerOptions(t, wolfSSLInteropOptions{
+				args: []string{"--pqc", test.name},
+				configure: func(_ *testing.T, _ string, config *Config) {
+					config.CurvePreferences = []tls.CurveID{test.group}
+					config.MTU = 4096
+				},
+			})
+		})
+	}
 }
 
 func TestInteropWolfSSLServerConnectionID(t *testing.T) {
@@ -512,6 +530,19 @@ func TestInteropWolfSSLClientCertificateCompressionFallback(t *testing.T) {
 
 func TestInteropWolfSSLClientExternalPSK(t *testing.T) {
 	testInteropWolfSSLClient(t, "TLS13-AES128-GCM-SHA256", []uint16{TLS_AES_128_GCM_SHA256}, false, wolfSSLExternalPSK(t))
+}
+
+func TestInteropWolfSSLClientHybridKeyExchange(t *testing.T) {
+	for _, test := range wolfSSLHybridGroups {
+		t.Run(test.name, func(t *testing.T) {
+			testInteropWolfSSLClientOptions(t, wolfSSLInteropOptions{
+				args: []string{"--pqc", test.name},
+				configure: func(_ *testing.T, _ string, config *Config) {
+					config.CurvePreferences = []tls.CurveID{test.group}
+				},
+			})
+		})
+	}
 }
 
 func TestInteropWolfSSLClientConnectionID(t *testing.T) {
@@ -781,7 +812,7 @@ func testInteropWolfSSLClientOptions(t *testing.T, options wolfSSLInteropOptions
 	}
 }
 
-func wolfSSLCertificate(t *testing.T, root, name string) tls.Certificate {
+func wolfSSLCertificate(t testing.TB, root, name string) tls.Certificate {
 	t.Helper()
 	certificate, err := tls.LoadX509KeyPair(filepath.Join(root, "certs", name+"-cert.pem"), filepath.Join(root, "certs", name+"-key.pem"))
 	if err != nil {
@@ -838,6 +869,206 @@ func externalPSKList(psk *ExternalPSK) []*ExternalPSK {
 		return nil
 	}
 	return []*ExternalPSK{psk}
+}
+
+var wolfSSLHybridGroups = []struct {
+	name          string
+	group         tls.CurveID
+	wolfSSLServer bool
+}{
+	{"X25519MLKEM768", tls.X25519MLKEM768, true},
+	{"SecP256r1MLKEM768", tls.SecP256r1MLKEM768, true},
+	{"SecP384r1MLKEM1024", tls.SecP384r1MLKEM1024, false},
+}
+
+const wolfSSLHybridBenchmarkBatch = 20
+
+func BenchmarkHybridKeyExchangeRealUDP(b *testing.B) {
+	root, serverPath, clientPath := wolfSSLPaths(b)
+	certificate := wolfSSLCertificate(b, root, "server")
+	for _, test := range wolfSSLHybridGroups {
+		b.Run(test.name, func(b *testing.B) {
+			b.Run("GoClient/GoServer", func(b *testing.B) {
+				connections := b.N * wolfSSLHybridBenchmarkBatch
+				listener, done := startGoHybridBenchmarkServer(b, certificate, test.group, connections)
+				defer listener.Close()
+				benchmarkGoHybridClient(b, listener.Addr().String(), test.group, connections)
+				waitForHybridBenchmarkServer(b, done)
+			})
+			b.Run("GoClient/WolfSSLServer", func(b *testing.B) {
+				if !test.wolfSSLServer {
+					b.Skip("wolfSSL server does not complete this DTLS 1.3 hybrid handshake")
+				}
+				connections := b.N * wolfSSLHybridBenchmarkBatch
+				port := unusedUDPPort(b)
+				server, output, done := startWolfSSLHybridBenchmarkServer(b, root, serverPath, test.name, port, connections)
+				defer func() { _ = server.Process.Kill() }()
+				benchmarkGoHybridClient(b, fmt.Sprintf("127.0.0.1:%d", port), test.group, connections)
+				waitForWolfSSLBenchmarkServer(b, done, output)
+			})
+			b.Run("WolfSSLClient/GoServer", func(b *testing.B) {
+				connections := b.N * wolfSSLHybridBenchmarkBatch
+				listener, done := startGoHybridBenchmarkServer(b, certificate, test.group, connections)
+				defer listener.Close()
+				benchmarkWolfSSLHybridClient(b, root, clientPath, test.name, listener.Addr().(*net.UDPAddr).Port, connections)
+				waitForHybridBenchmarkServer(b, done)
+			})
+			b.Run("WolfSSLClient/WolfSSLServer", func(b *testing.B) {
+				connections := b.N * wolfSSLHybridBenchmarkBatch
+				port := unusedUDPPort(b)
+				server, output, done := startWolfSSLHybridBenchmarkServer(b, root, serverPath, test.name, port, connections)
+				defer func() { _ = server.Process.Kill() }()
+				benchmarkWolfSSLHybridClient(b, root, clientPath, test.name, port, connections)
+				waitForWolfSSLBenchmarkServer(b, done, output)
+			})
+		})
+	}
+}
+
+func startGoHybridBenchmarkServer(b *testing.B, certificate tls.Certificate, group tls.CurveID, connections int) (*Listener, <-chan error) {
+	b.Helper()
+	listener, err := Listen("udp4", "127.0.0.1:0", &Config{
+		Certificates: []tls.Certificate{certificate}, CurvePreferences: []tls.CurveID{group},
+		SessionTicketsDisabled: true, HandshakeTimeout: 5 * time.Second,
+	})
+	if err != nil {
+		b.Fatal(err)
+	}
+	done := make(chan error, 1)
+	go func() {
+		for range connections {
+			conn, acceptErr := listener.Accept()
+			if acceptErr != nil {
+				done <- acceptErr
+				return
+			}
+			_, _, readErr := conn.ReadDatagram(nil)
+			if readErr != nil && !errors.Is(readErr, io.EOF) {
+				done <- readErr
+				return
+			}
+			if closeErr := conn.Close(); closeErr != nil {
+				done <- closeErr
+				return
+			}
+		}
+		done <- nil
+	}()
+	return listener, done
+}
+
+func startWolfSSLHybridBenchmarkServer(b *testing.B, root, serverPath, group string, port, connections int) (*exec.Cmd, *lockedBuffer, <-chan error) {
+	b.Helper()
+	args := []string{"-u", "-v", "4", "-d", "-p", strconv.Itoa(port), "-C", strconv.Itoa(connections), "--pqc", group}
+	cmd := exec.Command(serverPath, args...) // #nosec G204 -- validated local WOLFSSL_ROOT executable in this opt-in benchmark.
+	cmd.Dir = root
+	output := new(lockedBuffer)
+	cmd.Stdout, cmd.Stderr = output, output
+	if err := cmd.Start(); err != nil {
+		b.Fatal(err)
+	}
+	done := make(chan error, 1)
+	go func() { done <- cmd.Wait() }()
+	time.Sleep(100 * time.Millisecond)
+	select {
+	case err := <-done:
+		b.Fatalf("wolfSSL server exited before benchmark: %v\n%s", err, output.String())
+	default:
+	}
+	return cmd, output, done
+}
+
+func benchmarkGoHybridClient(b *testing.B, address string, group tls.CurveID, connections int) {
+	b.Helper()
+	config := &Config{
+		InsecureSkipVerify: true, CurvePreferences: []tls.CurveID{group}, MTU: 4096,
+		SessionTicketsDisabled: true, HandshakeTimeout: 5 * time.Second,
+	}
+	dialer := &net.Dialer{Timeout: 5 * time.Second}
+	skip := connections / 10
+	var elapsed time.Duration
+	b.ResetTimer()
+	for i := range connections {
+		start := time.Now()
+		conn, err := DialWithDialer(dialer, "udp4", address, config)
+		if err == nil {
+			err = conn.Close()
+		}
+		if i >= skip {
+			elapsed += time.Since(start)
+		}
+		if err != nil {
+			b.Fatal(err)
+		}
+	}
+	b.StopTimer()
+	b.ReportMetric(float64(elapsed)/float64(connections-skip)/float64(time.Millisecond), "go_ms/conn")
+}
+
+func benchmarkWolfSSLHybridClient(b *testing.B, root, clientPath, group string, port, connections int) {
+	b.Helper()
+	args := []string{"-u", "-v", "4", "-d", "-x", "-h", "127.0.0.1", "-p", strconv.Itoa(port), "-b", strconv.Itoa(connections), "--pqc", group}
+	ctx, cancel := context.WithTimeout(context.Background(), 2*time.Minute)
+	defer cancel()
+	cmd := exec.CommandContext(ctx, clientPath, args...) // #nosec G204 -- validated local WOLFSSL_ROOT executable in this opt-in benchmark.
+	cmd.Dir = root
+	var output lockedBuffer
+	cmd.Stdout, cmd.Stderr = &output, &output
+	b.ResetTimer()
+	err := cmd.Run()
+	b.StopTimer()
+	if err != nil {
+		b.Fatalf("wolfSSL client benchmark failed: %v\n%s", err, output.String())
+	}
+	average, err := parseWolfSSLConnectAverage(output.String())
+	if err != nil {
+		b.Fatal(err)
+	}
+	b.ReportMetric(average, "wolfssl_ms/conn")
+}
+
+func parseWolfSSLConnectAverage(output string) (float64, error) {
+	const prefix = "wolfSSL_connect avg took:"
+	index := strings.LastIndex(output, prefix)
+	if index < 0 {
+		return 0, fmt.Errorf("wolfSSL benchmark output omitted connect average: %q", output)
+	}
+	var average float64
+	if _, err := fmt.Sscanf(output[index:], prefix+" %f milliseconds", &average); err != nil {
+		return 0, fmt.Errorf("parse wolfSSL connect average: %w", err)
+	}
+	return average, nil
+}
+
+func waitForHybridBenchmarkServer(b *testing.B, done <-chan error) {
+	b.Helper()
+	select {
+	case err := <-done:
+		if err != nil {
+			b.Fatal(err)
+		}
+	case <-time.After(5 * time.Second):
+		b.Fatal("go-dtls benchmark server timed out")
+	}
+}
+
+func waitForWolfSSLBenchmarkServer(b *testing.B, done <-chan error, output *lockedBuffer) {
+	b.Helper()
+	select {
+	case err := <-done:
+		if err != nil {
+			b.Fatalf("wolfSSL benchmark server failed: %v\n%s", err, output.String())
+		}
+	case <-time.After(5 * time.Second):
+		b.Fatalf("wolfSSL benchmark server timed out\n%s", output.String())
+	}
+}
+
+func TestParseWolfSSLConnectAverage(t *testing.T) {
+	average, err := parseWolfSSLConnectAverage("wolfSSL_connect avg took:  12.345 milliseconds\n")
+	if err != nil || average != 12.345 {
+		t.Fatalf("average=%v err=%v", average, err)
+	}
 }
 
 func requireWolfSSLPSK(t *testing.T, root, executable string) {

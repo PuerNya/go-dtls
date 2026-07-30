@@ -9,7 +9,7 @@
 - Go 1.26 或更高版本。
 - golangci-lint v2.12.2，与 CI 使用的版本一致。
 - Windows race 测试需要 Zig 0.17 和可用的 CGO 工具链。
-- wolfSSL 仅用于可选的第三方互通测试。
+- 变更涉及 wolfSSL 已支持的功能时，wolfSSL 互通测试和专项 benchmark 是必需门禁；其他变更可不安装 wolfSSL。
 
 ## 必需检查
 
@@ -88,6 +88,8 @@ README 只记录当前环境下的代表性能，不记录 A/B、冻结基线或
 $env:WOLFSSL_ROOT = 'C:\path\to\wolfssl'
 go test -run TestInteropWolfSSL -v -count=10
 ```
+
+wolfSSL 支持目标功能时，还必须增加并运行真实 UDP 专项 benchmark，覆盖 go-dtls -> go-dtls、go-dtls -> wolfSSL、wolfSSL -> go-dtls 和 wolfSSL -> wolfSSL。将对端 commit/构建配置、workload、计时边界、五轮中位数及能力限制作为 pull request 验证证据；跨实现 benchmark 数据不写入 README。
 
 第三方实现未启用或不支持目标扩展时，应明确互通边界，不得把跳过测试表述为通过。
 

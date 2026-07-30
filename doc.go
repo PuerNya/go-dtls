@@ -71,6 +71,23 @@
 // performs an equivalent check. Encryption without authentication does not
 // prevent an active attacker from impersonating a peer.
 //
+// # Hybrid key exchange
+//
+// [Config.CurvePreferences] accepts the RFC 9954 hybrid groups
+// X25519MLKEM768, SecP256r1MLKEM768, and SecP384r1MLKEM1024 defined by
+// crypto/tls. X25519MLKEM768 is the recommended general-purpose choice.
+// Hybrid groups are explicit opt-in: an empty CurvePreferences keeps the
+// package default of X25519 followed by P-256.
+//
+// The wire encoding follows the current ECDHE-MLKEM profile: each key share
+// is a fixed-length concatenation with no inner length fields, and the shared
+// secret uses the same component order. If a client configures both a hybrid
+// group and its traditional ECDH component, its first ClientHello reuses that
+// ECDH key for the fallback share. A HelloRetryRequest causes the second
+// ClientHello to contain only the requested share. Large hybrid handshake
+// messages use the ordinary RFC 9147 fragmentation, ACK, and retransmission
+// machinery.
+//
 // # Encrypted ClientHello
 //
 // [Config.EncryptedClientHelloConfigList] enables [RFC 9849] Encrypted
@@ -242,5 +259,6 @@
 // [RFC 9849]: https://www.rfc-editor.org/rfc/rfc9849
 // [RFC 9853]: https://www.rfc-editor.org/rfc/rfc9853
 //
+// [RFC 9954]: https://www.rfc-editor.org/rfc/rfc9954
 // [RFC 9846]: https://www.rfc-editor.org/rfc/rfc9846
 package dtls13

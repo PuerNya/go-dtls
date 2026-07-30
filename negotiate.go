@@ -44,7 +44,7 @@ func selectKeyShare(preferences []tls.CurveID, shares []keyShareEntry) (keyShare
 	for _, preferred := range preferences {
 		for _, share := range shares {
 			if share.group == preferred {
-				if _, err := curveForID(share.group); err == nil {
+				if supportedKeyExchangeGroup(share.group) {
 					return share, nil
 				}
 			}

@@ -90,9 +90,9 @@ type Config struct {
 	// Empty selects AES-128-GCM, AES-256-GCM, ChaCha20-Poly1305, then AES-128-CCM.
 	// TLS_AES_128_CCM_8_SHA256 is intentionally not supported.
 	CipherSuites []uint16
-	// CurvePreferences contains the elliptic curves used for ephemeral key
-	// exchange, in preference order. Empty selects X25519 followed by P-256;
-	// those are the only currently supported groups.
+	// CurvePreferences contains key exchange groups in preference order. Empty
+	// selects X25519 followed by P-256. The ECDHE-MLKEM groups can be enabled
+	// explicitly; X25519MLKEM768 is the recommended hybrid choice.
 	CurvePreferences []tls.CurveID
 	// ExternalPSKs contains immutable externally provisioned PSKs used for
 	// certificate-free authentication. Create entries with [ImportExternalPSK]
@@ -379,7 +379,7 @@ func (c *Config) normalized() (*Config, error) {
 	}
 	seenGroups := make(map[tls.CurveID]bool, len(x.CurvePreferences))
 	for _, group := range x.CurvePreferences {
-		if _, err := curveForID(group); err != nil {
+		if !supportedKeyExchangeGroup(group) {
 			return nil, &ConfigError{"CurvePreferences contains an unsupported group"}
 		}
 		if seenGroups[group] {

@@ -2,6 +2,7 @@ package dtls13
 
 import (
 	"crypto/tls"
+	"slices"
 	"testing"
 )
 
@@ -57,11 +58,19 @@ func TestConfigRejectsInvalidCipherSuites(t *testing.T) {
 }
 
 func TestConfigRejectsUnsupportedCurve(t *testing.T) {
-	if _, err := (&Config{CurvePreferences: []tls.CurveID{tls.CurveP384}}).normalized(); err == nil {
+	if _, err := (&Config{CurvePreferences: []tls.CurveID{tls.CurveP521}}).normalized(); err == nil {
 		t.Fatal("accepted unsupported curve")
 	}
 	if _, err := (&Config{CurvePreferences: []tls.CurveID{tls.X25519, tls.X25519}}).normalized(); err == nil {
 		t.Fatal("accepted duplicate curve")
+	}
+}
+
+func TestConfigAcceptsHybridKeyExchangeGroups(t *testing.T) {
+	groups := []tls.CurveID{tls.X25519MLKEM768, tls.SecP256r1MLKEM768, tls.SecP384r1MLKEM1024, tls.CurveP384}
+	config, err := (&Config{CurvePreferences: groups}).normalized()
+	if err != nil || !slices.Equal(config.CurvePreferences, groups) {
+		t.Fatalf("hybrid groups = %v, %v", config.CurvePreferences, err)
 	}
 }
 func TestConfigRejectsSmallMTU(t *testing.T) {

@@ -24,6 +24,7 @@ const (
 	alertDecryptError          uint8 = 51
 	alertTooManyCIDsRequest    uint8 = 52
 	alertProtocolVersion       uint8 = 70
+	alertInternalError         uint8 = 80
 	alertUserCanceled          uint8 = 90
 	alertMissingExtension      uint8 = 109
 	alertUnsupportedExtension  uint8 = 110

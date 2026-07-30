@@ -9,7 +9,7 @@ Thank you for contributing to `go-dtls`. Changes must preserve DTLS 1.3 datagram
 - Go 1.26 or later.
 - golangci-lint v2.12.2, matching CI.
 - Windows race tests require Zig 0.17 and a working CGO toolchain.
-- wolfSSL is used only for optional third-party interoperability tests.
+- When a change affects a feature supported by wolfSSL, wolfSSL interoperability tests and focused benchmarks are required; other changes do not require wolfSSL.
 
 ## Required Checks
 
@@ -88,6 +88,8 @@ When the peer supports a feature, add bidirectional third-party end-to-end tests
 $env:WOLFSSL_ROOT = 'C:\path\to\wolfssl'
 go test -run TestInteropWolfSSL -v -count=10
 ```
+
+When wolfSSL supports the target feature, also add and run a focused real-UDP benchmark covering go-dtls -> go-dtls, go-dtls -> wolfSSL, wolfSSL -> go-dtls, and wolfSSL -> wolfSSL. Include the peer commit/build configuration, workload, timing boundaries, five-run median, and capability limits in the pull request validation evidence; do not put cross-implementation benchmark data in README files.
 
 When a third-party implementation does not enable or support the target extension, state the interoperability boundary explicitly. Do not report a skipped test as passing.
 

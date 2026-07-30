@@ -608,9 +608,13 @@ func (c *Conn) clientHandshake() error {
 	var transcriptDigest [maxSupportedHashSize]byte
 	key, err := generateEphemeralKey(c.config.CurvePreferences[0], c.config.Rand)
 	if err != nil {
-		return err
+		return alertError(alertInternalError, err)
 	}
-	hello := &clientHello{cipherSuites: append([]uint16(nil), c.config.CipherSuites...), keyShares: []keyShareEntry{{group: key.group, data: key.publicBytes()}}, supportedGroups: c.config.CurvePreferences, signatureSchemes: defaultSignatureSchemes(), serverName: c.config.ServerName, alpn: c.config.NextProtos, postHandshakeAuth: c.config.PostHandshakeAuth, recordSizeLimit: c.config.RecordSizeLimit, hasRecordSizeLimit: true}
+	keyShares := []keyShareEntry{{group: key.groupID(), data: key.publicBytes()}}
+	if group, public, ok := key.fallbackPublicBytes(); ok && slices.Contains(c.config.CurvePreferences, group) {
+		keyShares = append(keyShares, keyShareEntry{group: group, data: public})
+	}
+	hello := &clientHello{cipherSuites: append([]uint16(nil), c.config.CipherSuites...), keyShares: keyShares, supportedGroups: c.config.CurvePreferences, signatureSchemes: defaultSignatureSchemes(), serverName: c.config.ServerName, alpn: c.config.NextProtos, postHandshakeAuth: c.config.PostHandshakeAuth, recordSizeLimit: c.config.RecordSizeLimit, hasRecordSizeLimit: true}
 	if c.config.EnableCertificateCompression {
 		hello.certificateCompressionOffered = true
 	}
@@ -866,9 +870,9 @@ func (c *Conn) clientHandshake() error {
 			}
 			key, parseErr = generateEphemeralKey(hrr.selectedGroup, c.config.Rand)
 			if parseErr != nil {
-				return parseErr
+				return alertError(alertInternalError, parseErr)
 			}
-			hello.keyShares = []keyShareEntry{{group: key.group, data: key.publicBytes()}}
+			hello.keyShares = []keyShareEntry{{group: key.groupID(), data: key.publicBytes()}}
 		}
 		hello.cookie = hrr.cookie
 		if len(pskOffers) > 0 {
@@ -1021,6 +1025,9 @@ func (c *Conn) clientHandshake() error {
 		}
 		resumed = selectedOffer.session != nil
 		externalPSK = selectedOffer.external
+	}
+	if !slices.ContainsFunc(hello.keyShares, func(share keyShareEntry) bool { return share.group == sh.keyShare.group }) {
+		return alertError(alertIllegalParameter, &ProtocolError{"ServerHello selected an unoffered key share"})
 	}
 	shared, err := key.sharedSecret(sh.keyShare.group, sh.keyShare.data)
 	if err != nil {
@@ -1507,7 +1514,6 @@ func (c *Conn) serverHandshake() error {
 	var share keyShareEntry
 	var negotiated string
 	var shared []byte
-	var serverKey *ephemeralKey
 	var selectedPSKIdentity uint16
 
 	// A server may skip the cookie exchange for a resumed PSK handshake in a
@@ -1661,11 +1667,8 @@ func (c *Conn) serverHandshake() error {
 		c.localRecordSizeLimit = c.config.RecordSizeLimit
 		c.peerRecordSizeLimit = effectiveRecordSizeLimit(ch.recordSizeLimit)
 	}
-	serverKey, err = generateEphemeralKey(share.group, c.config.Rand)
-	if err != nil {
-		return err
-	}
-	shared, err = serverKey.sharedSecret(share.group, share.data)
+	var serverShare []byte
+	serverShare, shared, err = generateServerKeyShare(share.group, share.data, c.config.Rand)
 	if err != nil {
 		return err
 	}
@@ -1699,7 +1702,7 @@ func (c *Conn) serverHandshake() error {
 	}
 	// DTLS 1.3 does not use TLS compatibility mode; the server MUST NOT
 	// echo legacy_session_id (RFC 9147 section 5).
-	sh := &serverHello{cipherSuite: suite.id, keyShare: keyShareEntry{group: share.group, data: serverKey.publicBytes()}}
+	sh := &serverHello{cipherSuite: suite.id, keyShare: keyShareEntry{group: share.group, data: serverShare}}
 	if ch.hasConnectionID && c.config.ConnectionID != nil {
 		c.connectionIDNegotiated = true
 		c.sendConnectionID = append([]byte(nil), ch.connectionID...)
