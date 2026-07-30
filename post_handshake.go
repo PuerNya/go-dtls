@@ -16,6 +16,10 @@ type certificateRequestMessage struct {
 }
 
 func (m *certificateRequestMessage) marshal() ([]byte, error) {
+	return m.marshalWithCertificateCompression(nil)
+}
+
+func (m *certificateRequestMessage) marshalWithCertificateCompression(algorithms *certificateCompressionAlgorithms) ([]byte, error) {
 	schemes, err := marshalSignatureSchemes(m.signatureSchemes)
 	if err != nil {
 		return nil, err
@@ -27,7 +31,13 @@ func (m *certificateRequestMessage) marshal() ([]byte, error) {
 			return nil, err
 		}
 	}
-	exts, err := marshalExtensions(items, []uint16{extSignatureAlgorithms, extSignatureAlgorithmsCert})
+	if algorithms != nil {
+		items[extCompressCertificate], err = marshalCertificateCompressionAlgorithms(algorithms)
+		if err != nil {
+			return nil, err
+		}
+	}
+	exts, err := marshalExtensions(items, []uint16{extSignatureAlgorithms, extSignatureAlgorithmsCert, extCompressCertificate})
 	if err != nil {
 		return nil, err
 	}
@@ -37,33 +47,45 @@ func (m *certificateRequestMessage) marshal() ([]byte, error) {
 	return w.b, w.err
 }
 func parseCertificateRequest(b []byte) (*certificateRequestMessage, error) {
+	request, _, err := parseCertificateRequestWithCompression(b)
+	return request, err
+}
+
+func parseCertificateRequestWithCompression(b []byte) (*certificateRequestMessage, *certificateCompressionAlgorithms, error) {
 	p := wireParser{b: b}
 	m := &certificateRequestMessage{requestContext: append([]byte(nil), p.bytes8()...)}
 	var extensionStorage [4]orderedExtension
 	exts, err := parseOrderedExtensionsView(p.take(len(p.b)-p.off), extensionStorage[:0])
 	if err != nil {
-		return nil, err
+		return nil, nil, err
 	}
 	raw, ok := orderedExtensionValue(exts, extSignatureAlgorithms)
 	if !ok {
-		return nil, alertError(alertMissingExtension, &ProtocolError{"CertificateRequest has no signature_algorithms"})
+		return nil, nil, alertError(alertMissingExtension, &ProtocolError{"CertificateRequest has no signature_algorithms"})
 	}
 	m.signatureSchemes, err = parseSignatureSchemes(raw)
 	if err != nil {
-		return nil, err
+		return nil, nil, err
 	}
 	if raw, ok = orderedExtensionValue(exts, extSignatureAlgorithmsCert); ok {
 		m.certificateSignatureSchemes, err = parseSignatureSchemes(raw)
 		if err != nil {
-			return nil, err
+			return nil, nil, err
+		}
+	}
+	var certificateCompressionAlgorithms *certificateCompressionAlgorithms
+	if raw, ok = orderedExtensionValue(exts, extCompressCertificate); ok {
+		certificateCompressionAlgorithms, err = parseCertificateCompressionAlgorithms(raw)
+		if err != nil {
+			return nil, nil, err
 		}
 	}
 	for _, extension := range exts {
-		if extension.typ != extSignatureAlgorithms && extension.typ != extSignatureAlgorithmsCert && knownExtensionType(extension.typ) {
-			return nil, alertError(alertIllegalParameter, &ProtocolError{"recognized extension is not permitted in CertificateRequest"})
+		if extension.typ != extSignatureAlgorithms && extension.typ != extSignatureAlgorithmsCert && extension.typ != extCompressCertificate && knownExtensionType(extension.typ) {
+			return nil, nil, alertError(alertIllegalParameter, &ProtocolError{"recognized extension is not permitted in CertificateRequest"})
 		}
 	}
-	return m, nil
+	return m, certificateCompressionAlgorithms, nil
 }
 
 type keyUpdateMessage struct{ requestUpdate bool }

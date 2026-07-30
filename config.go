@@ -115,6 +115,16 @@ type Config struct {
 	// This limit is independent of MTU and does not include record headers or
 	// AEAD expansion.
 	RecordSizeLimit uint16
+	// EnableCertificateCompression enables RFC 8879 certificate compression
+	// with the standard zlib algorithm. A client advertises support in its
+	// ClientHello, and a server advertises support for client certificates in
+	// CertificateRequest. A Certificate is compressed only after the peer
+	// advertises zlib and when the complete CompressedCertificate message is
+	// smaller than the original.
+	//
+	// The zero value is false. Decompressed messages remain subject to
+	// MaxHandshakeMessage.
+	EnableCertificateCompression bool
 	// FlightInterval is the initial handshake and post-handshake retransmission
 	// timeout. Zero selects one second.
 	FlightInterval time.Duration
@@ -213,7 +223,12 @@ type Config struct {
 	// for one connection. It must be between 1 and 255. Zero selects 8.
 	MaxConnectionIDs int
 
-	cookieProtector *cookieProtector
+	state *configState
+}
+
+type configState struct {
+	cookieProtector
+	certificateCompression *certificateCompressionCache
 }
 
 func (c *Config) clientConnectionIDOffer() ([]byte, bool) {
@@ -227,19 +242,22 @@ func (c *Config) clientConnectionIDOffer() ([]byte, bool) {
 }
 
 func ensureCookieProtector(config *Config) error {
-	if config.cookieProtector != nil {
+	state := ensureConfigState(config)
+	protector := &state.cookieProtector
+	protector.mu.Lock()
+	defer protector.mu.Unlock()
+	if len(protector.current.secret) >= 32 {
 		return nil
 	}
 	secret := make([]byte, 32)
 	if _, err := io.ReadFull(config.Rand, secret); err != nil {
 		return err
 	}
-	protector, err := newCookieProtector(1, secret, time.Minute, config.Time)
-	if err != nil {
-		return err
-	}
+	protector.current = cookieKey{id: 1, secret: secret}
+	protector.lifetime = time.Minute
+	protector.now = config.Time
 	protector.rand = config.Rand
-	config.cookieProtector = protector
+	protector.rotated = config.Time()
 	return nil
 }
 
@@ -261,7 +279,13 @@ func (c *Config) normalized() (*Config, error) {
 	if c == nil {
 		c = &Config{}
 	}
-	x := c.Clone()
+	var x *Config
+	if c.EnableCertificateCompression {
+		c.ensureCertificateCompressionCache()
+		x = cloneConfigWithStateLock(c)
+	} else {
+		x = cloneConfig(c)
+	}
 	if x.Rand == nil {
 		x.Rand = rand.Reader
 	}
@@ -391,6 +415,13 @@ func (c *Config) Clone() *Config {
 	if c == nil {
 		return nil
 	}
+	if c.EnableCertificateCompression {
+		return cloneConfigWithStateLock(c)
+	}
+	return cloneConfig(c)
+}
+
+func cloneConfig(c *Config) *Config {
 	x := *c
 	x.Certificates = append([]tls.Certificate(nil), c.Certificates...)
 	x.NextProtos = append([]string(nil), c.NextProtos...)
@@ -400,4 +431,11 @@ func (c *Config) Clone() *Config {
 		x.ConnectionID = append([]byte{}, c.ConnectionID...)
 	}
 	return &x
+}
+
+func cloneConfigWithStateLock(c *Config) *Config {
+	configStateMu.Lock()
+	x := cloneConfig(c)
+	configStateMu.Unlock()
+	return x
 }

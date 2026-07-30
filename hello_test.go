@@ -608,22 +608,23 @@ func TestSecondClientHelloAllowsOnlyHRRChanges(t *testing.T) {
 
 func TestSecondClientHelloRejectsChangedInvariantFields(t *testing.T) {
 	initial := &clientHello{
-		sessionID:                   []byte{1},
-		cipherSuites:                []uint16{TLS_AES_128_GCM_SHA256},
-		keyShares:                   []keyShareEntry{{group: tls.X25519, data: []byte{2}}},
-		signatureSchemes:            []tls.SignatureScheme{tls.Ed25519},
-		certificateSignatureSchemes: []tls.SignatureScheme{tls.PSSWithSHA256},
-		supportedGroups:             []tls.CurveID{tls.X25519},
-		serverName:                  "server.test",
-		alpn:                        []string{"coap"},
-		pskDHE:                      true,
-		connectionID:                []byte{3},
-		hasConnectionID:             true,
-		returnRoutability:           true,
-		postHandshakeAuth:           true,
-		recordSizeLimit:             512,
-		hasRecordSizeLimit:          true,
-		unknownExtensions:           map[uint16][]byte{0xffa5: {4}},
+		sessionID:                     []byte{1},
+		cipherSuites:                  []uint16{TLS_AES_128_GCM_SHA256},
+		keyShares:                     []keyShareEntry{{group: tls.X25519, data: []byte{2}}},
+		signatureSchemes:              []tls.SignatureScheme{tls.Ed25519},
+		certificateSignatureSchemes:   []tls.SignatureScheme{tls.PSSWithSHA256},
+		supportedGroups:               []tls.CurveID{tls.X25519},
+		serverName:                    "server.test",
+		alpn:                          []string{"coap"},
+		pskDHE:                        true,
+		connectionID:                  []byte{3},
+		hasConnectionID:               true,
+		returnRoutability:             true,
+		postHandshakeAuth:             true,
+		certificateCompressionOffered: true,
+		recordSizeLimit:               512,
+		hasRecordSizeLimit:            true,
+		unknownExtensions:             map[uint16][]byte{0xffa5: {4}},
 	}
 	initial.random[0] = 5
 	for _, test := range []struct {
@@ -645,6 +646,10 @@ func TestSecondClientHelloRejectsChangedInvariantFields(t *testing.T) {
 		{"connection-id-presence", func(h *clientHello) { h.hasConnectionID = false }},
 		{"return-routability", func(h *clientHello) { h.returnRoutability = false }},
 		{"post-handshake-auth", func(h *clientHello) { h.postHandshakeAuth = false }},
+		{"certificate-compression", func(h *clientHello) {
+			h.certificateCompressionOffered = true
+			h.unknownExtensions = map[uint16][]byte{extCompressCertificate: {2, 0, 2}}
+		}},
 		{"record-size-limit", func(h *clientHello) { h.recordSizeLimit++ }},
 		{"record-size-limit-presence", func(h *clientHello) { h.hasRecordSizeLimit = false }},
 		{"unknown-extension", func(h *clientHello) { h.unknownExtensions = map[uint16][]byte{0xffa5: {9}} }},

@@ -71,6 +71,21 @@
 // performs an equivalent check. Encryption without authentication does not
 // prevent an active attacker from impersonating a peer.
 //
+// # Certificate compression
+//
+// [Config.EnableCertificateCompression] explicitly enables [RFC 8879] with
+// the standard zlib algorithm. A client advertises zlib in ClientHello for the
+// server certificate, while a server advertises zlib in CertificateRequest for
+// client certificates sent during mTLS or post-handshake authentication.
+// Enable the option on both endpoints to allow compression in both directions.
+//
+// The package sends CompressedCertificate only when the complete compressed
+// message is smaller than Certificate and otherwise uses the uncompressed
+// message. The peer's advertised algorithm is mandatory, the compressed wire
+// message is included in the handshake transcript, and both the declared
+// uncompressed length and actual decompression output are bounded by
+// [Config.MaxHandshakeMessage].
+//
 // # Session resumption and 0-RTT
 //
 // Set [Config.ClientSessionCache] to retain NewSessionTicket state and enable
@@ -157,6 +172,7 @@
 // [RFC 9147]: https://www.rfc-editor.org/rfc/rfc9147
 // [RFC 8446]: https://www.rfc-editor.org/rfc/rfc8446
 // [RFC 8449]: https://www.rfc-editor.org/rfc/rfc8449
+// [RFC 8879]: https://www.rfc-editor.org/rfc/rfc8879
 // [RFC 9146]: https://www.rfc-editor.org/rfc/rfc9146
 // [RFC 9853]: https://www.rfc-editor.org/rfc/rfc9853
 //

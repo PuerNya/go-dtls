@@ -223,6 +223,7 @@ if _, err := conn.WriteDatagram(payload); errors.Is(err, dtls13.ErrDatagramTooLa
 | 0-RTT | `WriteEarlyData`, `MaxEarlyData`, `EarlyDataReplayCache` | Доступно только для возобновленных соединений; вызывающий код обязан обработать `ErrEarlyDataUnavailable` и `ErrEarlyDataRejected`, а early data должны допускать повтор |
 | KeyUpdate | `SendKeyUpdate(requestPeer)` | Надежно отправляется, эпоха отправки переключается после ACK; также запускается автоматически при приближении к пределу использования AEAD |
 | CID / проверка пути | `ConnectionID`, `GetConnectionID`, `SendNewConnectionIDs`, `RequestConnectionIDs`, `UseNextConnectionID` | Поддерживает согласование и обновление CID по RFC 9146 и по умолчанию согласует RRC по RFC 9853; Listener меняет привязку только после проверки нового пути |
+| Сжатие сертификатов | `EnableCertificateCompression` | Явно включает zlib по RFC 8879 для сертификатов сервера и клиентских сертификатов mTLS/PHA; если сжатое сообщение не меньше, отправляется обычный Certificate |
 | Аутентификация клиента в рукопожатии | `ClientAuth`, `ClientCAs`, `Certificates` | Использует политики клиентских сертификатов из `crypto/tls` |
 | Аутентификация клиента после рукопожатия | `PostHandshakeAuth`, `RequestClientCertificate` | Сначала клиент объявляет поддержку, затем сервер инициирует PHA |
 | Exporter | `ConnectionState().ExportKeyingMaterial` | Экспортирует материал RFC 8446, раздел 7.5, с меткой DTLS `dtls13` |
@@ -252,6 +253,7 @@ if _, err := conn.WriteDatagram(payload); errors.Is(err, dtls13.ErrDatagramTooLa
 | `MTU` | Полезная нагрузка UDP 1200 байт; минимум 256 |
 | `IgnorePathMTU` | По умолчанию `false`; только Application Data пропускает внутреннюю проверку PMTU, рукопожатие не меняется |
 | `RecordSizeLimit` | `0` выбирает значение по умолчанию `2^14+1`; диапазон `64..2^14+1` задает максимальный полный `DTLSInnerPlaintext`, принимаемый узлом, и объявляется по RFC 8449 независимо от PMTU |
+| `EnableCertificateCompression` | По умолчанию `false`; включает стандартный zlib по RFC 8879 и отправляет `CompressedCertificate`, только если узел предложил zlib и полное сжатое сообщение меньше; выход ограничен `MaxHandshakeMessage` |
 | `FlightInterval` | Начальный интервал повторной передачи рукопожатия — одна секунда |
 | `MaxFlightInterval` | Максимальная экспоненциальная задержка — 60 секунд |
 | `HandshakeTimeout` | 30 секунд |
@@ -265,6 +267,12 @@ if _, err := conn.WriteDatagram(payload); errors.Is(err, dtls13.ErrDatagramTooLa
 | `MaxEarlyData` | 0, то есть 0-RTT по умолчанию выключен |
 | `MaxConnectionIDs` | 8 CID в каждом направлении |
 | `DisableReturnRoutabilityCheck` | По умолчанию `false`; RRC отключается только при эквивалентной проверке адреса приложением |
+
+### Сжатие сертификатов
+
+При `EnableCertificateCompression: true` клиент предлагает zlib в ClientHello, позволяя серверу сжать свой сертификат. Сервер предлагает zlib в CertificateRequest, позволяя включившему параметр клиенту сжать сертификат mTLS или PHA. Для сжатия сертификатов в обоих направлениях включите параметр на обоих узлах.
+
+Реализация использует только zlib из стандартной библиотеки Go. `CompressedCertificate` отправляется лишь тогда, когда полное сообщение меньше обычного Certificate; иначе выполняется безопасный откат. Семантика фрагментации рукопожатия, ACK, повторной передачи, HRR, возобновления и `record_size_limit` не меняется. Заявленная несжатая длина и фактический выход ограничены `MaxHandshakeMessage`.
 
 ### Быстрое возобновление mTLS
 
@@ -313,6 +321,7 @@ Ticket без идентичности клиента используется �
 | [RFC 9147](https://www.rfc-editor.org/rfc/rfc9147) | Реализовано | Record, Handshake, эпохи, ACK, KeyUpdate, обновление CID, Application Data и применимые требования безопасности; рекомендуемое поведение реализовано для включенных возможностей |
 | [RFC 9146](https://www.rfc-editor.org/rfc/rfc9146) | Реализовано | Согласование CID, направленные CID, обновления, маршрутизация Listener, обработка ошибок и сохранение адреса; детали только для DTLS 1.2 неприменимы |
 | [RFC 8449](https://www.rfc-editor.org/rfc/rfc8449) | Реализовано | Согласование CH/EE по умолчанию, направленные ограничения, минимум 64, фатальный `record_overflow`, HRR, возобновление, 0-RTT, KeyUpdate, ACK и независимость от PMTU |
+| [RFC 8879](https://www.rfc-editor.org/rfc/rfc8879) | Реализовано | Явно включаемый zlib; направленное согласование ClientHello/CertificateRequest, сертификаты сервера и клиента mTLS/PHA, transcript CompressedCertificate, безопасный откат и ограничения распаковки |
 | [RFC 9846](https://www.rfc-editor.org/rfc/rfc9846) | Реализовано для включенных возможностей | `user_canceled(90)` игнорируется с продолжением ожидания `close_notify` во время рукопожатия, ожидания финального ACK и post-handshake; локальная криптографическая ошибка без более точного предупреждения отправляет `general_error(117)`, а конкретное предупреждение протокола всегда имеет приоритет |
 | [RFC 9325](https://www.rfc-editor.org/rfc/rfc9325) | Частично | Покрыты PFS, AEAD, SNI/ALPN, tickets, 0-RTT, KeyUpdate и ограничения сертификатов; OCSP stapling отсутствует, а модуль намеренно не реализует поддержку DTLS 1.2, требуемую этим BCP |
 | [RFC 9525](https://www.rfc-editor.org/rfc/rfc9525) | Частично | Go X.509 и `ServerName` покрывают DNS-ID/IP-ID; URI-ID, SRV-ID и прикладные service identity делегированы callback-функциям проверки вызывающего кода |
@@ -360,12 +369,13 @@ Ticket без идентичности клиента используется �
 | --- | --- | --- |
 | [RFC 9846](https://www.rfc-editor.org/rfc/rfc9846) | KeyShare, PSK/HRR, NST, пределы AEAD, KeyUpdate, предупреждения и границы векторов TLS 1.3 | Реализовано для включенных возможностей; возобновление mTLS сохраняет состояние аутентификации, политику/CA/срок действия и общий срок аутентификации; семантика `user_canceled` и `general_error` описана в общем статусе |
 | [RFC 8449](https://www.rfc-editor.org/rfc/rfc8449) | TLS/DTLS `record_size_limit` | Клиент объявляет расширение по умолчанию; сервер отвечает только на предложение. Отправка следует ограничению узла, прием — локальному ограничению, отсутствие расширения восстанавливает максимум протокола, а PMTU остается независимой нижней границей |
+| [RFC 8879](https://www.rfc-editor.org/rfc/rfc8879) | Сжатие сертификатов TLS/DTLS | Явно включаемый стандартный zlib; реализованы согласование CH/CR, сертификаты сервера и клиента, HRR, mTLS, PHA, фрагментация/повторная передача, transcript и ограниченная распаковка; если сжатие не дает выигрыша, используется обычный Certificate |
 | [RFC 9325](https://www.rfc-editor.org/rfc/rfc9325) | BCP безопасности развертывания TLS/DTLS | Tickets используют AES-256-GCM и имеют срок от одной секунды до семи дней; ограничения RSA 2048 бит и сертификатов SHA-1/MD5 применяются к полному рукопожатию, корням доверия и возобновлению; исключения OCSP и DTLS 1.2 описаны в общем статусе |
 | [RFC 9525](https://www.rfc-editor.org/rfc/rfc9525) | Проверка идентичности службы | DNS-ID/IP-ID строго проверяются по умолчанию; семантику приложения для других reference identifier реализует вызывающий код |
 | [RFC 9853](https://www.rfc-editor.org/rfc/rfc9853) | Return Routability Check при смене адреса CID | Реализовано; enhanced check по умолчанию, basic check после отказа старого пути, смена привязки только после проверки, отдельное ограничение усиления пути-кандидата и проверка с резервным CID при его наличии |
 | [RFC 8701](https://www.rfc-editor.org/rfc/rfc8701) | GREASE против окостенения протокола | Получатель допускает корректные неизвестные значения с сохранением инвариантов HRR; отправитель активно GREASE не создает |
 
-Не реализованы необязательные расширения RFC 8879 Certificate Compression, RFC 9149 Ticket Requests, RFC 9257/9258 external PSK, RFC 9849 ECH и RFC 9954 Hybrid Key Exchange.
+Не реализованы необязательные расширения RFC 9149 Ticket Requests, RFC 9257/9258 external PSK, RFC 9849 ECH и RFC 9954 Hybrid Key Exchange.
 
 ### Границы реализации
 
@@ -376,7 +386,7 @@ Ticket без идентичности клиента используется �
 - Отправитель использует допустимый режим «одна запись на UDP-дейтаграмму» и не предоставляет необязательный API агрегации нескольких записей.
 - Параллельные множественные запросы NewSessionTicket или PHA не предоставляются; RFC разрешает, но не требует эту возможность.
 - Автоматическая смена привязки RRC требует транспорт, принимающий данные от разных источников и способный отправлять выбранному адресу. Стандартный Listener это поддерживает; подключенные UDP-клиенты ограничены фильтрацией узла операционной системой. Пустой CID не позволяет однозначно маршрутизировать разные пятиэлементные кортежи.
-- Сборка wolfSSL 5.9.2 для тестов совместимости не включает CID, 0-RTT, session tickets или `SESSION_CERTS`; поэтому сторонняя матрица не содержит RRC и возобновление mTLS.
+- Сборка wolfSSL 5.9.2 для тестов совместимости не реализует RFC 8879 и не включает CID, 0-RTT, session tickets или `SESSION_CERTS`. Тесты сжатия сертификатов подтверждают только безопасное игнорирование расширения и откат к обычному Certificate; сторонняя матрица не содержит согласование сжатия, RRC и возобновление mTLS.
 
 ## Тесты производительности
 
@@ -384,9 +394,12 @@ Ticket без идентичности клиента используется �
 
 | Сценарий | Репрезентативный результат |
 | --- | --- |
-| Полное сертификатное рукопожатие и закрытие, `BenchmarkConnectionHandshakeLifecycle` | Около `612.0 us/op`, `99757 B/op`, `762 allocs/op` |
-| Полный mTLS, `BenchmarkMutualTLSHandshakeLifecycle/Full` | Около `854.6 us/op`, `116144 B/op`, `977 allocs/op` |
-| Возобновленный mTLS, `BenchmarkMutualTLSHandshakeLifecycle/Resumed` | Около `442.9 us/op`, `115417 B/op`, `802 allocs/op` |
+| Полное сертификатное рукопожатие и закрытие, `BenchmarkConnectionHandshakeLifecycle` | Около `625.9 us/op`, `99725 B/op`, `761 allocs/op` |
+| Полный mTLS, `BenchmarkMutualTLSHandshakeLifecycle/Full` | Около `915.1 us/op`, `116112 B/op`, `976 allocs/op` |
+| Возобновленный mTLS, `BenchmarkMutualTLSHandshakeLifecycle/Resumed` | Около `459.9 us/op`, `115250 B/op`, `800-801 allocs/op` |
+| Рукопожатие RFC 8879 zlib с сертификатом сервера, цепочка из четырех сертификатов | Около `1.049 ms/op`, `123323 B/op`, `1022 allocs/op` |
+| Полный mTLS RFC 8879 zlib, цепочки из четырех сертификатов в обоих направлениях | Около `1.746 ms/op`, `160719 B/op`, `1469 allocs/op` |
+| Сжатие / распаковка RFC 8879 zlib | Около `7.2-7.7 us/op`, `4 allocs/op` / `6.3-6.9 us/op`, `4290-4300 B/op`, `6 allocs/op` |
 | Seal AES-128-GCM для 1200 B | Около 1.86 GB/s, 1 alloc/op |
 | In-place round trip AES-128-GCM для 1200 B | Около 1.05 GB/s, 1 alloc/op |
 | Классификация ошибки неаутентифицированной записи | Около 12.4-13.7 ns/op, 0 allocs/op |
@@ -399,7 +412,7 @@ Ticket без идентичности клиента используется �
 | Создание защищенного flight 4 KiB / MTU 1200 | Около 2.89 us/op, 5616 B/op, 6 allocs/op |
 | Создание открытого flight 4 KiB / MTU 1200 | Около 2.15-2.58 us/op, 5040 B/op, 9 allocs/op |
 
-Результаты полного соединения измерены с `-cpu=1` и 500 итерациями на запуск.
+Результаты полного соединения — медианы повторных запусков с `-cpu=1`.
 
 Запуск всех тестов производительности:
 
@@ -412,6 +425,7 @@ go test -run '^$' -bench . -benchmem
 ```sh
 go test -run '^$' -bench '^BenchmarkConnectionHandshakeLifecycle$' -benchmem -benchtime=2000x -cpu=1
 go test -run '^$' -bench '^BenchmarkMutualTLSHandshakeLifecycle/(Full|Resumed)$' -benchmem -count=10
+go test -run '^$' -bench '^BenchmarkCertificateCompression' -benchmem
 go test -run '^$' -bench '^BenchmarkProtectedRecord(Seal|RoundTripInPlace)$' -benchmem -count=5
 ```
 
@@ -421,6 +435,7 @@ go test -run '^$' -bench '^BenchmarkProtectedRecord(Seal|RoundTripInPlace)$' -be
 
 - Тесты политики сертификатов RFC 9325 охватывают конфигурацию сервера, прием клиентом, самоподписанные сертификаты, неотправленные корни доверия, `InsecureSkipVerify`, обычное и mTLS-возобновление, а также сравнение с поведением `crypto/x509` для корней доверия RSA 1024 бит/SHA-1.
 - Тесты RFC 8449 охватывают CH/EE, минимум 64, направленные ограничения, недопустимые значения и сочетания расширений, аутентифицированное превышение, HRR, возобновление, 0-RTT, KeyUpdate, ACK, независимость от PMTU и совместимость со сторонними узлами без согласования расширения.
+- Тесты RFC 8879 охватывают согласование ClientHello/CertificateRequest, zlib, CompressedCertificate, transcript, недопустимые алгоритмы/потоки/длины, ограничения распаковки, откат к обычному Certificate, HRR, возобновление, mTLS/PHA, пределы записей, фрагментацию/повторную передачу, слабые сети, жизненный цикл ресурсов и безопасный откат со сторонними узлами без поддержки расширения.
 - Тесты слабой сети охватывают двунаправленные потери, задержку, изменение порядка и дублирование, включая комбинации CH/SH/Finished/ACK/HRR/возобновления mTLS.
 - Тесты mTLS охватывают полное рукопожатие, возобновление PSK, 0-RTT, откат политики/CA и срок аутентификации обновленного ticket.
 - Тесты предупреждений RFC 9846 охватывают рукопожатие, ожидание финального ACK, изменение порядка после рукопожатия, `close_notify` и локальные криптографические ошибки.

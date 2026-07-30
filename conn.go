@@ -963,7 +963,7 @@ func (c *Conn) dispatchDatagramFrom(datagram []byte, from net.Addr) error {
 						}
 						continue
 					}
-					if !c.isClient && (fragment.typ == handshakeTypeCertificate || fragment.typ == handshakeTypeCertificateVerify || fragment.typ == handshakeTypeFinished) {
+					if !c.isClient && (fragment.typ == handshakeTypeCertificate || fragment.typ == handshakeTypeCompressedCertificate || fragment.typ == handshakeTypeCertificateVerify || fragment.typ == handshakeTypeFinished) {
 						if err := c.processPostHandshakeAuthFragment(fragment, number); err != nil {
 							return err
 						}

@@ -44,14 +44,18 @@ func unusedUDPPort(t *testing.T) int {
 }
 
 func TestInteropWolfSSLServer(t *testing.T) {
-	testInteropWolfSSLServer(t, "", nil)
+	testInteropWolfSSLServer(t, "", nil, false)
 }
 
 func TestInteropWolfSSLServerAES128CCM(t *testing.T) {
-	testInteropWolfSSLServer(t, "TLS13-AES128-CCM-SHA256", []uint16{TLS_AES_128_CCM_SHA256})
+	testInteropWolfSSLServer(t, "TLS13-AES128-CCM-SHA256", []uint16{TLS_AES_128_CCM_SHA256}, false)
 }
 
-func testInteropWolfSSLServer(t *testing.T, cipherName string, suites []uint16) {
+func TestInteropWolfSSLServerCertificateCompressionOffer(t *testing.T) {
+	testInteropWolfSSLServer(t, "", nil, true)
+}
+
+func testInteropWolfSSLServer(t *testing.T, cipherName string, suites []uint16, certificateCompression bool) {
 	t.Helper()
 	root, serverPath, _ := wolfSSLPaths(t)
 	port := unusedUDPPort(t)
@@ -79,7 +83,7 @@ func testInteropWolfSSLServer(t *testing.T, cipherName string, suites []uint16) 
 
 	dialer := &net.Dialer{Timeout: 5 * time.Second}
 	conn, err := DialWithDialer(dialer, "udp4", fmt.Sprintf("127.0.0.1:%d", port), &Config{
-		InsecureSkipVerify: true, CipherSuites: suites, HandshakeTimeout: 5 * time.Second,
+		InsecureSkipVerify: true, CipherSuites: suites, EnableCertificateCompression: certificateCompression, HandshakeTimeout: 5 * time.Second,
 	})
 	if err != nil {
 		t.Fatalf("Go client to wolfSSL 5.9.2 server: %v\n%s", err, output.String())
@@ -101,14 +105,18 @@ func testInteropWolfSSLServer(t *testing.T, cipherName string, suites []uint16) 
 }
 
 func TestInteropWolfSSLClient(t *testing.T) {
-	testInteropWolfSSLClient(t, "", nil)
+	testInteropWolfSSLClient(t, "", nil, false)
 }
 
 func TestInteropWolfSSLClientAES128CCM(t *testing.T) {
-	testInteropWolfSSLClient(t, "TLS13-AES128-CCM-SHA256", []uint16{TLS_AES_128_CCM_SHA256})
+	testInteropWolfSSLClient(t, "TLS13-AES128-CCM-SHA256", []uint16{TLS_AES_128_CCM_SHA256}, false)
 }
 
-func testInteropWolfSSLClient(t *testing.T, cipherName string, suites []uint16) {
+func TestInteropWolfSSLClientCertificateCompressionFallback(t *testing.T) {
+	testInteropWolfSSLClient(t, "", nil, true)
+}
+
+func testInteropWolfSSLClient(t *testing.T, cipherName string, suites []uint16, certificateCompression bool) {
 	t.Helper()
 	root, _, clientPath := wolfSSLPaths(t)
 	certificate, err := tls.LoadX509KeyPair(filepath.Join(root, "certs", "server-cert.pem"), filepath.Join(root, "certs", "server-key.pem"))
@@ -116,7 +124,7 @@ func testInteropWolfSSLClient(t *testing.T, cipherName string, suites []uint16) 
 		t.Fatal(err)
 	}
 	listener, err := Listen("udp4", "127.0.0.1:0", &Config{
-		Certificates: []tls.Certificate{certificate}, CipherSuites: suites, HandshakeTimeout: 5 * time.Second, SessionTicketsDisabled: true,
+		Certificates: []tls.Certificate{certificate}, CipherSuites: suites, EnableCertificateCompression: certificateCompression, HandshakeTimeout: 5 * time.Second, SessionTicketsDisabled: true,
 	})
 	if err != nil {
 		t.Fatal(err)

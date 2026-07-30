@@ -72,6 +72,7 @@ GitHub Actions 会在每次 push 和 pull request 上分别执行四个必需检
 go test -run '^$' -bench . -benchmem
 go test -run '^$' -bench '^BenchmarkConnectionHandshakeLifecycle$' -benchmem -benchtime=2000x -cpu=1
 go test -run '^$' -bench '^BenchmarkMutualTLSHandshakeLifecycle/(Full|Resumed)$' -benchmem -count=10
+go test -run '^$' -bench '^BenchmarkCertificateCompression' -benchmem
 go test -run '^$' -bench '^BenchmarkProtectedRecord(Seal|RoundTripInPlace)$' -benchmem -count=5
 ```
 

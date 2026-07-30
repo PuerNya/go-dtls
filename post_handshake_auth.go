@@ -13,25 +13,26 @@ import (
 )
 
 type postHandshakeAuthState struct {
-	context                 []byte
-	transcript              *transcriptHash
-	inbox                   *handshakeInbox
-	peerCertificates        []*x509.Certificate
-	verifiedChains          [][]*x509.Certificate
-	sawCertificate          bool
-	verifiedSignature       bool
-	done                    chan error
-	startSequence           uint16
-	hasStartSequence        bool
-	signatureSchemes        []tls.SignatureScheme
-	certificateSchemes      []tls.SignatureScheme
-	stage                   uint8
-	responseEpoch           uint64
-	hasResponseEpoch        bool
-	firstResponseRecord     recordNumber
-	lastResponseRecord      recordNumber
-	pendingApplication      []pendingPostAuthApplication
-	pendingApplicationBytes int
+	context                          []byte
+	transcript                       *transcriptHash
+	inbox                            *handshakeInbox
+	peerCertificates                 []*x509.Certificate
+	verifiedChains                   [][]*x509.Certificate
+	sawCertificate                   bool
+	verifiedSignature                bool
+	done                             chan error
+	startSequence                    uint16
+	hasStartSequence                 bool
+	signatureSchemes                 []tls.SignatureScheme
+	certificateSchemes               []tls.SignatureScheme
+	certificateCompressionAlgorithms *certificateCompressionAlgorithms
+	stage                            uint8
+	responseEpoch                    uint64
+	hasResponseEpoch                 bool
+	firstResponseRecord              recordNumber
+	lastResponseRecord               recordNumber
+	pendingApplication               []pendingPostAuthApplication
+	pendingApplicationBytes          int
 }
 
 type pendingPostAuthApplication struct {
@@ -90,7 +91,11 @@ func (c *Conn) RequestClientCertificate(ctx context.Context) error {
 		return err
 	}
 	request := &certificateRequestMessage{requestContext: requestContext, signatureSchemes: defaultSignatureSchemes()}
-	body, err := request.marshal()
+	var certificateCompressionAlgorithms *certificateCompressionAlgorithms
+	if c.config.EnableCertificateCompression {
+		certificateCompressionAlgorithms = &certificateCompressionZlibOffer
+	}
+	body, err := request.marshalWithCertificateCompression(certificateCompressionAlgorithms)
 	if err != nil {
 		return err
 	}
@@ -138,6 +143,7 @@ func (c *Conn) RequestClientCertificate(ctx context.Context) error {
 	if len(state.certificateSchemes) == 0 {
 		state.certificateSchemes = append([]tls.SignatureScheme(nil), request.signatureSchemes...)
 	}
+	state.certificateCompressionAlgorithms = certificateCompressionAlgorithms
 	c.postHandshakeAuthState = state
 	c.clientAuthRequestFlight = flight
 	c.writeMu.Unlock()
@@ -152,7 +158,7 @@ func (c *Conn) RequestClientCertificate(ctx context.Context) error {
 }
 
 func (c *Conn) processPostHandshakeCertificateRequest(sequence uint16, body []byte) error {
-	request, err := parseCertificateRequest(body)
+	request, certificateCompressionAlgorithms, err := parseCertificateRequestWithCompression(body)
 	if err != nil {
 		return err
 	}
@@ -203,8 +209,12 @@ func (c *Conn) processPostHandshakeCertificateRequest(sequence uint16, body []by
 		return err
 	}
 	next := c.sendingTraffic.messageSequence
-	messages := []handshakeMessage{{typ: handshakeTypeCertificate, sequence: next, body: certificateBody}}
-	if err = transcript.add(handshakeTypeCertificate, next, certificateBody); err != nil {
+	certificateType, certificateBody, err := certificateHandshakeMessage(certificateBody, certificateCompressionAlgorithms, c.config.EnableCertificateCompression, nil)
+	if err != nil {
+		return err
+	}
+	messages := []handshakeMessage{{typ: certificateType, sequence: next, body: certificateBody}}
+	if err = transcript.add(certificateType, next, certificateBody); err != nil {
 		return err
 	}
 	next++
@@ -264,7 +274,7 @@ func (c *Conn) processPostHandshakeAuthFragment(fragment handshakeFragment, numb
 	if c.isClient || state == nil {
 		return alertError(alertUnexpectedMessage, &ProtocolError{"unexpected post-handshake authentication response"})
 	}
-	if !state.hasStartSequence && fragment.typ == handshakeTypeCertificate {
+	if !state.hasStartSequence && (fragment.typ == handshakeTypeCertificate || fragment.typ == handshakeTypeCompressedCertificate) {
 		if fragment.messageSequence <= c.finishedMessageSequence {
 			return alertError(alertUnexpectedMessage, &ProtocolError{"post-handshake authentication reused a handshake message sequence"})
 		}
@@ -311,11 +321,11 @@ func (c *Conn) processPostHandshakeAuthFragment(fragment handshakeFragment, numb
 
 func (c *Conn) processPostHandshakeAuthMessageLocked(state *postHandshakeAuthState, message completedHandshake) error {
 	switch message.typ {
-	case handshakeTypeCertificate:
+	case handshakeTypeCertificate, handshakeTypeCompressedCertificate:
 		if state.stage != postAuthExpectCertificate {
 			return alertError(alertUnexpectedMessage, &ProtocolError{"unexpected post-handshake Certificate"})
 		}
-		certificate, err := parseCertificateMessage(message.body, c.config.MaxHandshakeMessage)
+		certificate, err := parseCertificateHandshakeMessage(message.typ, message.body, state.certificateCompressionAlgorithms, c.config.MaxHandshakeMessage)
 		if err != nil {
 			return err
 		}

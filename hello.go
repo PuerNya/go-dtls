@@ -14,6 +14,7 @@ const (
 	extSignatureAlgorithms     uint16 = 13
 	extALPN                    uint16 = 16
 	extPadding                 uint16 = 21
+	extCompressCertificate     uint16 = 27
 	extRecordSizeLimit         uint16 = 28
 	extPreSharedKey            uint16 = 41
 	extCookie                  uint16 = 44
@@ -27,7 +28,7 @@ const (
 func knownExtensionType(typ uint16) bool {
 	switch typ {
 	case extServerName, extSupportedGroups, extSupportedVersions, extKeyShare,
-		extSignatureAlgorithms, extALPN, extPadding, extRecordSizeLimit, extPreSharedKey, extEarlyData,
+		extSignatureAlgorithms, extALPN, extPadding, extCompressCertificate, extRecordSizeLimit, extPreSharedKey, extEarlyData,
 		extCookie, extPSKKeyExchangeModes, extPostHandshakeAuth,
 		extSignatureAlgorithmsCert, extConnectionID, extReturnRoutability:
 		return true
@@ -45,32 +46,33 @@ type pskIdentityEntry struct {
 	obfuscatedAge uint32
 }
 type clientHello struct {
-	random                      [32]byte
-	sessionID                   []byte
-	legacyCookie                []byte
-	cookie                      []byte
-	cipherSuites                []uint16
-	keyShares                   []keyShareEntry
-	keyShareStorage             [1]keyShareEntry
-	signatureSchemes            []tls.SignatureScheme
-	certificateSignatureSchemes []tls.SignatureScheme
-	supportedGroups             []tls.CurveID
-	serverName                  string
-	alpn                        []string
-	pskIdentity                 []byte
-	obfuscatedAge               uint32
-	pskBinder                   []byte
-	pskIdentities               []pskIdentityEntry
-	pskBinders                  [][]byte
-	pskDHE                      bool
-	earlyData                   bool
-	connectionID                []byte
-	hasConnectionID             bool
-	returnRoutability           bool
-	postHandshakeAuth           bool
-	recordSizeLimit             uint16
-	hasRecordSizeLimit          bool
-	unknownExtensions           map[uint16][]byte
+	random                        [32]byte
+	sessionID                     []byte
+	legacyCookie                  []byte
+	cookie                        []byte
+	cipherSuites                  []uint16
+	keyShares                     []keyShareEntry
+	keyShareStorage               [1]keyShareEntry
+	signatureSchemes              []tls.SignatureScheme
+	certificateSignatureSchemes   []tls.SignatureScheme
+	supportedGroups               []tls.CurveID
+	serverName                    string
+	alpn                          []string
+	pskIdentity                   []byte
+	obfuscatedAge                 uint32
+	pskBinder                     []byte
+	pskIdentities                 []pskIdentityEntry
+	pskBinders                    [][]byte
+	pskDHE                        bool
+	earlyData                     bool
+	connectionID                  []byte
+	hasConnectionID               bool
+	returnRoutability             bool
+	postHandshakeAuth             bool
+	recordSizeLimit               uint16
+	hasRecordSizeLimit            bool
+	certificateCompressionOffered bool
+	unknownExtensions             map[uint16][]byte
 }
 type serverHello struct {
 	random            [32]byte
@@ -930,7 +932,14 @@ func (h *clientHello) marshal() ([]byte, error) {
 	if h.hasRecordSizeLimit {
 		binary.BigEndian.PutUint16(recordSizeLimit[:], h.recordSizeLimit)
 	}
-	var extensionStorage [15]orderedExtension
+	var certificateCompression []byte
+	if h.certificateCompressionOffered {
+		certificateCompression, err = marshalCertificateCompressionAlgorithms(h.certificateCompressionAlgorithms())
+		if err != nil {
+			return nil, err
+		}
+	}
+	var extensionStorage [16]orderedExtension
 	extensions := extensionStorage[:0]
 	if serverName != nil {
 		extensions = append(extensions, orderedExtension{typ: extServerName, value: serverName})
@@ -944,6 +953,9 @@ func (h *clientHello) marshal() ([]byte, error) {
 	}
 	if alpn != nil {
 		extensions = append(extensions, orderedExtension{typ: extALPN, value: alpn})
+	}
+	if certificateCompression != nil {
+		extensions = append(extensions, orderedExtension{typ: extCompressCertificate, value: certificateCompression})
 	}
 	if h.hasRecordSizeLimit {
 		extensions = append(extensions, orderedExtension{typ: extRecordSizeLimit, value: recordSizeLimit[:]})
@@ -1022,14 +1034,14 @@ func parseClientHello(b []byte) (*clientHello, error) {
 		h.cipherSuites = append(h.cipherSuites, binary.BigEndian.Uint16(suites))
 		suites = suites[2:]
 	}
-	var extensionStorage [15]orderedExtension
+	var extensionStorage [16]orderedExtension
 	exts, err := parseOrderedExtensionsView(extBytes, extensionStorage[:0])
 	if err != nil {
 		return nil, err
 	}
 	for _, extension := range exts {
 		switch extension.typ {
-		case extServerName, extSupportedGroups, extSignatureAlgorithms, extSignatureAlgorithmsCert, extALPN, extPadding, extRecordSizeLimit,
+		case extServerName, extSupportedGroups, extSignatureAlgorithms, extSignatureAlgorithmsCert, extALPN, extPadding, extCompressCertificate, extRecordSizeLimit,
 			extSupportedVersions, extCookie, extKeyShare, extPostHandshakeAuth,
 			extConnectionID, extReturnRoutability, extEarlyData, extPSKKeyExchangeModes, extPreSharedKey:
 		default:
@@ -1100,6 +1112,19 @@ func parseClientHello(b []byte) (*clientHello, error) {
 	}
 	if raw, ok := orderedExtensionValue(exts, extALPN); ok {
 		h.alpn, err = parseALPN(raw)
+		if err != nil {
+			return nil, err
+		}
+	}
+	if raw, ok := orderedExtensionValue(exts, extCompressCertificate); ok {
+		h.certificateCompressionOffered = true
+		if len(raw) != 3 || raw[0] != 2 || raw[1] != 0 || raw[2] != byte(certificateCompressionZlib) {
+			if h.unknownExtensions == nil {
+				h.unknownExtensions = make(map[uint16][]byte)
+			}
+			h.unknownExtensions[extCompressCertificate] = append([]byte(nil), raw...)
+		}
+		_, err = parseCertificateCompressionAlgorithms(raw)
 		if err != nil {
 			return nil, err
 		}

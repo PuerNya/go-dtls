@@ -68,3 +68,50 @@ func TestConnectionLifecycleResourceStability(t *testing.T) {
 	t.Logf("connections=%d average_alloc=%dB retained_heap_delta=%dB goroutines=%d->%d",
 		connections, averageAllocated, int64(after.HeapAlloc)-int64(before.HeapAlloc), baselineGoroutines, runtime.NumGoroutine())
 }
+
+func TestCertificateCompressionResourceStability(t *testing.T) {
+	serverCertificate, roots := testServerCertificate(t)
+	clientCertificate, clientRoots := testClientCertificate(t)
+	serverCertificate = compressibleTestCertificate(serverCertificate)
+	clientCertificate = compressibleTestCertificate(clientCertificate)
+	clientConfig := &Config{
+		RootCAs: roots, ServerName: "server.test", Certificates: []tls.Certificate{clientCertificate},
+		EnableCertificateCompression: true, SessionTicketsDisabled: true, HandshakeTimeout: time.Second,
+	}
+	serverConfig := &Config{
+		Certificates: []tls.Certificate{serverCertificate}, ClientAuth: tls.RequireAndVerifyClientCert, ClientCAs: clientRoots,
+		EnableCertificateCompression: true, SessionTicketsDisabled: true, HandshakeTimeout: time.Second,
+	}
+	runtime.GC()
+	baselineGoroutines := runtime.NumGoroutine()
+	var before runtime.MemStats
+	runtime.ReadMemStats(&before)
+	for range 16 {
+		left, right := memoryDatagramPair()
+		client := Client(left, clientConfig)
+		server := Server(right, serverConfig)
+		serverDone := make(chan error, 1)
+		go func() { serverDone <- server.Handshake() }()
+		clientErr := client.Handshake()
+		serverErr := <-serverDone
+		_ = left.Close()
+		_ = right.Close()
+		if clientErr != nil || serverErr != nil {
+			t.Fatalf("handshake failed: client=%v server=%v", clientErr, serverErr)
+		}
+	}
+	deadline := time.Now().Add(2 * time.Second)
+	for runtime.NumGoroutine() > baselineGoroutines+8 && time.Now().Before(deadline) {
+		runtime.GC()
+		time.Sleep(10 * time.Millisecond)
+	}
+	runtime.GC()
+	var after runtime.MemStats
+	runtime.ReadMemStats(&after)
+	if got := runtime.NumGoroutine(); got > baselineGoroutines+8 {
+		t.Fatalf("goroutines did not converge: before=%d after=%d", baselineGoroutines, got)
+	}
+	if retained := int64(after.HeapAlloc) - int64(before.HeapAlloc); retained > 8<<20 {
+		t.Fatalf("retained heap grew by %d bytes", retained)
+	}
+}

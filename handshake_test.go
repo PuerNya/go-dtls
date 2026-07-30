@@ -241,7 +241,9 @@ func TestServerHandshakeMessageOrder(t *testing.T) {
 		types   []uint8
 	}{
 		{false, []uint8{handshakeTypeEncryptedExtensions, handshakeTypeCertificate, handshakeTypeCertificateVerify, handshakeTypeFinished}},
+		{false, []uint8{handshakeTypeEncryptedExtensions, handshakeTypeCompressedCertificate, handshakeTypeCertificateVerify, handshakeTypeFinished}},
 		{false, []uint8{handshakeTypeEncryptedExtensions, handshakeTypeCertificateRequest, handshakeTypeCertificate, handshakeTypeCertificateVerify, handshakeTypeFinished}},
+		{false, []uint8{handshakeTypeEncryptedExtensions, handshakeTypeCertificateRequest, handshakeTypeCompressedCertificate, handshakeTypeCertificateVerify, handshakeTypeFinished}},
 		{true, []uint8{handshakeTypeEncryptedExtensions, handshakeTypeFinished}},
 	}
 	for _, test := range valid {

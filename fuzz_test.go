@@ -93,6 +93,8 @@ func FuzzHandshakeMessageParsers(f *testing.F) {
 		_, _ = parseHelloRetryRequest(data)
 		_, _ = parseEncryptedExtensions(data)
 		_, _ = parseCertificateMessage(data, 1<<20)
+		_, _ = parseCertificateHandshakeMessage(handshakeTypeCompressedCertificate, data, &certificateCompressionZlibOffer, 4096)
+		_, _ = parseCertificateCompressionAlgorithms(data)
 		_, _ = parseCertificateVerify(data)
 		_, _ = parseFinished(data, 32)
 		_, _ = parseCertificateRequest(data)

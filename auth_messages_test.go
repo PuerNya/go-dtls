@@ -116,6 +116,12 @@ func TestValidateEncryptedExtensionsRejectsInvalidExtensions(t *testing.T) {
 			wantAlert:  alertIllegalParameter,
 		},
 		{
+			name:       "certificate compression in EncryptedExtensions",
+			hello:      &clientHello{},
+			extensions: map[uint16][]byte{extCompressCertificate: {2, 0, 1}},
+			wantAlert:  alertIllegalParameter,
+		},
+		{
 			name:       "unknown extension",
 			hello:      &clientHello{},
 			extensions: map[uint16][]byte{0xffff: nil},

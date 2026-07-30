@@ -91,7 +91,7 @@ func TestNormalizedConfigSharesCookieProtector(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if clone.cookieProtector != config.cookieProtector {
+	if clone.state != config.state {
 		t.Fatal("normalized listener connection did not share cookie keys")
 	}
 }

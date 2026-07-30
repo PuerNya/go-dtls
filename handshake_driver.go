@@ -46,12 +46,12 @@ func (s *serverHandshakeStage) accept(typ uint8, resumed bool) error {
 			*s = serverExpectCertificate
 			return nil
 		}
-		if typ == handshakeTypeCertificate {
+		if typ == handshakeTypeCertificate || typ == handshakeTypeCompressedCertificate {
 			*s = serverExpectCertificateVerify
 			return nil
 		}
 	case serverExpectCertificate:
-		if typ == handshakeTypeCertificate {
+		if typ == handshakeTypeCertificate || typ == handshakeTypeCompressedCertificate {
 			*s = serverExpectCertificateVerify
 			return nil
 		}
@@ -610,6 +610,9 @@ func (c *Conn) clientHandshake(ctx context.Context) error {
 		return err
 	}
 	hello := &clientHello{cipherSuites: append([]uint16(nil), c.config.CipherSuites...), keyShares: []keyShareEntry{{group: key.group, data: key.publicBytes()}}, supportedGroups: c.config.CurvePreferences, signatureSchemes: defaultSignatureSchemes(), serverName: c.config.ServerName, alpn: c.config.NextProtos, postHandshakeAuth: c.config.PostHandshakeAuth, recordSizeLimit: c.config.RecordSizeLimit, hasRecordSizeLimit: true}
+	if c.config.EnableCertificateCompression {
+		hello.certificateCompressionOffered = true
+	}
 	if connectionID, offered := c.config.clientConnectionIDOffer(); offered {
 		hello.hasConnectionID = true
 		hello.connectionID = connectionID
@@ -895,6 +898,7 @@ func (c *Conn) clientHandshake(ctx context.Context) error {
 	}
 	var negotiated string
 	var certificateRequest *certificateRequestMessage
+	var certificateRequestCompressionAlgorithms *certificateCompressionAlgorithms
 	verifiedServerSignature := false
 	finished := false
 	serverStage := serverExpectEncryptedExtensions
@@ -940,11 +944,11 @@ func (c *Conn) clientHandshake(ctx context.Context) error {
 					c.earlyMu.Unlock()
 				}
 				_ = transcript.add(message.typ, message.sequence, message.body)
-			case handshakeTypeCertificate:
+			case handshakeTypeCertificate, handshakeTypeCompressedCertificate:
 				if resumed {
 					return &ProtocolError{"server sent Certificate in a resumed handshake"}
 				}
-				certMsg, parseErr := parseCertificateMessage(message.body, c.config.MaxHandshakeMessage)
+				certMsg, parseErr := parseCertificateHandshakeMessage(message.typ, message.body, hello.certificateCompressionAlgorithms(), c.config.MaxHandshakeMessage)
 				if parseErr != nil {
 					return parseErr
 				}
@@ -967,7 +971,7 @@ func (c *Conn) clientHandshake(ctx context.Context) error {
 				if certificateRequest != nil {
 					return &ProtocolError{"duplicate CertificateRequest"}
 				}
-				certificateRequest, err = parseCertificateRequest(message.body)
+				certificateRequest, certificateRequestCompressionAlgorithms, err = parseCertificateRequestWithCompression(message.body)
 				if err != nil {
 					return err
 				}
@@ -1041,8 +1045,12 @@ func (c *Conn) clientHandshake(ctx context.Context) error {
 		if marshalErr != nil {
 			return marshalErr
 		}
-		clientMessages = append(clientMessages, handshakeMessage{typ: handshakeTypeCertificate, sequence: nextClientSequence, body: certBody})
-		_ = transcript.add(handshakeTypeCertificate, nextClientSequence, certBody)
+		certificateType, certificateBody, selectErr := certificateHandshakeMessage(certBody, certificateRequestCompressionAlgorithms, c.config.EnableCertificateCompression, c.config.certificateCompressionCache())
+		if selectErr != nil {
+			return selectErr
+		}
+		clientMessages = append(clientMessages, handshakeMessage{typ: certificateType, sequence: nextClientSequence, body: certificateBody})
+		_ = transcript.add(certificateType, nextClientSequence, certificateBody)
 		nextClientSequence++
 		if clientCertificate != nil {
 			signer, ok := clientCertificate.PrivateKey.(crypto.Signer)
@@ -1156,6 +1164,7 @@ func equalClientHelloAfterHRR(initial, second *clientHello, requestedGroup tls.C
 		initial.hasConnectionID == second.hasConnectionID &&
 		initial.returnRoutability == second.returnRoutability &&
 		initial.postHandshakeAuth == second.postHandshakeAuth &&
+		initial.certificateCompressionOffered == second.certificateCompressionOffered &&
 		initial.recordSizeLimit == second.recordSizeLimit &&
 		initial.hasRecordSizeLimit == second.hasRecordSizeLimit &&
 		equalExtensionMaps(initial.unknownExtensions, second.unknownExtensions)
@@ -1293,7 +1302,7 @@ func (c *Conn) serverHandshake(ctx context.Context) error {
 		if err = ensureCookieProtector(c.config); err != nil {
 			return err
 		}
-		protector := c.config.cookieProtector
+		protector := &c.config.state.cookieProtector
 		address := []byte(c.conn.RemoteAddr().String())
 		cookie, cookieErr := protector.seal(address, initialHashTranscript.sumInto(transcriptDigest[:0]))
 		if cookieErr != nil {
@@ -1529,14 +1538,18 @@ func (c *Conn) serverHandshake(ctx context.Context) error {
 	serverSequence++
 	var clientSignatureSchemes []tls.SignatureScheme
 	var clientCertificateSchemes []tls.SignatureScheme
+	var clientCertificateCompressionAlgorithms *certificateCompressionAlgorithms
 	if !resumed && c.config.ClientAuth != tls.NoClientCert {
 		request := &certificateRequestMessage{signatureSchemes: defaultSignatureSchemes()}
+		if c.config.EnableCertificateCompression {
+			clientCertificateCompressionAlgorithms = &certificateCompressionZlibOffer
+		}
 		clientSignatureSchemes = append([]tls.SignatureScheme(nil), request.signatureSchemes...)
 		clientCertificateSchemes = request.certificateSignatureSchemes
 		if len(clientCertificateSchemes) == 0 {
 			clientCertificateSchemes = append([]tls.SignatureScheme(nil), request.signatureSchemes...)
 		}
-		requestBody, requestErr := request.marshal()
+		requestBody, requestErr := request.marshalWithCertificateCompression(clientCertificateCompressionAlgorithms)
 		if requestErr != nil {
 			return requestErr
 		}
@@ -1553,8 +1566,12 @@ func (c *Conn) serverHandshake(ctx context.Context) error {
 		if err != nil {
 			return err
 		}
-		serverMessages = append(serverMessages, handshakeMessage{typ: handshakeTypeCertificate, sequence: serverSequence, body: certBody})
-		_ = transcript.add(handshakeTypeCertificate, serverSequence, certBody)
+		certificateType, certificateBody, selectErr := certificateHandshakeMessage(certBody, ch.certificateCompressionAlgorithms(), c.config.EnableCertificateCompression, c.config.certificateCompressionCache())
+		if selectErr != nil {
+			return selectErr
+		}
+		serverMessages = append(serverMessages, handshakeMessage{typ: certificateType, sequence: serverSequence, body: certificateBody})
+		_ = transcript.add(certificateType, serverSequence, certificateBody)
 		serverSequence++
 		signature, err := signCertificateVerify(c.config.Rand, signer, scheme, suite, transcript.sumInto(transcriptDigest[:0]), true)
 		if err != nil {
@@ -1620,11 +1637,11 @@ func (c *Conn) serverHandshake(ctx context.Context) error {
 		for index := 0; index < messages.len(); index++ {
 			message := messages.at(index)
 			switch message.typ {
-			case handshakeTypeCertificate:
+			case handshakeTypeCertificate, handshakeTypeCompressedCertificate:
 				if clientStage != clientExpectCertificate {
 					return &ProtocolError{"unexpected client Certificate"}
 				}
-				certMessage, parseErr := parseCertificateMessage(message.body, c.config.MaxHandshakeMessage)
+				certMessage, parseErr := parseCertificateHandshakeMessage(message.typ, message.body, clientCertificateCompressionAlgorithms, c.config.MaxHandshakeMessage)
 				if parseErr != nil {
 					return parseErr
 				}
@@ -1743,7 +1760,7 @@ func (c *Conn) serverHandshake(ctx context.Context) error {
 }
 
 func verifyClientCertificate(config *Config, message *certificateMessage, signatureSchemes []tls.SignatureScheme) ([]*x509.Certificate, [][]*x509.Certificate, error) {
-	copyConfig := config.Clone()
+	copyConfig := cloneConfig(config)
 	if config.ClientAuth == tls.RequestClientCert || config.ClientAuth == tls.RequireAnyClientCert {
 		copyConfig.InsecureSkipVerify = true
 	}

@@ -223,6 +223,7 @@ Deadlines, socket closure, and underlying UDP errors follow Go's `net` error mod
 | 0-RTT | `WriteEarlyData`, `MaxEarlyData`, `EarlyDataReplayCache` | Available only on resumed connections; callers must handle `ErrEarlyDataUnavailable` and `ErrEarlyDataRejected`, and early data must be replay-safe |
 | KeyUpdate | `SendKeyUpdate(requestPeer)` | Reliably sent, with the sending epoch switched after ACK; also triggered automatically near AEAD usage limits |
 | CID / path validation | `ConnectionID`, `GetConnectionID`, `SendNewConnectionIDs`, `RequestConnectionIDs`, `UseNextConnectionID` | Supports RFC 9146 CID negotiation and updates and negotiates RFC 9853 RRC by default; Listener rebinds only after validating the new path |
+| Certificate compression | `EnableCertificateCompression` | Explicitly enables RFC 8879 zlib for server certificates and mTLS/PHA client certificates; sends a plain Certificate when compression is not smaller |
 | Handshake client authentication | `ClientAuth`, `ClientCAs`, `Certificates` | Uses the client-certificate policies from `crypto/tls` |
 | Post-handshake client authentication | `PostHandshakeAuth`, `RequestClientCertificate` | The client first advertises support, then the server initiates PHA |
 | Exporter | `ConnectionState().ExportKeyingMaterial` | Exports RFC 8446 section 7.5 material with the DTLS `dtls13` label |
@@ -252,6 +253,7 @@ Where TLS 1.3 semantics match, `Config` follows `crypto/tls.Config`. A configura
 | `MTU` | 1200-byte UDP payload; minimum 256 |
 | `IgnorePathMTU` | `false` by default; only Application Data skips the library PMTU check, while handshake behavior is unchanged |
 | `RecordSizeLimit` | `0` selects the `2^14+1` default; values from `64..2^14+1` set the complete `DTLSInnerPlaintext` this endpoint accepts and are advertised with RFC 8449 independently of PMTU |
+| `EnableCertificateCompression` | `false` by default; enables standard RFC 8879 zlib and sends `CompressedCertificate` only when the peer offered zlib and the complete compressed message is smaller; output is bounded by `MaxHandshakeMessage` |
 | `FlightInterval` | One-second initial handshake retransmission interval |
 | `MaxFlightInterval` | 60-second exponential-backoff cap |
 | `HandshakeTimeout` | 30 seconds |
@@ -265,6 +267,12 @@ Where TLS 1.3 semantics match, `Config` follows `crypto/tls.Config`. A configura
 | `MaxEarlyData` | 0, so 0-RTT is disabled by default |
 | `MaxConnectionIDs` | 8 CIDs per direction |
 | `DisableReturnRoutabilityCheck` | `false` by default; disable RRC only when the application provides equivalent address validation |
+
+### Certificate Compression
+
+With `EnableCertificateCompression: true`, a client offers zlib in ClientHello so the server can compress its certificate. A server offers zlib in CertificateRequest so an enabled client can compress its mTLS or PHA certificate. Enable it on both endpoints when certificates should be compressible in both directions.
+
+The implementation uses only Go's standard-library zlib. It sends `CompressedCertificate` only when the complete message is smaller than a plain Certificate and otherwise falls back safely. Handshake fragmentation, ACK, retransmission, HRR, resumption, and `record_size_limit` semantics are unchanged. Both the declared uncompressed length and actual output are bounded by `MaxHandshakeMessage`.
 
 ### Fast mTLS Resumption
 
@@ -313,6 +321,7 @@ Normative keywords are interpreted according to BCP 14. `MUST`, `MUST NOT`, `REQ
 | [RFC 9147](https://www.rfc-editor.org/rfc/rfc9147) | Complete | Record, Handshake, epochs, ACK, KeyUpdate, CID update, Application Data, and applicable security requirements; recommended behavior is complete for enabled features |
 | [RFC 9146](https://www.rfc-editor.org/rfc/rfc9146) | Complete | CID negotiation, directional CIDs, updates, Listener routing, error handling, and address retention; DTLS 1.2-only details do not apply |
 | [RFC 8449](https://www.rfc-editor.org/rfc/rfc8449) | Complete | Default CH/EE negotiation, directional limits, minimum 64, fatal `record_overflow`, HRR, resumption, 0-RTT, KeyUpdate, ACK, and PMTU independence |
+| [RFC 8879](https://www.rfc-editor.org/rfc/rfc8879) | Complete | Explicit opt-in zlib; directional ClientHello/CertificateRequest negotiation, server and mTLS/PHA client certificates, CompressedCertificate transcripts, safe fallback, and decompression bounds |
 | [RFC 9846](https://www.rfc-editor.org/rfc/rfc9846) | Complete for enabled features | Ignores `user_canceled(90)` and continues waiting for `close_notify` during the handshake, final-ACK wait, and post-handshake processing; local cryptographic failure without a more specific alert sends `general_error(117)`, while a specific protocol alert always takes precedence |
 | [RFC 9325](https://www.rfc-editor.org/rfc/rfc9325) | Partial | PFS, AEAD, SNI/ALPN, tickets, 0-RTT, KeyUpdate, and certificate security limits are covered; OCSP stapling is absent, and this module intentionally does not implement the DTLS 1.2 support required by the BCP |
 | [RFC 9525](https://www.rfc-editor.org/rfc/rfc9525) | Partial | Go X.509 and `ServerName` cover DNS-ID/IP-ID; URI-ID, SRV-ID, and application service identities are delegated to caller verification callbacks |
@@ -360,12 +369,13 @@ This table contains all 11 `Normative References` from the RFC Editor XML for RF
 | --- | --- | --- |
 | [RFC 9846](https://www.rfc-editor.org/rfc/rfc9846) | TLS 1.3 KeyShare, PSK/HRR, NST, AEAD limits, KeyUpdate, alerts, and vector bounds | Complete for enabled features; mTLS resumption preserves authentication state, policy/CA/validity, and total authentication lifetime; see Overall Status for `user_canceled` and `general_error` |
 | [RFC 8449](https://www.rfc-editor.org/rfc/rfc8449) | TLS/DTLS `record_size_limit` | Clients advertise it by default; servers respond only to an offer. Sending follows the peer limit, receiving follows the local limit, absence restores the protocol maximum, and PMTU remains an independent lower bound |
+| [RFC 8879](https://www.rfc-editor.org/rfc/rfc8879) | TLS/DTLS Certificate Compression | Explicit opt-in standard zlib; CH/CR negotiation, server and client certificates, HRR, mTLS, PHA, fragmentation/retransmission, transcripts, and bounded decompression are complete; plain Certificate is used when smaller |
 | [RFC 9325](https://www.rfc-editor.org/rfc/rfc9325) | TLS/DTLS deployment security BCP | Tickets use AES-256-GCM and are limited to one second through seven days; RSA 2048-bit and SHA-1/MD5 certificate limits are enforced on full handshakes, trust anchors, and resumption paths; see Overall Status for the OCSP and DTLS 1.2 scope exceptions |
 | [RFC 9525](https://www.rfc-editor.org/rfc/rfc9525) | Service identity verification | DNS-ID/IP-ID are verified strictly by default; callers implement application semantics for other reference identifiers |
 | [RFC 9853](https://www.rfc-editor.org/rfc/rfc9853) | Return Routability Check for CID address changes | Complete; enhanced check by default, basic check after the old path fails, rebind only after validation, independent candidate-path amplification limit, and spare-CID probing when available |
 | [RFC 8701](https://www.rfc-editor.org/rfc/rfc8701) | GREASE anti-ossification | Receivers tolerate valid unknown values while preserving HRR invariants; senders do not actively generate GREASE |
 
-Unsupported optional extensions include RFC 8879 Certificate Compression, RFC 9149 Ticket Requests, RFC 9257/9258 external PSK, RFC 9849 ECH, and RFC 9954 Hybrid Key Exchange.
+Unsupported optional extensions include RFC 9149 Ticket Requests, RFC 9257/9258 external PSK, RFC 9849 ECH, and RFC 9954 Hybrid Key Exchange.
 
 ### Scope Boundaries
 
@@ -376,7 +386,7 @@ The following items do not reduce completion of mandatory RFC 9147 semantics, bu
 - The sender uses the valid one-record-per-UDP-datagram mode and exposes no optional multi-record aggregation API.
 - Concurrent multiple NewSessionTicket or PHA requests are not exposed; the RFC permits but does not require this capability.
 - Automatic RRC rebinding requires a transport that receives from different sources and can send to a selected destination. The standard Listener supports this; connected UDP clients are constrained by operating-system peer filtering. An empty CID cannot uniquely route across five-tuples.
-- The wolfSSL 5.9.2 interoperability build does not enable CID, 0-RTT, session tickets, or `SESSION_CERTS`; the third-party matrix therefore excludes RRC and mTLS resumption.
+- The wolfSSL 5.9.2 interoperability build does not implement RFC 8879 and does not enable CID, 0-RTT, session tickets, or `SESSION_CERTS`. Certificate-compression tests prove only safe extension ignoring and plain-Certificate fallback; the third-party matrix excludes compression negotiation, RRC, and mTLS resumption.
 
 ## Benchmark
 
@@ -384,9 +394,12 @@ The following representative results were measured on an AMD Ryzen 7 7435H with 
 
 | Scenario | Representative result |
 | --- | --- |
-| Full certificate handshake and close, `BenchmarkConnectionHandshakeLifecycle` | About `612.0 us/op`, `99757 B/op`, `762 allocs/op` |
-| Full mTLS, `BenchmarkMutualTLSHandshakeLifecycle/Full` | About `854.6 us/op`, `116144 B/op`, `977 allocs/op` |
-| Resumed mTLS, `BenchmarkMutualTLSHandshakeLifecycle/Resumed` | About `442.9 us/op`, `115417 B/op`, `802 allocs/op` |
+| Full certificate handshake and close, `BenchmarkConnectionHandshakeLifecycle` | About `625.9 us/op`, `99725 B/op`, `761 allocs/op` |
+| Full mTLS, `BenchmarkMutualTLSHandshakeLifecycle/Full` | About `915.1 us/op`, `116112 B/op`, `976 allocs/op` |
+| Resumed mTLS, `BenchmarkMutualTLSHandshakeLifecycle/Resumed` | About `459.9 us/op`, `115250 B/op`, `800-801 allocs/op` |
+| RFC 8879 zlib server-certificate handshake, four-certificate chain | About `1.049 ms/op`, `123323 B/op`, `1022 allocs/op` |
+| RFC 8879 zlib full mTLS, four-certificate chains in both directions | About `1.746 ms/op`, `160719 B/op`, `1469 allocs/op` |
+| RFC 8879 zlib compression / decompression | About `7.2-7.7 us/op`, `4 allocs/op` / `6.3-6.9 us/op`, `4290-4300 B/op`, `6 allocs/op` |
 | AES-128-GCM 1200 B seal | About 1.86 GB/s, 1 alloc/op |
 | AES-128-GCM 1200 B in-place round trip | About 1.05 GB/s, 1 alloc/op |
 | Unauthenticated record error classification | About 12.4-13.7 ns/op, 0 allocs/op |
@@ -399,7 +412,7 @@ The following representative results were measured on an AMD Ryzen 7 7435H with 
 | 4 KiB / MTU 1200 protected-flight construction | About 2.89 us/op, 5616 B/op, 6 allocs/op |
 | 4 KiB / MTU 1200 plain-flight construction | About 2.15-2.58 us/op, 5040 B/op, 9 allocs/op |
 
-Full-connection results use `-cpu=1` with 500 iterations per run.
+Full-connection results are medians from repeated `-cpu=1` runs.
 
 Run all benchmarks:
 
@@ -412,6 +425,7 @@ Run full-connection and record-layer benchmarks separately:
 ```sh
 go test -run '^$' -bench '^BenchmarkConnectionHandshakeLifecycle$' -benchmem -benchtime=2000x -cpu=1
 go test -run '^$' -bench '^BenchmarkMutualTLSHandshakeLifecycle/(Full|Resumed)$' -benchmem -count=10
+go test -run '^$' -bench '^BenchmarkCertificateCompression' -benchmem
 go test -run '^$' -bench '^BenchmarkProtectedRecord(Seal|RoundTripInPlace)$' -benchmem -count=5
 ```
 
@@ -421,6 +435,7 @@ The repository also includes focused benchmarks for cipher suites, ACK, records/
 
 - RFC 9325 certificate-policy tests cover server configuration, client reception, self-signed certificates, unsent trust anchors, `InsecureSkipVerify`, ordinary resumption, and mTLS resumption, with differential behavior against `crypto/x509` for 1024-bit RSA/SHA-1 trust anchors.
 - RFC 8449 tests cover CH/EE, the minimum of 64, directional limits, invalid values and extension combinations, authenticated overflow, HRR, resumption, 0-RTT, KeyUpdate, ACK, PMTU independence, and compatibility with third parties that do not negotiate it.
+- RFC 8879 tests cover ClientHello/CertificateRequest negotiation, zlib, CompressedCertificate, transcripts, invalid algorithms/streams/lengths, decompression limits, plain-Certificate fallback, HRR, resumption, mTLS/PHA, record limits, fragmentation/retransmission, weak networks, resource lifecycles, and safe fallback with third parties that do not support it.
 - Weak-network tests cover bidirectional loss, delay, reordering, and duplication, including CH/SH/Finished/ACK/HRR/mTLS-resumption combinations.
 - mTLS tests cover full handshakes, PSK resumption, 0-RTT, CA/policy fallback, and renewed-ticket authentication lifetime.
 - RFC 9846 alert tests cover handshake processing, final-ACK waiting, post-handshake reordering, `close_notify`, and local cryptographic failure.
