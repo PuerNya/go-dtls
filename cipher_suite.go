@@ -85,6 +85,8 @@ var (
 	labelFinished           = newSingleBlockHKDFLabel("finished")
 	labelResumptionMaster   = newSingleBlockHKDFLabel("res master")
 	labelResumptionBinder   = newSingleBlockHKDFLabel("res binder")
+	labelExternalBinder     = newSingleBlockHKDFLabel("ext binder")
+	labelImportedBinder     = newSingleBlockHKDFLabel("imp binder")
 	labelTrafficUpdate      = newSingleBlockHKDFLabel("traffic upd")
 	labelResumption         = newSingleBlockHKDFLabel("resumption")
 )

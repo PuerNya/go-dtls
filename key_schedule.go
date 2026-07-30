@@ -126,9 +126,10 @@ func (k *keySchedule) deriveApplication(serverFinishedTranscriptHash []byte) err
 }
 
 type exporterState struct {
-	mu     sync.Mutex
-	suite  *cipherSuite
-	secret []byte
+	mu          sync.Mutex
+	suite       *cipherSuite
+	secret      []byte
+	externalPSK *externalPSKSelection
 }
 
 func newExporter(suite *cipherSuite, exporterMasterSecret []byte) *exporterState {

@@ -73,6 +73,34 @@ type ConnectionState struct {
 	exporter            *exporterState
 }
 
+// ExternalPSKIdentity returns a copy of the original RFC 9257 external PSK
+// identity. It remains populated on ticket resumptions derived from that
+// authentication and is nil for certificate-only connections.
+func (s ConnectionState) ExternalPSKIdentity() []byte {
+	if s.exporter == nil || s.exporter.externalPSK == nil {
+		return nil
+	}
+	return append([]byte(nil), s.exporter.externalPSK.psk.identity...)
+}
+
+// ExternalPSKContext returns a copy of the RFC 9258 importer context for the
+// selected external PSK. It is nil for direct external PSKs and
+// certificate-only connections. Identity and context are plaintext and
+// linkable on the wire.
+func (s ConnectionState) ExternalPSKContext() []byte {
+	if s.exporter == nil || s.exporter.externalPSK == nil {
+		return nil
+	}
+	return append([]byte(nil), s.exporter.externalPSK.psk.context...)
+}
+
+func (s ConnectionState) externalPSKSelection() *externalPSKSelection {
+	if s.exporter == nil {
+		return nil
+	}
+	return s.exporter.externalPSK
+}
+
 // ExportKeyingMaterial returns exporter output for the completed connection,
 // following RFC 8446 section 7.5 with the DTLS 1.3 label prefix required by
 // RFC 9147. A nil and an empty context are equivalent.
@@ -721,8 +749,10 @@ func (c *Conn) clearTrafficSecrets(failure error) {
 	c.mu.Lock()
 	if c.state.exporter != nil {
 		c.state.exporter.clear()
+		if c.state.exporter.externalPSK == nil {
+			c.state.exporter = nil
+		}
 	}
-	c.state.exporter = nil
 	c.mu.Unlock()
 }
 

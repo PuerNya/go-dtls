@@ -3,10 +3,12 @@ package dtls13
 import (
 	"bytes"
 	"container/list"
+	"crypto"
 	"crypto/aes"
 	"crypto/cipher"
 	"crypto/hmac"
 	"crypto/rand"
+	"crypto/sha256"
 	"crypto/tls"
 	"crypto/x509"
 	"encoding/binary"
@@ -202,6 +204,7 @@ type ClientSessionState struct {
 	recordSizeLimit  uint16
 	peerCertificates []*x509.Certificate
 	verifiedChains   [][]*x509.Certificate
+	externalPSK      *externalPSKSelection
 }
 
 type lruSessionCache struct {
@@ -241,6 +244,10 @@ func cloneClientSessionState(state *ClientSessionState) *ClientSessionState {
 	clone.verifiedChains = make([][]*x509.Certificate, len(state.verifiedChains))
 	for i := range state.verifiedChains {
 		clone.verifiedChains[i] = append([]*x509.Certificate(nil), state.verifiedChains[i]...)
+	}
+	if state.externalPSK != nil {
+		selection := *state.externalPSK
+		clone.externalPSK = &selection
 	}
 	return &clone
 }
@@ -292,19 +299,26 @@ func (c *lruSessionCache) Put(key string, state *ClientSessionState) {
 	}
 }
 
+type externalPSKTicketState struct {
+	wire   []byte
+	kdf    uint16
+	digest [sha256.Size]byte
+}
+
 type sessionTicketState struct {
 	createdAt        int64
-	lifetime         uint32
-	suite            uint16
+	clientAuthAt     int64
 	psk              []byte
 	serverName       string
 	protocol         string
-	ageAdd           uint32
-	maxEarlyData     uint32
-	recordSizeLimit  uint16
-	clientAuthAt     int64
 	peerCertificates []*x509.Certificate
 	verifiedChains   [][]*x509.Certificate
+	externalPSK      *externalPSKTicketState
+	lifetime         uint32
+	ageAdd           uint32
+	maxEarlyData     uint32
+	suite            uint16
+	recordSizeLimit  uint16
 }
 
 func (s *sessionTicketState) marshal() ([]byte, error) {
@@ -323,6 +337,9 @@ func (s *sessionTicketState) marshal() ([]byte, error) {
 	if len(s.verifiedChains) > 0 && len(s.peerCertificates) == 0 {
 		return nil, errors.New("dtls13: verified client chain without a certificate")
 	}
+	if s.externalPSK != nil && len(s.peerCertificates) > 0 {
+		return nil, errors.New("dtls13: external PSK ticket contains client certificates")
+	}
 	version := 1
 	if s.maxEarlyData != 0 {
 		version = 4
@@ -335,6 +352,15 @@ func (s *sessionTicketState) marshal() ([]byte, error) {
 		if s.maxEarlyData != 0 {
 			version = 5
 		}
+	}
+	if s.externalPSK != nil {
+		if len(s.externalPSK.wire) == 0 || len(s.externalPSK.wire) > 65535 {
+			return nil, errors.New("dtls13: invalid external PSK identity in session ticket")
+		}
+		if _, ok := hashForTLSKDF(s.externalPSK.kdf); !ok {
+			return nil, errors.New("dtls13: invalid external PSK KDF in session ticket")
+		}
+		version = 6
 	}
 	recordSizeLimit := effectiveRecordSizeLimit(s.recordSizeLimit)
 	capacity := 2 + 8 + 4 + 4 + 2 + 1 + len(s.psk) + 2 + len(s.serverName) + 1 + len(s.protocol)
@@ -364,6 +390,9 @@ func (s *sessionTicketState) marshal() ([]byte, error) {
 				capacity += 3 + len(cert.Raw)
 			}
 		}
+	}
+	if version == 6 {
+		capacity += 2 + len(s.externalPSK.wire) + 2 + len(s.externalPSK.digest)
 	}
 	w := newWireBuilder(capacity)
 	w.u16(version)
@@ -397,13 +426,18 @@ func (s *sessionTicketState) marshal() ([]byte, error) {
 		}
 		w.endVector16(chains)
 	}
+	if version == 6 {
+		w.bytes16(s.externalPSK.wire)
+		w.u16(int(s.externalPSK.kdf))
+		w.b = append(w.b, s.externalPSK.digest[:]...)
+	}
 	return w.b, w.err
 }
 
 func parseSessionTicketState(b []byte) (*sessionTicketState, error) {
 	p := wireParser{b: b}
 	version := p.u16()
-	if version < 1 || version > 5 {
+	if version < 1 || version > 6 {
 		return nil, errors.New("dtls13: unsupported session ticket version")
 	}
 	created := p.take(8)
@@ -464,6 +498,16 @@ func parseSessionTicketState(b []byte) (*sessionTicketState, error) {
 		}
 		if err := chains.done(); err != nil {
 			return nil, err
+		}
+	}
+	if version == 6 {
+		state.externalPSK = &externalPSKTicketState{wire: append([]byte(nil), p.bytes16()...), kdf: uint16(p.u16())}
+		copy(state.externalPSK.digest[:], p.take(len(state.externalPSK.digest)))
+		if len(state.externalPSK.wire) == 0 {
+			return nil, errors.New("dtls13: empty external PSK identity in session ticket")
+		}
+		if _, ok := hashForTLSKDF(state.externalPSK.kdf); !ok {
+			return nil, errors.New("dtls13: invalid external PSK KDF in session ticket")
 		}
 	}
 	if err := p.done(); err != nil {
@@ -610,6 +654,16 @@ func usableClientSession(config *Config, conn net.Conn) (*ClientSessionState, *c
 	if err != nil || !compatible || len(state.psk) != suite.hash.Size() {
 		return nil, nil
 	}
+	if state.externalPSK != nil {
+		if state.externalPSK.key.hash != suite.hash {
+			return nil, nil
+		}
+		selection := matchExternalPSK(config, state.externalPSK.key.wireIdentity, state.externalPSK.key.hash, state.externalPSK.key.digest)
+		if selection == nil {
+			return nil, nil
+		}
+		state.externalPSK = selection
+	}
 	return state, suite
 }
 
@@ -669,77 +723,152 @@ func validClientAuthenticationTicket(config *Config, state *sessionTicketState) 
 	return false
 }
 
-func (c *Conn) acceptSessionTicket(hello *clientHello, clientHelloBody, initialClientHelloHash, hrrBody []byte, suite *cipherSuite, protocol string) (*sessionTicketState, uint16, error) {
+type clientPSKOffer struct {
+	identity    []byte
+	psk         []byte
+	suite       *cipherSuite
+	binderLabel *singleBlockHKDFLabel
+	age         uint32
+	session     *ClientSessionState
+	external    *externalPSKSelection
+}
+
+type selectedPSK struct {
+	psk      []byte
+	identity uint16
+	session  *sessionTicketState
+	external *externalPSKSelection
+}
+
+func configuredExternalPSKOffers(config *Config) []clientPSKOffer {
+	var offers []clientPSKOffer
+	for _, psk := range config.ExternalPSKs {
+		for i := range psk.keys {
+			key := &psk.keys[i]
+			var suite *cipherSuite
+			for _, id := range config.CipherSuites {
+				candidate, err := cipherSuiteForID(id)
+				if err == nil && candidate.hash == key.hash {
+					suite = candidate
+					break
+				}
+			}
+			if suite != nil {
+				offers = append(offers, clientPSKOffer{
+					identity: key.wireIdentity, psk: key.key, suite: suite,
+					binderLabel: key.binderLabel,
+					external:    &externalPSKSelection{psk: psk, key: key},
+				})
+			}
+		}
+	}
+	return offers
+}
+
+func filterPSKOffersByHash(offers []clientPSKOffer, hash crypto.Hash) []clientPSKOffer {
+	filtered := offers[:0]
+	for _, offer := range offers {
+		if offer.suite.hash == hash {
+			filtered = append(filtered, offer)
+		}
+	}
+	return filtered
+}
+
+func (c *Conn) acceptPSK(hello *clientHello, clientHelloBody, initialClientHelloHash, hrrBody []byte, suite *cipherSuite, protocol string) (selectedPSK, bool, error) {
 	c.earlyMu.Lock()
 	c.earlyAccepted = false
 	c.earlyDataLimit = 0
 	c.earlyMu.Unlock()
-	if c.config.SessionTicketsDisabled || len(hello.pskIdentity) == 0 || !hello.pskDHE {
-		return nil, 0, nil
+	if len(hello.pskIdentity) == 0 || !hello.pskDHE {
+		return selectedPSK{}, false, nil
 	}
-	if err := ensureSessionTicketKey(c.config); err != nil {
-		return nil, 0, err
-	}
-	protector, err := newSessionTicketProtector(c.config.SessionTicketKey, c.config.Rand, c.config.Time)
-	if err != nil {
-		return nil, 0, err
+	var protector *sessionTicketProtector
+	if !c.config.SessionTicketsDisabled {
+		if err := ensureSessionTicketKey(c.config); err != nil {
+			return selectedPSK{}, false, err
+		}
+		var err error
+		protector, err = newSessionTicketProtector(c.config.SessionTicketKey, c.config.Rand, c.config.Time)
+		if err != nil {
+			return selectedPSK{}, false, err
+		}
 	}
 	identities := hello.pskIdentities
 	if len(identities) == 0 {
 		identities = []pskIdentityEntry{{identity: hello.pskIdentity, obfuscatedAge: hello.obfuscatedAge}}
 	}
-	var state *sessionTicketState
-	selected := -1
 	for i, identity := range identities {
-		candidate, openErr := protector.open(identity.identity)
-		var candidateSuite *cipherSuite
-		var suiteErr error
-		if openErr == nil {
-			candidateSuite, suiteErr = cipherSuiteForID(candidate.suite)
-		}
-		if openErr == nil && suiteErr == nil && candidateSuite.hash == suite.hash && candidate.serverName == hello.serverName && candidate.protocol == protocol && len(candidate.psk) == suite.hash.Size() && validClientAuthenticationTicket(c.config, candidate) {
-			state = candidate
-			selected = i
+		if i > int(^uint16(0)) {
 			break
 		}
-	}
-	if selected < 0 || selected > int(^uint16(0)) {
-		return nil, 0, nil
-	}
-	clientAge := identities[selected].obfuscatedAge - state.ageAdd
-	actualAge := c.config.Time().Sub(time.Unix(state.createdAt, 0))
-	if actualAge < 0 || actualAge > time.Duration(state.lifetime)*time.Second {
-		return nil, 0, nil
-	}
-	actualAgeMillis := uint64(actualAge / time.Millisecond)
-	ageWithinTolerance := true
-	if actualAgeMillis <= uint64(^uint32(0)) {
-		difference := int64(clientAge) - int64(actualAgeMillis)
-		if difference < 0 {
-			difference = -difference
+		if protector != nil {
+			candidate, openErr := protector.open(identity.identity)
+			var candidateSuite *cipherSuite
+			var suiteErr error
+			if openErr == nil {
+				candidateSuite, suiteErr = cipherSuiteForID(candidate.suite)
+			}
+			var external *externalPSKSelection
+			externalOK := openErr == nil && candidate.externalPSK == nil
+			if openErr == nil && !externalOK {
+				if targetHash, ok := hashForTLSKDF(candidate.externalPSK.kdf); ok {
+					if candidateSuite != nil && targetHash == candidateSuite.hash {
+						external = matchExternalPSK(c.config, candidate.externalPSK.wire, targetHash, candidate.externalPSK.digest)
+					}
+					externalOK = external != nil
+				}
+			}
+			if openErr == nil && suiteErr == nil && candidateSuite.hash == suite.hash && candidate.serverName == hello.serverName && candidate.protocol == protocol && len(candidate.psk) == suite.hash.Size() && validClientAuthenticationTicket(c.config, candidate) && externalOK {
+				if err := verifyClientHelloPSKBinderAtWithLabel(clientHelloBody, suite, candidate.psk, labelResumptionBinder, initialClientHelloHash, hrrBody, i); err != nil {
+					return selectedPSK{}, false, err
+				}
+				clientAge := identity.obfuscatedAge - candidate.ageAdd
+				actualAge := c.config.Time().Sub(time.Unix(candidate.createdAt, 0))
+				if actualAge < 0 || actualAge > time.Duration(candidate.lifetime)*time.Second {
+					continue
+				}
+				actualAgeMillis := uint64(actualAge / time.Millisecond)
+				ageWithinTolerance := true
+				if actualAgeMillis <= uint64(^uint32(0)) {
+					difference := int64(clientAge) - int64(actualAgeMillis)
+					if difference < 0 {
+						difference = -difference
+					}
+					ageWithinTolerance = difference <= int64(10*time.Minute/time.Millisecond)
+				}
+				if i == 0 && candidate.suite == suite.id && ageWithinTolerance && hello.earlyData && candidate.maxEarlyData > 0 && c.config.MaxEarlyData >= candidate.maxEarlyData && c.config.RecordSizeLimit >= effectiveRecordSizeLimit(candidate.recordSizeLimit) && hrrBody == nil && c.config.AllowEarlyDataWithoutCookie {
+					cache := c.config.EarlyDataReplayCache
+					if cache == nil {
+						cache = defaultEarlyDataReplayCache
+					}
+					expires := time.Unix(candidate.createdAt, 0).Add(time.Duration(candidate.lifetime) * time.Second)
+					if cache != nil && cache.CheckAndStore(string(identity.identity), expires) {
+						c.earlyMu.Lock()
+						c.earlyAccepted = true
+						c.earlyDataLimit = candidate.maxEarlyData
+						c.earlyMu.Unlock()
+					}
+				}
+				return selectedPSK{psk: candidate.psk, identity: uint16(i), session: candidate, external: external}, true, nil
+			}
 		}
-		if difference > int64(10*time.Minute/time.Millisecond) {
-			ageWithinTolerance = false
+		if external := findExternalPSK(c.config, identity.identity, suite.hash); external != nil {
+			if err := verifyClientHelloPSKBinderAtWithLabel(clientHelloBody, suite, external.key.key, external.key.binderLabel, initialClientHelloHash, hrrBody, i); err != nil {
+				return selectedPSK{}, false, err
+			}
+			return selectedPSK{psk: external.key.key, identity: uint16(i), external: external}, true, nil
 		}
 	}
-	if err = verifyClientHelloPSKBinderAt(clientHelloBody, suite, state.psk, initialClientHelloHash, hrrBody, selected); err != nil {
+	return selectedPSK{}, false, nil
+}
+
+func (c *Conn) acceptSessionTicket(hello *clientHello, clientHelloBody, initialClientHelloHash, hrrBody []byte, suite *cipherSuite, protocol string) (*sessionTicketState, uint16, error) {
+	selection, ok, err := c.acceptPSK(hello, clientHelloBody, initialClientHelloHash, hrrBody, suite, protocol)
+	if err != nil || !ok || selection.session == nil {
 		return nil, 0, err
 	}
-	if selected == 0 && state.suite == suite.id && ageWithinTolerance && hello.earlyData && state.maxEarlyData > 0 && c.config.MaxEarlyData >= state.maxEarlyData && c.config.RecordSizeLimit >= effectiveRecordSizeLimit(state.recordSizeLimit) && hrrBody == nil && c.config.AllowEarlyDataWithoutCookie {
-		limit := state.maxEarlyData
-		cache := c.config.EarlyDataReplayCache
-		if cache == nil {
-			cache = defaultEarlyDataReplayCache
-		}
-		expires := time.Unix(state.createdAt, 0).Add(time.Duration(state.lifetime) * time.Second)
-		if cache != nil && cache.CheckAndStore(string(identities[selected].identity), expires) {
-			c.earlyMu.Lock()
-			c.earlyAccepted = true
-			c.earlyDataLimit = limit
-			c.earlyMu.Unlock()
-		}
-	}
-	return state, uint16(selected), nil
+	return selection.session, selection.identity, nil
 }
 
 func obfuscatedTicketAge(state *ClientSessionState, now time.Time) uint32 {
@@ -780,11 +909,15 @@ func calculatePSKBinder(suite *cipherSuite, psk, transcriptHash []byte) []byte {
 }
 
 func calculatePSKBinderInto(suite *cipherSuite, psk, transcriptHash, out []byte) {
+	calculatePSKBinderWithLabelInto(suite, psk, labelResumptionBinder, transcriptHash, out)
+}
+
+func calculatePSKBinderWithLabelInto(suite *cipherSuite, psk []byte, label *singleBlockHKDFLabel, transcriptHash, out []byte) {
 	if len(out) != suite.hash.Size() {
 		panic("dtls13: PSK binder output must equal Hash.length")
 	}
 	hkdfExtractInto(suite.hash.New, psk, nil, out)
-	deriveSecretInto(suite, out, labelResumptionBinder, emptyTranscriptHash(suite), out)
+	deriveSecretInto(suite, out, label, emptyTranscriptHash(suite), out)
 	computeFinishedVerifyDataInto(suite, out, transcriptHash, out)
 }
 
@@ -808,11 +941,46 @@ func marshalClientHelloWithPSKBinder(hello *clientHello, suite *cipherSuite, psk
 	return hello.marshal()
 }
 
+func marshalClientHelloWithPSKOffers(hello *clientHello, offers []clientPSKOffer, initialClientHelloHash, hrrBody []byte) ([]byte, error) {
+	hello.pskIdentities = make([]pskIdentityEntry, len(offers))
+	hello.pskBinders = make([][]byte, len(offers))
+	for i, offer := range offers {
+		hello.pskIdentities[i] = pskIdentityEntry{identity: offer.identity, obfuscatedAge: offer.age}
+		hello.pskBinders[i] = make([]byte, offer.suite.hash.Size())
+	}
+	body, err := hello.marshal()
+	if err != nil {
+		return nil, err
+	}
+	binderBytes := 0
+	for _, binder := range hello.pskBinders {
+		binderBytes += 1 + len(binder)
+	}
+	truncated, err := truncateClientHelloForBinderEntries(body, binderBytes)
+	if err != nil {
+		return nil, err
+	}
+	for i, offer := range offers {
+		h := offer.suite.hash.New()
+		if len(hrrBody) > 0 {
+			writeBinderTranscriptMessage(h, handshakeTypeMessageHash, initialClientHelloHash, len(initialClientHelloHash))
+			writeBinderTranscriptMessage(h, handshakeTypeServerHello, hrrBody, len(hrrBody))
+		}
+		writeBinderTranscriptMessage(h, handshakeTypeClientHello, truncated, len(body))
+		calculatePSKBinderWithLabelInto(offer.suite, offer.psk, offer.binderLabel, h.Sum(nil), hello.pskBinders[i])
+	}
+	return hello.marshal()
+}
+
 func verifyClientHelloPSKBinder(body []byte, suite *cipherSuite, psk, initialClientHelloHash, hrrBody []byte) error {
 	return verifyClientHelloPSKBinderAt(body, suite, psk, initialClientHelloHash, hrrBody, 0)
 }
 
 func verifyClientHelloPSKBinderAt(body []byte, suite *cipherSuite, psk, initialClientHelloHash, hrrBody []byte, selected int) error {
+	return verifyClientHelloPSKBinderAtWithLabel(body, suite, psk, labelResumptionBinder, initialClientHelloHash, hrrBody, selected)
+}
+
+func verifyClientHelloPSKBinderAtWithLabel(body []byte, suite *cipherSuite, psk []byte, label *singleBlockHKDFLabel, initialClientHelloHash, hrrBody []byte, selected int) error {
 	hello, err := parseClientHello(body)
 	if err != nil {
 		return err
@@ -834,14 +1002,15 @@ func verifyClientHelloPSKBinderAt(body []byte, suite *cipherSuite, psk, initialC
 		writeBinderTranscriptMessage(h, handshakeTypeServerHello, hrrBody, len(hrrBody))
 	}
 	writeBinderTranscriptMessage(h, handshakeTypeClientHello, truncated, len(body))
-	want := calculatePSKBinder(suite, psk, h.Sum(nil))
+	want := make([]byte, suite.hash.Size())
+	calculatePSKBinderWithLabelInto(suite, psk, label, h.Sum(nil), want)
 	if !hmac.Equal(want, hello.pskBinders[selected]) {
 		return alertError(alertDecryptError, &ProtocolError{"invalid PSK binder"})
 	}
 	return nil
 }
 
-func (c *Conn) sendNewSessionTicket(schedule *keySchedule, suite *cipherSuite, serverName, protocol string, clientAuthAt int64, peerCertificates []*x509.Certificate, verifiedChains [][]*x509.Certificate) error {
+func (c *Conn) sendNewSessionTicket(schedule *keySchedule, suite *cipherSuite, serverName, protocol string, clientAuthAt int64, peerCertificates []*x509.Certificate, verifiedChains [][]*x509.Certificate, external *externalPSKSelection) error {
 	if c.config.SessionTicketsDisabled {
 		return nil
 	}
@@ -866,11 +1035,16 @@ func (c *Conn) sendNewSessionTicket(schedule *keySchedule, suite *cipherSuite, s
 		return err
 	}
 	lifetime := uint32(c.config.SessionTicketLifetime / time.Second)
-	ticket, err := protector.seal(&sessionTicketState{
+	ticketState := &sessionTicketState{
 		createdAt: c.config.Time().Unix(), lifetime: lifetime, suite: suite.id, psk: psk,
 		serverName: serverName, protocol: protocol, ageAdd: ageAdd, maxEarlyData: c.config.MaxEarlyData, recordSizeLimit: c.localRecordSizeLimit,
 		clientAuthAt: clientAuthAt, peerCertificates: peerCertificates, verifiedChains: verifiedChains,
-	})
+	}
+	if external != nil {
+		kdf, _ := tlsKDFForHash(external.key.hash)
+		ticketState.externalPSK = &externalPSKTicketState{wire: external.key.wireIdentity, kdf: kdf, digest: external.key.digest}
+	}
+	ticket, err := protector.seal(ticketState)
 	if err != nil {
 		var protocolErr *ProtocolError
 		if len(peerCertificates) > 0 && errors.As(err, &protocolErr) && protocolErr.Reason == "16-bit vector overflow" {
@@ -950,6 +1124,7 @@ func (c *Conn) processNewSessionTicket(body []byte) error {
 		suite: c.resumptionSuite.id, receivedAt: c.config.Time(), lifetime: message.lifetime,
 		ageAdd: message.ageAdd, serverName: c.config.ServerName, protocol: state.NegotiatedProtocol,
 		maxEarlyData: message.maxEarlyData, recordSizeLimit: state.PeerRecordSizeLimit, peerCertificates: state.PeerCertificates, verifiedChains: state.VerifiedChains,
+		externalPSK: state.externalPSKSelection(),
 	})
 	return nil
 }

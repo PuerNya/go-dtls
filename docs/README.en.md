@@ -175,7 +175,7 @@ func serve(conn *dtls13.Conn) {
 | `ReadDatagram` | Read one authenticated datagram and return its source, full length, and truncation status |
 | `WriteDatagram` | Send one datagram to the authenticated peer of the association |
 | `SetDeadline` / `SetReadDeadline` / `SetWriteDeadline` | Set deadlines for the underlying datagram I/O |
-| `ConnectionState` | Get the version, suite, ALPN, certificates, resumption state, active CIDs, RRC state, and negotiated RFC 8449 limits in both directions |
+| `ConnectionState` | Get the version, suite, ALPN, certificates, resumption state, external PSK identity/context, active CIDs, RRC state, and negotiated RFC 8449 limits in both directions |
 | `Close` | Send `close_notify`, clear traffic/resumption secrets, and close the underlying connection |
 
 ### Datagram Size and Truncation
@@ -219,6 +219,7 @@ Deadlines, socket closure, and underlying UDP errors follow Go's `net` error mod
 
 | Feature | API / configuration | Description |
 | --- | --- | --- |
+| External PSK / importer | `ImportExternalPSK`, `NewDirectExternalPSK`, `ExternalPSKs` | RFC 9257/9258 certificate-free authentication; the importer is recommended, only `psk_dhe_ke` is used, and multiple identities, HRR, and ticket resumption are supported |
 | Session resumption | `ClientSessionCache`, `NewLRUClientSessionCache` | The client caches NewSessionTicket; the server is controlled by `SessionTicketKey` and ticket settings; mTLS resumption preserves client authentication state |
 | 0-RTT | `WriteEarlyData`, `MaxEarlyData`, `EarlyDataReplayCache` | Available only on resumed connections; callers must handle `ErrEarlyDataUnavailable` and `ErrEarlyDataRejected`, and early data must be replay-safe |
 | KeyUpdate | `SendKeyUpdate(requestPeer)` | Reliably sent, with the sending epoch switched after ACK; also triggered automatically near AEAD usage limits |
@@ -250,6 +251,7 @@ Where TLS 1.3 semantics match, `Config` follows `crypto/tls.Config`. A configura
 | `NextProtos` | ALPN protocol list |
 | `CipherSuites` | AES-128-GCM, AES-256-GCM, ChaCha20-Poly1305, AES-128-CCM |
 | `CurvePreferences` | X25519, P-256 |
+| `ExternalPSKs` | Empty by default; configure immutable external PSKs created by `ImportExternalPSK` or `NewDirectExternalPSK`; cannot be combined with `ClientAuth` |
 | `MTU` | 1200-byte UDP payload; minimum 256 |
 | `IgnorePathMTU` | `false` by default; only Application Data skips the library PMTU check, while handshake behavior is unchanged |
 | `RecordSizeLimit` | `0` selects the `2^14+1` default; values from `64..2^14+1` set the complete `DTLSInnerPlaintext` this endpoint accepts and are advertised with RFC 8449 independently of PMTU |
@@ -267,6 +269,28 @@ Where TLS 1.3 semantics match, `Config` follows `crypto/tls.Config`. A configura
 | `MaxEarlyData` | 0, so 0-RTT is disabled by default |
 | `MaxConnectionIDs` | 8 CIDs per direction |
 | `DisableReturnRoutabilityCheck` | `false` by default; disable RRC only when the application provides equivalent address validation |
+
+### External PSKs and the Importer
+
+The RFC 9258 importer is the recommended entry point. It binds an EPSK to DTLS 1.3 with the `dtls13` label and derives separate SHA-256 and SHA-384 target keys. The returned value does not retain the original EPSK:
+
+```go
+psk, err := dtls13.ImportExternalPSK(
+	[]byte("device-17"),
+	provisionedKey, // At least 16 bytes, preferably derived from at least 128 bits of entropy.
+	[]byte("client=device-17;server=gateway-2"),
+	crypto.SHA256, // Use 0 when the EPSK has no associated hash; SHA-256 is the default.
+)
+if err != nil {
+	log.Fatal(err)
+}
+
+config := &dtls13.Config{ExternalPSKs: []*dtls13.ExternalPSK{psk}}
+```
+
+Existing deployments with an explicitly TLS-specific PSK can use `NewDirectExternalPSK(identity, key, hash)`. Direct PSKs use `ext binder`; imported PSKs use `imp binder`, and the forms are not interchangeable. Clients may configure multiple identities. A server selects the first known identity compatible with its selected cipher-suite hash, or falls back to certificate authentication when a certificate is configured. Both forms offer only `psk_dhe_ke`. `DidResume` is `false` for the initial external-PSK handshake; a ticket issued afterward can resume normally while retaining the authentication origin through `ConnectionState.ExternalPSKIdentity()` and `ExternalPSKContext()`. Removing or changing the configured external PSK invalidates tickets derived from it.
+
+Identities and importer contexts appear in cleartext in ClientHello, so reuse makes connections linkable and neither field may contain secrets. Provision a PSK for a fixed client/server role pair. Group keys must bind both peer identities and the upstream provisioning channel in the context. Base TLS 1.3 does not combine external PSKs with certificate authentication, so `ClientAuth` cannot be enabled with `ExternalPSKs`. An external PSK does not send 0-RTT directly; only later ticket resumptions may use the ordinary `MaxEarlyData` and replay-cache policy.
 
 ### Certificate Compression
 
@@ -322,6 +346,8 @@ Normative keywords are interpreted according to BCP 14. `MUST`, `MUST NOT`, `REQ
 | [RFC 9146](https://www.rfc-editor.org/rfc/rfc9146) | Complete | CID negotiation, directional CIDs, updates, Listener routing, error handling, and address retention; DTLS 1.2-only details do not apply |
 | [RFC 8449](https://www.rfc-editor.org/rfc/rfc8449) | Complete | Default CH/EE negotiation, directional limits, minimum 64, fatal `record_overflow`, HRR, resumption, 0-RTT, KeyUpdate, ACK, and PMTU independence |
 | [RFC 8879](https://www.rfc-editor.org/rfc/rfc8879) | Complete | Explicit opt-in zlib; directional ClientHello/CertificateRequest negotiation, server and mTLS/PHA client certificates, CompressedCertificate transcripts, safe fallback, and decompression bounds |
+| [RFC 9257](https://www.rfc-editor.org/rfc/rfc9257) | Complete | At least 128-bit external PSKs, DHE-only handshakes, opaque identities, multiple identities, certificate fallback, privacy guidance, and pairwise/role deployment requirements are covered |
+| [RFC 9258](https://www.rfc-editor.org/rfc/rfc9258) | Complete | `ImportedIdentity`, DTLS `0xfefc`, SHA-256/384 target KDFs, the EPSK source hash, `dtls13derived psk`, and `imp binder` are implemented |
 | [RFC 9846](https://www.rfc-editor.org/rfc/rfc9846) | Complete for enabled features | Ignores `user_canceled(90)` and continues waiting for `close_notify` during the handshake, final-ACK wait, and post-handshake processing; local cryptographic failure without a more specific alert sends `general_error(117)`, while a specific protocol alert always takes precedence |
 | [RFC 9325](https://www.rfc-editor.org/rfc/rfc9325) | Partial | PFS, AEAD, SNI/ALPN, tickets, 0-RTT, KeyUpdate, and certificate security limits are covered; OCSP stapling is absent, and this module intentionally does not implement the DTLS 1.2 support required by the BCP |
 | [RFC 9525](https://www.rfc-editor.org/rfc/rfc9525) | Partial | Go X.509 and `ServerName` cover DNS-ID/IP-ID; URI-ID, SRV-ID, and application service identities are delegated to caller verification callbacks |
@@ -370,12 +396,14 @@ This table contains all 11 `Normative References` from the RFC Editor XML for RF
 | [RFC 9846](https://www.rfc-editor.org/rfc/rfc9846) | TLS 1.3 KeyShare, PSK/HRR, NST, AEAD limits, KeyUpdate, alerts, and vector bounds | Complete for enabled features; mTLS resumption preserves authentication state, policy/CA/validity, and total authentication lifetime; see Overall Status for `user_canceled` and `general_error` |
 | [RFC 8449](https://www.rfc-editor.org/rfc/rfc8449) | TLS/DTLS `record_size_limit` | Clients advertise it by default; servers respond only to an offer. Sending follows the peer limit, receiving follows the local limit, absence restores the protocol maximum, and PMTU remains an independent lower bound |
 | [RFC 8879](https://www.rfc-editor.org/rfc/rfc8879) | TLS/DTLS Certificate Compression | Explicit opt-in standard zlib; CH/CR negotiation, server and client certificates, HRR, mTLS, PHA, fragmentation/retransmission, transcripts, and bounded decompression are complete; plain Certificate is used when smaller |
+| [RFC 9257](https://www.rfc-editor.org/rfc/rfc9257) | TLS 1.3 external PSK guidance | DHE-only use, multiple identities, unknown-identity fallback, cleartext identity risks, ticket-origin binding, and the external-PSK 0-RTT policy are implemented |
+| [RFC 9258](https://www.rfc-editor.org/rfc/rfc9258) | TLS/DTLS 1.3 PSK Importer | SHA-256/384 target derivation, the DTLS label, ImportedIdentity wire encoding, and the distinct binder label are implemented |
 | [RFC 9325](https://www.rfc-editor.org/rfc/rfc9325) | TLS/DTLS deployment security BCP | Tickets use AES-256-GCM and are limited to one second through seven days; RSA 2048-bit and SHA-1/MD5 certificate limits are enforced on full handshakes, trust anchors, and resumption paths; see Overall Status for the OCSP and DTLS 1.2 scope exceptions |
 | [RFC 9525](https://www.rfc-editor.org/rfc/rfc9525) | Service identity verification | DNS-ID/IP-ID are verified strictly by default; callers implement application semantics for other reference identifiers |
 | [RFC 9853](https://www.rfc-editor.org/rfc/rfc9853) | Return Routability Check for CID address changes | Complete; enhanced check by default, basic check after the old path fails, rebind only after validation, independent candidate-path amplification limit, and spare-CID probing when available |
 | [RFC 8701](https://www.rfc-editor.org/rfc/rfc8701) | GREASE anti-ossification | Receivers tolerate valid unknown values while preserving HRR invariants; senders do not actively generate GREASE |
 
-Unsupported optional extensions include RFC 9149 Ticket Requests, RFC 9257/9258 external PSK, RFC 9849 ECH, and RFC 9954 Hybrid Key Exchange.
+Unsupported optional extensions include RFC 9149 Ticket Requests, RFC 9849 ECH, and RFC 9954 Hybrid Key Exchange.
 
 ### Scope Boundaries
 
@@ -386,7 +414,7 @@ The following items do not reduce completion of mandatory RFC 9147 semantics, bu
 - The sender uses the valid one-record-per-UDP-datagram mode and exposes no optional multi-record aggregation API.
 - Concurrent multiple NewSessionTicket or PHA requests are not exposed; the RFC permits but does not require this capability.
 - Automatic RRC rebinding requires a transport that receives from different sources and can send to a selected destination. The standard Listener supports this; connected UDP clients are constrained by operating-system peer filtering. An empty CID cannot uniquely route across five-tuples.
-- The wolfSSL 5.9.2 interoperability build does not implement RFC 8879 and does not enable CID, 0-RTT, session tickets, or `SESSION_CERTS`. Certificate-compression tests prove only safe extension ignoring and plain-Certificate fallback; the third-party matrix excludes compression negotiation, RRC, and mTLS resumption.
+- The wolfSSL 5.9.2 interoperability build does not implement RFC 8879 and does not enable CID, 0-RTT, session tickets, or `SESSION_CERTS`. Certificate-compression tests prove only safe extension ignoring and plain-Certificate fallback. Builds with PSK callbacks additionally verify direct RFC 9257 PSKs in both directions; wolfSSL has no RFC 9258 importer API. The third-party matrix excludes compression negotiation, RRC, and mTLS resumption.
 
 ## Benchmark
 
@@ -395,6 +423,7 @@ The following representative results were measured on an AMD Ryzen 7 7435H with 
 | Scenario | Representative result |
 | --- | --- |
 | Full certificate handshake and close, `BenchmarkConnectionHandshakeLifecycle` | About `625.9 us/op`, `99725 B/op`, `761 allocs/op` |
+| RFC 9257/9258 external-PSK handshake and close, `BenchmarkExternalPSKHandshakeLifecycle` | About `355.4 us/op`, `98287 B/op`, `727 allocs/op` |
 | Full mTLS, `BenchmarkMutualTLSHandshakeLifecycle/Full` | About `915.1 us/op`, `116112 B/op`, `976 allocs/op` |
 | Resumed mTLS, `BenchmarkMutualTLSHandshakeLifecycle/Resumed` | About `459.9 us/op`, `115250 B/op`, `800-801 allocs/op` |
 | RFC 8879 zlib server-certificate handshake, four-certificate chain | About `1.049 ms/op`, `123323 B/op`, `1022 allocs/op` |
@@ -424,6 +453,7 @@ Run full-connection and record-layer benchmarks separately:
 
 ```sh
 go test -run '^$' -bench '^BenchmarkConnectionHandshakeLifecycle$' -benchmem -benchtime=2000x -cpu=1
+go test -run '^$' -bench '^BenchmarkExternalPSKHandshakeLifecycle$' -benchmem -benchtime=2000x -cpu=1
 go test -run '^$' -bench '^BenchmarkMutualTLSHandshakeLifecycle/(Full|Resumed)$' -benchmem -count=10
 go test -run '^$' -bench '^BenchmarkCertificateCompression' -benchmem
 go test -run '^$' -bench '^BenchmarkProtectedRecord(Seal|RoundTripInPlace)$' -benchmem -count=5
@@ -436,12 +466,13 @@ The repository also includes focused benchmarks for cipher suites, ACK, records/
 - RFC 9325 certificate-policy tests cover server configuration, client reception, self-signed certificates, unsent trust anchors, `InsecureSkipVerify`, ordinary resumption, and mTLS resumption, with differential behavior against `crypto/x509` for 1024-bit RSA/SHA-1 trust anchors.
 - RFC 8449 tests cover CH/EE, the minimum of 64, directional limits, invalid values and extension combinations, authenticated overflow, HRR, resumption, 0-RTT, KeyUpdate, ACK, PMTU independence, and compatibility with third parties that do not negotiate it.
 - RFC 8879 tests cover ClientHello/CertificateRequest negotiation, zlib, CompressedCertificate, transcripts, invalid algorithms/streams/lengths, decompression limits, plain-Certificate fallback, HRR, resumption, mTLS/PHA, record limits, fragmentation/retransmission, weak networks, resource lifecycles, and safe fallback with third parties that do not support it.
+- RFC 9257/9258 tests cover independent importer derivation, SHA-256/384 KDF separation, `imp`/`ext` binder separation, direct and imported PSKs, multiple identities, HRR filtering, identity/key/context failures, certificate fallback, connection state, ticket resumption and revocation, the 0-RTT policy, and weak networks.
 - Weak-network tests cover bidirectional loss, delay, reordering, and duplication, including CH/SH/Finished/ACK/HRR/mTLS-resumption combinations.
 - mTLS tests cover full handshakes, PSK resumption, 0-RTT, CA/policy fallback, and renewed-ticket authentication lifetime.
 - RFC 9846 alert tests cover handshake processing, final-ACK waiting, post-handshake reordering, `close_notify`, and local cryptographic failure.
 - RFC 9853 tests cover RRC messages/state machines, real UDP NAT rebinding, CID updates, weak-network combinations, and connection resource lifecycles.
 - Parser/record fuzzing covers copy and in-place decryption differentials for all four AEADs.
-- Bidirectional wolfSSL 5.9.2 interoperability tests cover HRR, RSA-PSS certificate handshakes, Finished ACK, application data, AES-GCM, and AES-128-CCM.
+- Bidirectional wolfSSL 5.9.2 interoperability tests cover HRR, RSA-PSS certificate handshakes, Finished ACK, application data, AES-GCM, AES-128-CCM, and direct external PSKs when supported by the build.
 
 See [CONTRIBUTING.en.md](CONTRIBUTING.en.md) for the development environment, required checks, performance validation, and commit rules.
 

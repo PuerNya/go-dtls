@@ -2,6 +2,7 @@ package dtls13
 
 import (
 	"bytes"
+	"crypto"
 	"crypto/tls"
 	"fmt"
 	"net"
@@ -44,22 +45,30 @@ func unusedUDPPort(t *testing.T) int {
 }
 
 func TestInteropWolfSSLServer(t *testing.T) {
-	testInteropWolfSSLServer(t, "", nil, false)
+	testInteropWolfSSLServer(t, "", nil, false, nil)
 }
 
 func TestInteropWolfSSLServerAES128CCM(t *testing.T) {
-	testInteropWolfSSLServer(t, "TLS13-AES128-CCM-SHA256", []uint16{TLS_AES_128_CCM_SHA256}, false)
+	testInteropWolfSSLServer(t, "TLS13-AES128-CCM-SHA256", []uint16{TLS_AES_128_CCM_SHA256}, false, nil)
 }
 
 func TestInteropWolfSSLServerCertificateCompressionOffer(t *testing.T) {
-	testInteropWolfSSLServer(t, "", nil, true)
+	testInteropWolfSSLServer(t, "", nil, true, nil)
 }
 
-func testInteropWolfSSLServer(t *testing.T, cipherName string, suites []uint16, certificateCompression bool) {
+func TestInteropWolfSSLServerExternalPSK(t *testing.T) {
+	testInteropWolfSSLServer(t, "TLS13-AES128-GCM-SHA256", []uint16{TLS_AES_128_GCM_SHA256}, false, wolfSSLExternalPSK(t))
+}
+
+func testInteropWolfSSLServer(t *testing.T, cipherName string, suites []uint16, certificateCompression bool, externalPSK *ExternalPSK) {
 	t.Helper()
 	root, serverPath, _ := wolfSSLPaths(t)
 	port := unusedUDPPort(t)
 	args := []string{"-u", "-v", "4", "-e", "-d", "-p", strconv.Itoa(port)}
+	if externalPSK != nil {
+		requireWolfSSLPSK(t, serverPath)
+		args = append(args, "-s", "--onlyPskDheKe")
+	}
 	if cipherName != "" {
 		args = append(args, "-l", cipherName)
 	}
@@ -83,7 +92,7 @@ func testInteropWolfSSLServer(t *testing.T, cipherName string, suites []uint16, 
 
 	dialer := &net.Dialer{Timeout: 5 * time.Second}
 	conn, err := DialWithDialer(dialer, "udp4", fmt.Sprintf("127.0.0.1:%d", port), &Config{
-		InsecureSkipVerify: true, CipherSuites: suites, EnableCertificateCompression: certificateCompression, HandshakeTimeout: 5 * time.Second,
+		InsecureSkipVerify: true, CipherSuites: suites, EnableCertificateCompression: certificateCompression, ExternalPSKs: externalPSKList(externalPSK), HandshakeTimeout: 5 * time.Second,
 	})
 	if err != nil {
 		t.Fatalf("Go client to wolfSSL 5.9.2 server: %v\n%s", err, output.String())
@@ -105,18 +114,22 @@ func testInteropWolfSSLServer(t *testing.T, cipherName string, suites []uint16, 
 }
 
 func TestInteropWolfSSLClient(t *testing.T) {
-	testInteropWolfSSLClient(t, "", nil, false)
+	testInteropWolfSSLClient(t, "", nil, false, nil)
 }
 
 func TestInteropWolfSSLClientAES128CCM(t *testing.T) {
-	testInteropWolfSSLClient(t, "TLS13-AES128-CCM-SHA256", []uint16{TLS_AES_128_CCM_SHA256}, false)
+	testInteropWolfSSLClient(t, "TLS13-AES128-CCM-SHA256", []uint16{TLS_AES_128_CCM_SHA256}, false, nil)
 }
 
 func TestInteropWolfSSLClientCertificateCompressionFallback(t *testing.T) {
-	testInteropWolfSSLClient(t, "", nil, true)
+	testInteropWolfSSLClient(t, "", nil, true, nil)
 }
 
-func testInteropWolfSSLClient(t *testing.T, cipherName string, suites []uint16, certificateCompression bool) {
+func TestInteropWolfSSLClientExternalPSK(t *testing.T) {
+	testInteropWolfSSLClient(t, "TLS13-AES128-GCM-SHA256", []uint16{TLS_AES_128_GCM_SHA256}, false, wolfSSLExternalPSK(t))
+}
+
+func testInteropWolfSSLClient(t *testing.T, cipherName string, suites []uint16, certificateCompression bool, externalPSK *ExternalPSK) {
 	t.Helper()
 	root, _, clientPath := wolfSSLPaths(t)
 	certificate, err := tls.LoadX509KeyPair(filepath.Join(root, "certs", "server-cert.pem"), filepath.Join(root, "certs", "server-key.pem"))
@@ -124,7 +137,7 @@ func testInteropWolfSSLClient(t *testing.T, cipherName string, suites []uint16, 
 		t.Fatal(err)
 	}
 	listener, err := Listen("udp4", "127.0.0.1:0", &Config{
-		Certificates: []tls.Certificate{certificate}, CipherSuites: suites, EnableCertificateCompression: certificateCompression, HandshakeTimeout: 5 * time.Second, SessionTicketsDisabled: true,
+		Certificates: []tls.Certificate{certificate}, CipherSuites: suites, EnableCertificateCompression: certificateCompression, ExternalPSKs: externalPSKList(externalPSK), HandshakeTimeout: 5 * time.Second, SessionTicketsDisabled: true,
 	})
 	if err != nil {
 		t.Fatal(err)
@@ -133,6 +146,10 @@ func testInteropWolfSSLClient(t *testing.T, cipherName string, suites []uint16, 
 	port := listener.Addr().(*net.UDPAddr).Port
 
 	args := []string{"-u", "-v", "4", "-d", "-x", "-h", "127.0.0.1", "-p", strconv.Itoa(port)}
+	if externalPSK != nil {
+		requireWolfSSLPSK(t, clientPath)
+		args = append(args, "-s", "--onlyPskDheKe", "--openssl-psk")
+	}
 	if cipherName != "" {
 		args = append(args, "-l", cipherName)
 	}
@@ -213,5 +230,30 @@ func testInteropWolfSSLClient(t *testing.T, cipherName string, suites []uint16, 
 	case <-time.After(5 * time.Second):
 		_ = cmd.Process.Kill()
 		t.Fatalf("wolfSSL client timed out\n%s", output.String())
+	}
+}
+
+func wolfSSLExternalPSK(t *testing.T) *ExternalPSK {
+	t.Helper()
+	key := bytes.Repeat([]byte{0x01, 0x23, 0x45, 0x67, 0x89, 0xab, 0xcd, 0xef}, 4)
+	psk, err := NewDirectExternalPSK([]byte("Client_identity"), key, crypto.SHA256)
+	if err != nil {
+		t.Fatal(err)
+	}
+	return psk
+}
+
+func externalPSKList(psk *ExternalPSK) []*ExternalPSK {
+	if psk == nil {
+		return nil
+	}
+	return []*ExternalPSK{psk}
+}
+
+func requireWolfSSLPSK(t *testing.T, executable string) {
+	t.Helper()
+	output, _ := exec.Command(executable, "-?").CombinedOutput() // #nosec G204 -- validated local WOLFSSL_ROOT executable in this opt-in test.
+	if !bytes.Contains(output, []byte("Use pre Shared keys")) {
+		t.Skip("wolfSSL interoperability build does not enable PSK callbacks")
 	}
 }

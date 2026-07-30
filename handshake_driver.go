@@ -622,12 +622,31 @@ func (c *Conn) clientHandshake() error {
 		return err
 	}
 	clientSession, sessionSuite := usableClientSession(c.config, c.conn)
-	c.earlyMu.Lock()
-	queuedEarly := append([]byte(nil), c.earlyPending...)
-	c.earlyMu.Unlock()
-	if clientSession != nil {
+	var pskOffers []clientPSKOffer
+	var externalOffers []clientPSKOffer
+	if len(c.config.ExternalPSKs) > 0 {
+		externalOffers = configuredExternalPSKOffers(c.config)
+	}
+	if len(externalOffers) > 0 {
+		if clientSession != nil {
+			pskOffers = append(pskOffers, clientPSKOffer{
+				identity: clientSession.ticket, psk: clientSession.psk, suite: sessionSuite,
+				binderLabel: labelResumptionBinder, age: obfuscatedTicketAge(clientSession, c.config.Time()),
+				session: clientSession, external: clientSession.externalPSK,
+			})
+		}
+		pskOffers = append(pskOffers, externalOffers...)
+	} else if clientSession != nil {
 		hello.pskIdentity = append([]byte(nil), clientSession.ticket...)
 		hello.obfuscatedAge = obfuscatedTicketAge(clientSession, c.config.Time())
+	}
+	c.earlyMu.Lock()
+	queuedEarly := append([]byte(nil), c.earlyPending...)
+	if len(queuedEarly) > 0 && (clientSession == nil || clientSession.maxEarlyData == 0) {
+		c.earlyPending = nil
+	}
+	c.earlyMu.Unlock()
+	if clientSession != nil {
 		if slices.Contains(hello.cipherSuites, sessionSuite.id) && hello.cipherSuites[0] != sessionSuite.id {
 			prioritized := []uint16{sessionSuite.id}
 			for _, id := range hello.cipherSuites {
@@ -642,7 +661,9 @@ func (c *Conn) clientHandshake() error {
 		}
 	}
 	var helloBody []byte
-	if clientSession != nil {
+	if len(pskOffers) > 0 {
+		helloBody, err = marshalClientHelloWithPSKOffers(hello, pskOffers, nil, nil)
+	} else if clientSession != nil {
 		helloBody, err = marshalClientHelloWithPSKBinder(hello, sessionSuite, clientSession.psk, nil, nil)
 	} else {
 		helloBody, err = hello.marshal()
@@ -743,11 +764,9 @@ func (c *Conn) clientHandshake() error {
 			return &ProtocolError{"HelloRetryRequest selected an unoffered cipher suite"}
 		}
 		helloRetrySuite = hrr.cipherSuite
-		if clientSession != nil {
-			hrrSuite, suiteErr := cipherSuiteForID(hrr.cipherSuite)
-			if suiteErr != nil || hrrSuite.hash != sessionSuite.hash {
-				return &ProtocolError{"HelloRetryRequest selected a cipher suite incompatible with the offered PSK"}
-			}
+		hrrSuite, suiteErr := cipherSuiteForID(hrr.cipherSuite)
+		if suiteErr != nil {
+			return suiteErr
 		}
 		initial := newTranscriptHash(suite.hash.New())
 		_ = initial.add(handshakeTypeClientHello, 0, helloBody)
@@ -772,10 +791,24 @@ func (c *Conn) clientHandshake() error {
 			hello.keyShares = []keyShareEntry{{group: key.group, data: key.publicBytes()}}
 		}
 		hello.cookie = hrr.cookie
-		if clientSession != nil {
+		if len(pskOffers) > 0 {
+			pskOffers = filterPSKOffersByHash(pskOffers, hrrSuite.hash)
+			for i := range pskOffers {
+				if pskOffers[i].session != nil {
+					pskOffers[i].age = obfuscatedTicketAge(pskOffers[i].session, c.config.Time())
+				}
+			}
+		}
+		if len(pskOffers) > 0 {
+			helloBody, parseErr = marshalClientHelloWithPSKOffers(hello, pskOffers, initial.sumInto(transcriptDigest[:0]), serverHelloBody)
+		} else if clientSession != nil && sessionSuite.hash == hrrSuite.hash && len(hello.pskIdentity) > 0 {
 			hello.obfuscatedAge = obfuscatedTicketAge(clientSession, c.config.Time())
 			helloBody, parseErr = marshalClientHelloWithPSKBinder(hello, sessionSuite, clientSession.psk, initial.sumInto(transcriptDigest[:0]), serverHelloBody)
 		} else {
+			hello.pskIdentity = nil
+			hello.pskBinder = nil
+			hello.pskIdentities = nil
+			hello.pskBinders = nil
 			helloBody, parseErr = hello.marshal()
 		}
 		if parseErr != nil {
@@ -842,15 +875,26 @@ func (c *Conn) clientHandshake() error {
 		c.peerCIDUpdatesAllowed = len(c.sendConnectionID) > 0
 	}
 	c.returnRoutabilityCheckNegotiated = sh.returnRoutability
-	resumed := sh.selectedIdentity != nil
-	if resumed {
-		if clientSession == nil || *sh.selectedIdentity != 0 {
-			return &ProtocolError{"server selected an invalid PSK identity"}
+	usingPSK := sh.selectedIdentity != nil
+	var resumed bool
+	var externalPSK *externalPSKSelection
+	var selectedOffer *clientPSKOffer
+	var singleTicketOffer clientPSKOffer
+	if usingPSK {
+		if len(pskOffers) == 0 && clientSession != nil && *sh.selectedIdentity == 0 {
+			singleTicketOffer = clientPSKOffer{psk: clientSession.psk, suite: sessionSuite, session: clientSession, external: clientSession.externalPSK}
+			selectedOffer = &singleTicketOffer
+		} else {
+			if int(*sh.selectedIdentity) >= len(pskOffers) {
+				return &ProtocolError{"server selected an invalid PSK identity"}
+			}
+			selectedOffer = &pskOffers[*sh.selectedIdentity]
 		}
-		originalSuite, suiteErr := cipherSuiteForID(clientSession.suite)
-		if suiteErr != nil || suite.hash != originalSuite.hash {
+		if suite.hash != selectedOffer.suite.hash {
 			return &ProtocolError{"server selected a cipher suite incompatible with the PSK"}
 		}
+		resumed = selectedOffer.session != nil
+		externalPSK = selectedOffer.external
 	}
 	shared, err := key.sharedSecret(sh.keyShare.group, sh.keyShare.data)
 	if err != nil {
@@ -862,8 +906,8 @@ func (c *Conn) clientHandshake() error {
 	}
 	_ = transcript.add(handshakeTypeServerHello, serverHelloSequence, serverHelloBody)
 	var psk []byte
-	if resumed {
-		psk = clientSession.psk
+	if usingPSK {
+		psk = selectedOffer.psk
 	}
 	schedule := newKeySchedule(suite, psk)
 	if err = schedule.deriveHandshake(shared, transcript.sumInto(transcriptDigest[:0])); err != nil {
@@ -890,10 +934,10 @@ func (c *Conn) clientHandshake() error {
 	var peerCerts []*x509.Certificate
 	var chains [][]*x509.Certificate
 	if resumed {
-		peerCerts = append([]*x509.Certificate(nil), clientSession.peerCertificates...)
-		chains = make([][]*x509.Certificate, len(clientSession.verifiedChains))
-		for i := range clientSession.verifiedChains {
-			chains[i] = append([]*x509.Certificate(nil), clientSession.verifiedChains[i]...)
+		peerCerts = append([]*x509.Certificate(nil), selectedOffer.session.peerCertificates...)
+		chains = make([][]*x509.Certificate, len(selectedOffer.session.verifiedChains))
+		for i := range selectedOffer.session.verifiedChains {
+			chains[i] = append([]*x509.Certificate(nil), selectedOffer.session.verifiedChains[i]...)
 		}
 	}
 	var negotiated string
@@ -910,7 +954,7 @@ func (c *Conn) clientHandshake() error {
 		}
 		for index := 0; index < messages.len(); index++ {
 			message := messages.at(index)
-			if err = serverStage.accept(message.typ, resumed); err != nil {
+			if err = serverStage.accept(message.typ, usingPSK); err != nil {
 				return err
 			}
 			switch message.typ {
@@ -945,8 +989,8 @@ func (c *Conn) clientHandshake() error {
 				}
 				_ = transcript.add(message.typ, message.sequence, message.body)
 			case handshakeTypeCertificate, handshakeTypeCompressedCertificate:
-				if resumed {
-					return &ProtocolError{"server sent Certificate in a resumed handshake"}
+				if usingPSK {
+					return &ProtocolError{"server sent Certificate in a PSK handshake"}
 				}
 				certMsg, parseErr := parseCertificateHandshakeMessage(message.typ, message.body, hello.certificateCompressionAlgorithms(), c.config.MaxHandshakeMessage)
 				if parseErr != nil {
@@ -965,8 +1009,8 @@ func (c *Conn) clientHandshake() error {
 				}
 				_ = transcript.add(message.typ, message.sequence, message.body)
 			case handshakeTypeCertificateRequest:
-				if resumed {
-					return &ProtocolError{"server requested a certificate in a resumed handshake"}
+				if usingPSK {
+					return &ProtocolError{"server requested a certificate in a PSK handshake"}
 				}
 				if certificateRequest != nil {
 					return &ProtocolError{"duplicate CertificateRequest"}
@@ -1002,7 +1046,7 @@ func (c *Conn) clientHandshake() error {
 				verifiedServerSignature = true
 				_ = transcript.add(message.typ, message.sequence, message.body)
 			case handshakeTypeFinished:
-				if !resumed && (len(peerCerts) == 0 || !verifiedServerSignature) {
+				if !usingPSK && (len(peerCerts) == 0 || !verifiedServerSignature) {
 					return &ProtocolError{"server authentication messages are incomplete"}
 				}
 				verify, parseErr := parseFinished(message.body, suite.hash.Size())
@@ -1122,8 +1166,10 @@ func (c *Conn) clientHandshake() error {
 	c.completedPeerFlightStart = serverHandshakeStart
 	c.completedPeerFlightEnd = serverFinishedSequence
 	c.hasCompletedPeerFlight = true
+	exporter := newExporter(suite, schedule.exporterMasterSecret)
+	exporter.externalPSK = externalPSK
 	c.mu.Lock()
-	c.state = ConnectionState{Version: VersionDTLS13, HandshakeComplete: true, DidResume: resumed, CipherSuite: suite.id, NegotiatedProtocol: negotiated, ServerName: c.config.ServerName, PeerCertificates: peerCerts, VerifiedChains: chains, LocalConnectionID: append([]byte(nil), c.receiveConnectionID...), PeerConnectionID: append([]byte(nil), c.sendConnectionID...), ReturnRoutabilityCheck: c.returnRoutabilityCheckNegotiated, RecordSizeLimitNegotiated: c.recordSizeLimitNegotiated, LocalRecordSizeLimit: c.localRecordSizeLimit, PeerRecordSizeLimit: c.peerRecordSizeLimit, exporter: newExporter(suite, schedule.exporterMasterSecret)}
+	c.state = ConnectionState{Version: VersionDTLS13, HandshakeComplete: true, DidResume: resumed, CipherSuite: suite.id, NegotiatedProtocol: negotiated, ServerName: c.config.ServerName, PeerCertificates: peerCerts, VerifiedChains: chains, LocalConnectionID: append([]byte(nil), c.receiveConnectionID...), PeerConnectionID: append([]byte(nil), c.sendConnectionID...), ReturnRoutabilityCheck: c.returnRoutabilityCheckNegotiated, RecordSizeLimitNegotiated: c.recordSizeLimitNegotiated, LocalRecordSizeLimit: c.localRecordSizeLimit, PeerRecordSizeLimit: c.peerRecordSizeLimit, exporter: exporter}
 	c.mu.Unlock()
 	return nil
 }
@@ -1193,9 +1239,13 @@ func removedPSKsAreIncompatible(config *Config, initial, second *clientHello, se
 	if initial == nil || second == nil || selectedSuite == nil || len(initial.pskIdentities) == 0 {
 		return true, nil
 	}
-	protector, err := newSessionTicketProtector(config.SessionTicketKey, config.Rand, config.Time)
-	if err != nil {
-		return false, err
+	var protector *sessionTicketProtector
+	if !config.SessionTicketsDisabled {
+		var err error
+		protector, err = newSessionTicketProtector(config.SessionTicketKey, config.Rand, config.Time)
+		if err != nil {
+			return false, err
+		}
 	}
 	retained := make([]bool, len(initial.pskIdentities))
 	next := 0
@@ -1211,6 +1261,12 @@ func removedPSKsAreIncompatible(config *Config, initial, second *clientHello, se
 	}
 	for index, identity := range initial.pskIdentities {
 		if retained[index] {
+			continue
+		}
+		if findExternalPSK(config, identity.identity, selectedSuite.hash) != nil {
+			return false, nil
+		}
+		if protector == nil {
 			continue
 		}
 		state, openErr := protector.open(identity.identity)
@@ -1258,6 +1314,9 @@ func (c *Conn) serverHandshake() error {
 	if err != nil {
 		return err
 	}
+	if len(c.config.ExternalPSKs) > 0 {
+		suite = preferExternalPSKCipherSuite(c.config, ch, suite)
+	}
 	hrrUsed := true
 	serverSequenceOffset := uint16(1)
 	clientFinishedSequence := uint16(2)
@@ -1268,7 +1327,9 @@ func (c *Conn) serverHandshake() error {
 	var requestedGroup tls.CurveID
 	var psk []byte
 	var resumed bool
+	var usingPSK bool
 	var resumedSession *sessionTicketState
+	var externalPSK *externalPSKSelection
 	var share keyShareEntry
 	var negotiated string
 	var shared []byte
@@ -1283,13 +1344,14 @@ func (c *Conn) serverHandshake() error {
 		if selectErr == nil {
 			candidateProtocol, protocolErr := negotiateALPN(c.config.NextProtos, ch.alpn)
 			if protocolErr == nil {
-				candidateSession, candidateIdentity, acceptErr := c.acceptSessionTicket(ch, helloBody, initialHashTranscript.sumInto(transcriptDigest[:0]), nil, suite, candidateProtocol)
+				candidate, accepted, acceptErr := c.acceptPSK(ch, helloBody, initialHashTranscript.sumInto(transcriptDigest[:0]), nil, suite, candidateProtocol)
 				if acceptErr != nil {
 					return acceptErr
 				}
-				if candidateSession != nil {
-					resumedSession = candidateSession
-					psk, resumed, selectedPSKIdentity = candidateSession.psk, true, candidateIdentity
+				if accepted && candidate.session != nil {
+					resumedSession = candidate.session
+					psk, resumed, usingPSK, selectedPSKIdentity = candidate.psk, true, true, candidate.identity
+					externalPSK = candidate.external
 					hrrUsed = false
 					serverSequenceOffset = 0
 					clientFinishedSequence = 1
@@ -1371,6 +1433,9 @@ func (c *Conn) serverHandshake() error {
 		if err != nil {
 			return err
 		}
+		if len(c.config.ExternalPSKs) > 0 {
+			suite = preferExternalPSKCipherSuite(c.config, ch, suite)
+		}
 		share, err = selectKeyShare(c.config.CurvePreferences, ch.keyShares)
 		if err != nil {
 			return err
@@ -1379,12 +1444,15 @@ func (c *Conn) serverHandshake() error {
 		if err != nil {
 			return err
 		}
-		resumedSession, selectedPSKIdentity, err = c.acceptSessionTicket(ch, helloBody, initialHashTranscript.sumInto(transcriptDigest[:0]), hrrBody, suite, negotiated)
+		selection, accepted, acceptErr := c.acceptPSK(ch, helloBody, initialHashTranscript.sumInto(transcriptDigest[:0]), hrrBody, suite, negotiated)
+		err = acceptErr
 		if err != nil {
 			return err
 		}
-		if resumedSession != nil {
-			psk, resumed = resumedSession.psk, true
+		if accepted {
+			psk, usingPSK, selectedPSKIdentity = selection.psk, true, selection.identity
+			resumedSession, externalPSK = selection.session, selection.external
+			resumed = resumedSession != nil
 		}
 	} else {
 		serverKeyShare, selectErr := selectKeyShare(c.config.CurvePreferences, ch.keyShares)
@@ -1413,7 +1481,7 @@ func (c *Conn) serverHandshake() error {
 	var cert *tls.Certificate
 	var signer crypto.Signer
 	var scheme tls.SignatureScheme
-	if !resumed {
+	if !usingPSK {
 		if err = requireCertificateSignatureAlgorithms(ch, false); err != nil {
 			return err
 		}
@@ -1454,7 +1522,7 @@ func (c *Conn) serverHandshake() error {
 		c.returnRoutabilityCheckNegotiated = true
 		sh.returnRoutability = true
 	}
-	if resumed {
+	if usingPSK {
 		selected := selectedPSKIdentity
 		sh.selectedIdentity = &selected
 	}
@@ -1539,7 +1607,7 @@ func (c *Conn) serverHandshake() error {
 	var clientSignatureSchemes []tls.SignatureScheme
 	var clientCertificateSchemes []tls.SignatureScheme
 	var clientCertificateCompressionAlgorithms *certificateCompressionAlgorithms
-	if !resumed && c.config.ClientAuth != tls.NoClientCert {
+	if !usingPSK && c.config.ClientAuth != tls.NoClientCert {
 		request := &certificateRequestMessage{signatureSchemes: defaultSignatureSchemes()}
 		if c.config.EnableCertificateCompression {
 			clientCertificateCompressionAlgorithms = &certificateCompressionZlibOffer
@@ -1557,7 +1625,7 @@ func (c *Conn) serverHandshake() error {
 		_ = transcript.add(handshakeTypeCertificateRequest, serverSequence, requestBody)
 		serverSequence++
 	}
-	if !resumed {
+	if !usingPSK {
 		certMsg := &certificateMessage{}
 		for _, der := range cert.Certificate {
 			certMsg.certificates = append(certMsg.certificates, certificateEntry{data: der})
@@ -1621,7 +1689,7 @@ func (c *Conn) serverHandshake() error {
 		clientHandshakeComplete
 	)
 	clientStage := clientExpectFinished
-	if !resumed && c.config.ClientAuth != tls.NoClientCert {
+	if !usingPSK && c.config.ClientAuth != tls.NoClientCert {
 		clientStage = clientExpectCertificate
 	}
 	for !clientDone {
@@ -1687,14 +1755,14 @@ func (c *Conn) serverHandshake() error {
 					return alertError(alertUnexpectedMessage, &ProtocolError{"unexpected client Finished"})
 				}
 				clientFinishedSequence = message.sequence
-				if !resumed && c.config.ClientAuth != tls.NoClientCert && !sawClientCertificate {
+				if !usingPSK && c.config.ClientAuth != tls.NoClientCert && !sawClientCertificate {
 					return &ProtocolError{"client omitted Certificate message"}
 				}
-				required := !resumed && (c.config.ClientAuth == tls.RequireAnyClientCert || c.config.ClientAuth == tls.RequireAndVerifyClientCert)
+				required := !usingPSK && (c.config.ClientAuth == tls.RequireAnyClientCert || c.config.ClientAuth == tls.RequireAndVerifyClientCert)
 				if required && len(clientCerts) == 0 {
 					return alertError(alertCertificateRequired, &ProtocolError{"client certificate is required"})
 				}
-				if !resumed && len(clientCerts) > 0 && !verifiedClientSignature {
+				if !usingPSK && len(clientCerts) > 0 && !verifiedClientSignature {
 					return &ProtocolError{"client omitted CertificateVerify"}
 				}
 				verify, parseErr := parseFinished(message.body, suite.hash.Size())
@@ -1744,16 +1812,18 @@ func (c *Conn) serverHandshake() error {
 	c.completedPeerFlightStart = clientFinalFlightStart
 	c.completedPeerFlightEnd = clientFinishedSequence
 	c.hasCompletedPeerFlight = true
+	exporter := newExporter(suite, schedule.exporterMasterSecret)
+	exporter.externalPSK = externalPSK
 	c.mu.Lock()
-	c.state = ConnectionState{Version: VersionDTLS13, HandshakeComplete: true, DidResume: resumed, CipherSuite: suite.id, NegotiatedProtocol: negotiated, PeerCertificates: clientCerts, VerifiedChains: clientChains, LocalConnectionID: append([]byte(nil), c.receiveConnectionID...), PeerConnectionID: append([]byte(nil), c.sendConnectionID...), ReturnRoutabilityCheck: c.returnRoutabilityCheckNegotiated, RecordSizeLimitNegotiated: c.recordSizeLimitNegotiated, LocalRecordSizeLimit: c.localRecordSizeLimit, PeerRecordSizeLimit: c.peerRecordSizeLimit, exporter: newExporter(suite, schedule.exporterMasterSecret)}
+	c.state = ConnectionState{Version: VersionDTLS13, HandshakeComplete: true, DidResume: resumed, CipherSuite: suite.id, NegotiatedProtocol: negotiated, PeerCertificates: clientCerts, VerifiedChains: clientChains, LocalConnectionID: append([]byte(nil), c.receiveConnectionID...), PeerConnectionID: append([]byte(nil), c.sendConnectionID...), ReturnRoutabilityCheck: c.returnRoutabilityCheckNegotiated, RecordSizeLimitNegotiated: c.recordSizeLimitNegotiated, LocalRecordSizeLimit: c.localRecordSizeLimit, PeerRecordSizeLimit: c.peerRecordSizeLimit, exporter: exporter}
 	c.mu.Unlock()
 	if validated, ok := c.conn.(interface{ handshakeValidated() }); ok {
 		validated.handshakeValidated()
 	}
-	if !resumed && len(clientCerts) > 0 {
+	if !usingPSK && len(clientCerts) > 0 {
 		clientAuthAt = c.config.Time().Unix()
 	}
-	if err = c.sendNewSessionTicket(schedule, suite, ch.serverName, negotiated, clientAuthAt, clientCerts, clientChains); err != nil {
+	if err = c.sendNewSessionTicket(schedule, suite, ch.serverName, negotiated, clientAuthAt, clientCerts, clientChains, externalPSK); err != nil {
 		return err
 	}
 	return nil

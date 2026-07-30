@@ -19,6 +19,27 @@ func selectCipherSuite(preferences, offered []uint16) (*cipherSuite, error) {
 	}
 	return nil, alertError(alertHandshakeFailure, errors.New("dtls13: no mutually supported cipher suite"))
 }
+
+func preferExternalPSKCipherSuite(config *Config, hello *clientHello, fallback *cipherSuite) *cipherSuite {
+	if len(config.ExternalPSKs) == 0 || len(hello.pskIdentities) == 0 {
+		return fallback
+	}
+	for _, preferred := range config.CipherSuites {
+		for _, offered := range hello.cipherSuites {
+			if preferred != offered {
+				continue
+			}
+			suite, _ := cipherSuiteForID(preferred)
+			for _, identity := range hello.pskIdentities {
+				if findExternalPSK(config, identity.identity, suite.hash) != nil {
+					return suite
+				}
+			}
+		}
+	}
+	return fallback
+}
+
 func selectKeyShare(preferences []tls.CurveID, shares []keyShareEntry) (keyShareEntry, error) {
 	for _, preferred := range preferences {
 		for _, share := range shares {

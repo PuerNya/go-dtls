@@ -50,6 +50,29 @@ func BenchmarkConnectionHandshakeLifecycle(b *testing.B) {
 	}
 }
 
+func BenchmarkExternalPSKHandshakeLifecycle(b *testing.B) {
+	psk, err := ImportExternalPSK([]byte("benchmark-device"), bytes.Repeat([]byte{0x5d}, 32), []byte("client=benchmark;server=benchmark"), 0)
+	if err != nil {
+		b.Fatal(err)
+	}
+	config := &Config{ExternalPSKs: []*ExternalPSK{psk}, SessionTicketsDisabled: true, HandshakeTimeout: time.Second}
+	b.ReportAllocs()
+	for b.Loop() {
+		left, right := memoryDatagramPair()
+		client := Client(left, config)
+		server := Server(right, config)
+		serverDone := make(chan error, 1)
+		go func() { serverDone <- server.Handshake() }()
+		clientErr := client.Handshake()
+		serverErr := <-serverDone
+		_ = left.Close()
+		_ = right.Close()
+		if clientErr != nil || serverErr != nil {
+			b.Fatalf("external PSK handshake failed: client=%v server=%v", clientErr, serverErr)
+		}
+	}
+}
+
 func BenchmarkMutualTLSHandshakeLifecycle(b *testing.B) {
 	serverCertificate, roots := testServerCertificate(b)
 	clientCertificate, clientRoots := testClientCertificate(b)

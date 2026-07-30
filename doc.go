@@ -71,6 +71,38 @@
 // performs an equivalent check. Encryption without authentication does not
 // prevent an active attacker from impersonating a peer.
 //
+// # External pre-shared keys
+//
+// [Config.ExternalPSKs] enables certificate-free authentication with external
+// PSKs following [RFC 9257]. [ImportExternalPSK] is the recommended constructor:
+// it implements the [RFC 9258] importer, binds the key to DTLS 1.3 and the
+// SHA-256 or SHA-384 target KDF, and uses the required "imp binder" label.
+// [NewDirectExternalPSK] is an explicit compatibility path for an already
+// TLS-specific PSK and uses the TLS 1.3 "ext binder" label.
+//
+// Both constructors require at least 128 bits of key material. The package
+// offers only psk_dhe_ke, so external-PSK handshakes retain ephemeral key
+// exchange and forward secrecy. A Config may contain multiple identities; a
+// server ignores unknown identities and can fall back to certificate
+// authentication when a certificate is configured.
+//
+// External PSK identities and importer contexts are opaque bytes transmitted
+// in plaintext in ClientHello. Reuse makes connections linkable. Applications
+// must not put secrets in either value, should provision one PSK per client and
+// server role pair, and must include the provisioning channel binding and both
+// peer roles in the importer context when a key is shared by a group.
+//
+// Base TLS 1.3 forbids combining an external PSK with certificate
+// authentication, so [Config.ClientAuth] cannot be enabled on a Config with
+// ExternalPSKs. External-PSK 0-RTT is deliberately unavailable because its
+// protocol settings and replay lifetime cannot be inferred safely. A
+// NewSessionTicket issued after external-PSK authentication may be resumed and
+// may use the ordinary ticket-based 0-RTT policy. Removing or changing the
+// configured external PSK invalidates tickets derived from it.
+// [ConnectionState.ExternalPSKIdentity] and
+// [ConnectionState.ExternalPSKContext] report the authenticated origin on the
+// initial connection and its ticket resumptions.
+//
 // # Certificate compression
 //
 // [Config.EnableCertificateCompression] explicitly enables [RFC 8879] with
@@ -174,6 +206,8 @@
 // [RFC 8449]: https://www.rfc-editor.org/rfc/rfc8449
 // [RFC 8879]: https://www.rfc-editor.org/rfc/rfc8879
 // [RFC 9146]: https://www.rfc-editor.org/rfc/rfc9146
+// [RFC 9257]: https://www.rfc-editor.org/rfc/rfc9257
+// [RFC 9258]: https://www.rfc-editor.org/rfc/rfc9258
 // [RFC 9853]: https://www.rfc-editor.org/rfc/rfc9853
 //
 // [RFC 9846]: https://www.rfc-editor.org/rfc/rfc9846
