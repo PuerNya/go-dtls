@@ -414,7 +414,7 @@ The following items do not reduce completion of mandatory RFC 9147 semantics, bu
 - The sender uses the valid one-record-per-UDP-datagram mode and exposes no optional multi-record aggregation API.
 - Concurrent multiple NewSessionTicket or PHA requests are not exposed; the RFC permits but does not require this capability.
 - Automatic RRC rebinding requires a transport that receives from different sources and can send to a selected destination. The standard Listener supports this; connected UDP clients are constrained by operating-system peer filtering. An empty CID cannot uniquely route across five-tuples.
-- The wolfSSL 5.9.2 interoperability build does not implement RFC 8879 and does not enable CID, 0-RTT, session tickets, or `SESSION_CERTS`. Certificate-compression tests prove only safe extension ignoring and plain-Certificate fallback. Builds with PSK callbacks additionally verify direct RFC 9257 PSKs in both directions; wolfSSL has no RFC 9258 importer API. The third-party matrix excludes compression negotiation, RRC, and mTLS resumption.
+- The wolfSSL master `f699037` build (version string 5.9.2) supports CID, KeyUpdate, PHA, session tickets, 0-RTT, `SESSION_CERTS`, and direct external PSKs, but not RFC 8449, RFC 8879, the RFC 9258 importer, or RFC 9853 RRC. Certificate-compression tests prove only safe unknown-extension handling and plain-Certificate fallback. Peer limits are explicit: the server's HRR rejects go-dtls client 0-RTT; the client cannot parse the 1421-byte go-dtls mTLS ticket; and the client does not retransmit Finished after losing the final ACK.
 
 ## Benchmark
 
@@ -472,7 +472,7 @@ The repository also includes focused benchmarks for cipher suites, ACK, records/
 - RFC 9846 alert tests cover handshake processing, final-ACK waiting, post-handshake reordering, `close_notify`, and local cryptographic failure.
 - RFC 9853 tests cover RRC messages/state machines, real UDP NAT rebinding, CID updates, weak-network combinations, and connection resource lifecycles.
 - Parser/record fuzzing covers copy and in-place decryption differentials for all four AEADs.
-- Bidirectional wolfSSL 5.9.2 interoperability tests cover HRR, RSA-PSS certificate handshakes, Finished ACK, application data, AES-GCM, AES-128-CCM, and direct external PSKs when supported by the build.
+- Bidirectional real-UDP tests with wolfSSL master `f699037` cover HRR, RSA-PSS certificate handshakes, Finished ACK, application data, AES-GCM, AES-128-CCM, direct external PSKs, CID, KeyUpdate, PHA, and ordinary session resumption. Additional supported directions cover go-dtls-initiated immediate CID switching, mTLS resumption, and Finished retransmission after final-ACK loss, plus wolfSSL-client-initiated 0-RTT.
 
 See [CONTRIBUTING.en.md](CONTRIBUTING.en.md) for the development environment, required checks, performance validation, and commit rules.
 

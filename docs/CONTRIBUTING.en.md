@@ -56,13 +56,7 @@ Protocol changes must cover at least:
 
 For retransmission, handshake, or protocol-state-machine changes, run the relevant weak-network and end-to-end tests with `-count=100`. Run resource-lifecycle tests with at least `-count=10`.
 
-## Development Priorities
-
-Prioritize the following work:
-
-1. Third-party interoperability matrix: when peers support them, add bidirectional evidence for CID, KeyUpdate, 0-RTT, resumption, and PHA.
-
-Other optional extensions require a concrete deployment need and a testable protocol design. Do not add placeholder APIs or empty frameworks in advance.
+Optional extensions require a concrete deployment need and a testable protocol design. Do not add placeholder APIs or empty frameworks in advance.
 
 ## Performance Validation
 

@@ -419,7 +419,7 @@ serverConfig := &dtls13.Config{
 - 发送端采用一条 record 一个 UDP datagram 的合法模式，未暴露可选的多 record 聚合 API。
 - 未暴露并行多个 NewSessionTicket 或 PHA 请求；RFC 允许但不要求这些并行能力。
 - RRC 自动 rebind 依赖 transport 能接收不同来源并定向发送；标准 Listener 支持，connected UDP 客户端受操作系统 peer 过滤约束。空 CID 不能跨五元组唯一路由。
-- wolfSSL 5.9.2 互通构建未实现 RFC 8879，也未启用 CID、0-RTT、session ticket 或 `SESSION_CERTS`；证书压缩测试只验证未知扩展被安全忽略并回退普通 Certificate。启用 PSK callback 的构建额外双向验证 RFC 9257 direct external PSK；wolfSSL 没有 RFC 9258 importer API。第三方矩阵不包含压缩协商、RRC 和 mTLS 恢复。
+- wolfSSL master `f699037`（版本字符串 5.9.2）互通构建支持 CID、KeyUpdate、PHA、session ticket、0-RTT、`SESSION_CERTS` 和 direct external PSK，但不实现 RFC 8449、RFC 8879、RFC 9258 importer 或 RFC 9853 RRC。证书压缩用例只证明安全忽略未知扩展并回退普通 Certificate。对端限制为：服务端 HRR 拒绝本库客户端 0-RTT；客户端不能解析本库 1421 字节 mTLS ticket；客户端在最终 ACK 丢失后不重传 Finished。
 
 ## Benchmark
 
@@ -477,7 +477,7 @@ go test -run '^$' -bench '^BenchmarkProtectedRecord(Seal|RoundTripInPlace)$' -be
 - RFC 9846 alert 测试覆盖握手、final ACK 等待、握手后乱序、`close_notify` 和本地加密失败。
 - RFC 9853 测试覆盖 RRC message/状态机、真实 UDP NAT rebind、CID 更新、弱网组合和连接资源生命周期。
 - parser/record fuzz 覆盖四套 AEAD 的复制与原地解密差分。
-- wolfSSL 5.9.2 双向互通测试覆盖 HRR、RSA-PSS 证书握手、Finished ACK、应用数据、AES-GCM、AES-128-CCM，以及构建支持时的 direct external PSK。
+- wolfSSL master `f699037` 双向真实 UDP 互通测试覆盖 HRR、RSA-PSS 证书握手、Finished ACK、应用数据、AES-GCM、AES-128-CCM、direct external PSK、CID、KeyUpdate、PHA 和普通 session resumption；另覆盖本库客户端发起的 immediate CID 切换、mTLS 恢复、丢最终 ACK 后的 Finished 重传，以及 wolfSSL 客户端发起的 0-RTT。
 
 开发环境、必需检查、性能验证和提交规范见 [CONTRIBUTING.md](CONTRIBUTING.md)。
 
