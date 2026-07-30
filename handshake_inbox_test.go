@@ -115,7 +115,7 @@ func TestProtectedHandshakeACKsBufferedOutOfOrderFragment(t *testing.T) {
 	result := make(chan []completedHandshake, 1)
 	errCh := make(chan error, 1)
 	go func() {
-		messages, receiveErr := receiveHandshakeMessageWithEarly(right, newHandshakeInbox(0, 1024, 8, 4096), recordReceiver, nil, nil, nil, ackSender, 100, nil)
+		messages, receiveErr := receiveHandshakeMessageWithEarly(right, newHandshakeInbox(0, 1024, 8, 4096), recordReceiver, nil, ackSender, 100, nil)
 		if receiveErr != nil {
 			errCh <- receiveErr
 			return
@@ -167,7 +167,7 @@ func TestHandshakeReceivePropagatesAEADAuthenticationFailureLimit(t *testing.T) 
 	}
 	wire[len(wire)-1] ^= 1
 	go func() { _, _ = left.Write(wire) }()
-	_, err = receiveHandshakeMessageWithEarly(right, newHandshakeInbox(0, 1024, 8, 4096), receiver, nil, nil, nil, nil, 1200, nil)
+	_, err = receiveHandshakeMessageWithEarly(right, newHandshakeInbox(0, 1024, 8, 4096), receiver, nil, nil, 1200, nil)
 	if !errors.Is(err, errAEADAuthenticationFailureLimit) {
 		t.Fatalf("handshake receive returned %v", err)
 	}
@@ -321,7 +321,7 @@ func TestUndecryptableHandshakeRecordSendsEmptyACK(t *testing.T) {
 		t.Fatal(err)
 	}
 	go func() {
-		_, _ = receiveHandshakeMessageWithEarly(right, newHandshakeInbox(0, 1024, 8, 4096), nil, nil, nil, nil, nil, owner.currentMTU(), owner)
+		_, _ = receiveHandshakeMessageWithEarly(right, newHandshakeInbox(0, 1024, 8, 4096), nil, nil, nil, owner.currentMTU(), owner)
 	}()
 	if _, err = left.Write(wire); err != nil {
 		t.Fatal(err)
@@ -350,7 +350,7 @@ func TestDiscardedOldHandshakeRecordIsNotAcknowledged(t *testing.T) {
 	ackSender, _ := recordCipherPair(t, TLS_AES_128_GCM_SHA256, 2)
 	result := make(chan error, 1)
 	go func() {
-		_, err := receiveHandshakeMessageWithEarly(right, newHandshakeInbox(1, 1024, 8, 4096), handshakeReceiver, nil, nil, nil, ackSender, 1200, nil)
+		_, err := receiveHandshakeMessageWithEarly(right, newHandshakeInbox(1, 1024, 8, 4096), handshakeReceiver, nil, ackSender, 1200, nil)
 		result <- err
 	}()
 	fragment, err := marshalHandshakeFragment(handshakeFragment{typ: handshakeTypeFinished, messageSequence: 0, length: 1, body: []byte{1}})
@@ -398,7 +398,7 @@ func TestPeerFlightRetransmissionImmediatelyRetransmitsUnacknowledgedResponse(t 
 	requestSender, requestReceiver := recordCipherPair(t, TLS_AES_128_GCM_SHA256, 2)
 	done := make(chan error, 1)
 	go func() {
-		_, receiveErr := receiveHandshakeMessageWithEarly(right, newHandshakeInbox(1, 1024, 8, 4096), requestReceiver, nil, nil, response, nil, 1200, owner)
+		_, receiveErr := receiveHandshakeMessageWithEarly(right, newHandshakeInbox(1, 1024, 8, 4096), requestReceiver, response, nil, 1200, owner)
 		done <- receiveErr
 	}()
 	fragment, err := marshalHandshakeFragment(handshakeFragment{typ: handshakeTypeCertificate, messageSequence: 0, length: 1, body: []byte{1}})
@@ -449,7 +449,7 @@ func TestEmptyPlaintextACKRetransmitsProtectedFlight(t *testing.T) {
 	}
 	_, incomingCipher := recordCipherPair(t, TLS_AES_128_GCM_SHA256, 2)
 	go func() {
-		_, _ = receiveHandshakeMessageWithEarly(right, newHandshakeInbox(0, 1024, 8, 4096), incomingCipher, nil, nil, outgoing, nil, owner.currentMTU(), owner)
+		_, _ = receiveHandshakeMessageWithEarly(right, newHandshakeInbox(0, 1024, 8, 4096), incomingCipher, outgoing, nil, owner.currentMTU(), owner)
 	}()
 	empty, _, err := buildACKRecords(nil, 1200, 0, nil)
 	if err != nil {
@@ -479,7 +479,7 @@ func TestHandshakeDropsPrematureApplicationEpoch(t *testing.T) {
 	result := make(chan []completedHandshake, 1)
 	errCh := make(chan error, 1)
 	go func() {
-		messages, err := receiveHandshakeMessageWithEarly(right, newHandshakeInbox(0, 1024, 8, 4096), handshakeReceiver, nil, nil, nil, nil, 1200, nil)
+		messages, err := receiveHandshakeMessageWithEarly(right, newHandshakeInbox(0, 1024, 8, 4096), handshakeReceiver, nil, nil, 1200, nil)
 		if err != nil {
 			errCh <- err
 			return

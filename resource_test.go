@@ -15,7 +15,7 @@ func TestConnectionLifecycleResourceStability(t *testing.T) {
 	var before runtime.MemStats
 	runtime.ReadMemStats(&before)
 
-	for i := 0; i < connections; i++ {
+	for i := range connections {
 		left, right := memoryDatagramPair()
 		client := Client(left, &Config{
 			RootCAs: roots, ServerName: "server.test", SessionTicketsDisabled: true,

@@ -859,7 +859,7 @@ func BenchmarkReceivingTrafficKeyUpdate(b *testing.B) {
 		}
 		secret := bytes.Repeat([]byte{0x5a}, suite.hash.Size())
 		newReceiver := func() *receivingTraffic {
-			receiver, newErr := newReceivingTraffic(suite, secret, 3, 64)
+			receiver, newErr := newReceivingTraffic(suite, secret, 3)
 			if newErr != nil {
 				b.Fatal(newErr)
 			}
@@ -891,7 +891,7 @@ func BenchmarkSendingTrafficKeyUpdate(b *testing.B) {
 		}
 		secret := bytes.Repeat([]byte{0x5a}, suite.hash.Size())
 		newSender := func() *sendingTraffic {
-			sender, newErr := newSendingTraffic(suite, secret, 3, 0, 64)
+			sender, newErr := newSendingTraffic(suite, secret, 3, 0)
 			if newErr != nil {
 				b.Fatal(newErr)
 			}

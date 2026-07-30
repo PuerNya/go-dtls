@@ -52,12 +52,12 @@ func (s *sendingTraffic) canBeginKeyUpdate() bool {
 	return s != nil && s.update.canUseNewKeys() && s.cipher.epoch < maxSendingEpoch
 }
 
-func newSendingTraffic(suite *cipherSuite, secret []byte, epoch uint64, messageSequence uint16, replaySize int) (*sendingTraffic, error) {
-	cipher, err := newRecordCipher(suite, secret, epoch, replaySize)
+func newSendingTraffic(suite *cipherSuite, secret []byte, epoch uint64, messageSequence uint16) (*sendingTraffic, error) {
+	cipher, err := newRecordCipher(suite, secret, epoch, 64)
 	if err != nil {
 		return nil, err
 	}
-	return newSendingTrafficWithCipher(suite, append([]byte(nil), secret...), cipher, messageSequence, replaySize), nil
+	return newSendingTrafficWithCipher(suite, append([]byte(nil), secret...), cipher, messageSequence, 64), nil
 }
 
 func newSendingTrafficWithOwnedSecret(suite *cipherSuite, secret []byte, epoch uint64, messageSequence uint16, replaySize int) (*sendingTraffic, error) {
@@ -195,14 +195,14 @@ func (r *receivingTraffic) clearSecrets() {
 	r.secrets = nil
 }
 
-func newReceivingTraffic(suite *cipherSuite, secret []byte, epoch uint64, replaySize int) (*receivingTraffic, error) {
-	cipher, err := newRecordCipher(suite, secret, epoch, replaySize)
+func newReceivingTraffic(suite *cipherSuite, secret []byte, epoch uint64) (*receivingTraffic, error) {
+	cipher, err := newRecordCipher(suite, secret, epoch, 64)
 	if err != nil {
 		return nil, err
 	}
 	ownedSecret := make([]byte, len(secret))
 	copy(ownedSecret, secret)
-	return newReceivingTrafficWithCipher(suite, ownedSecret, cipher, epoch, replaySize)
+	return newReceivingTrafficWithCipher(suite, ownedSecret, cipher, epoch, 64)
 }
 
 func newReceivingTrafficWithOwnedSecret(suite *cipherSuite, secret []byte, epoch uint64, replaySize int) (*receivingTraffic, error) {

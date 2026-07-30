@@ -415,7 +415,7 @@ func writeHashString(h hash.Hash, value string) {
 		return
 	}
 	// hash.Hash.Write consumes the bytes synchronously and does not retain them.
-	view := unsafe.Slice(unsafe.StringData(value), len(value))
+	view := unsafe.Slice(unsafe.StringData(value), len(value)) // #nosec G103 -- Write consumes this read-only view synchronously.
 	_, _ = h.Write(view)
 	runtime.KeepAlive(value)
 }

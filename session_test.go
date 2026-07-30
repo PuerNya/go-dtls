@@ -339,12 +339,10 @@ func TestClientSessionTicketIsConsumedOnUse(t *testing.T) {
 	results := make(chan bool, contenders)
 	var wg sync.WaitGroup
 	for range contenders {
-		wg.Add(1)
-		go func() {
-			defer wg.Done()
+		wg.Go(func() {
 			state, _ := usableClientSession(config, left)
 			results <- state != nil
-		}()
+		})
 	}
 	wg.Wait()
 	close(results)
@@ -370,11 +368,9 @@ func TestEarlyDataReplayCacheIsConcurrentAndBounded(t *testing.T) {
 	var wg sync.WaitGroup
 	results := make(chan bool, contenders)
 	for range contenders {
-		wg.Add(1)
-		go func() {
-			defer wg.Done()
+		wg.Go(func() {
 			results <- cache.CheckAndStore("same-ticket", expires)
-		}()
+		})
 	}
 	wg.Wait()
 	close(results)

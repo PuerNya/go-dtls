@@ -1,6 +1,45 @@
 version: "2"
 
+run:
+  timeout: 5m
+  relative-path-mode: gomod
+  modules-download-mode: readonly
+  tests: true
+
 linters:
+  default: standard
+  enable:
+    - asciicheck
+    - bidichk
+    - copyloopvar
+    - durationcheck
+    - errname
+    - fatcontext
+    - gocheckcompilerdirectives
+    - gochecksumtype
+    - godoclint
+    - godot
+    - gosec
+    - goprintffuncname
+    - misspell
+    - modernize
+    - nilnesserr
+    - nolintlint
+    - reassign
+    - recvcheck
+    - unparam
+    - usestdlibvars
+    - wastedassign
+    - whitespace
+  settings:
+    gosec:
+      # Wire encoders intentionally narrow values to their RFC field widths.
+      excludes:
+        - G115
+    modernize:
+      disable:
+        - minmax
+        - slicescontains
   exclusions:
     rules:
       - path: _test\.go
@@ -8,3 +47,22 @@ linters:
         source: '^\s*defer .*\.Close\(\)\s*$'
         linters:
           - errcheck
+      - path: connection_id_test\.go
+        text: 'registerConnectionIDs - result 0 \(error\) is always nil'
+        linters:
+          - unparam
+
+formatters:
+  enable:
+    - gofmt
+    - goimports
+  settings:
+    gofmt:
+      simplify: true
+    goimports:
+      local-prefixes:
+        - github.com/puernya/go-dtls
+
+issues:
+  max-issues-per-linter: 0
+  max-same-issues: 0

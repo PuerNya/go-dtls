@@ -283,25 +283,25 @@ func (c *Conn) activatePeerConnectionIDLocked(cid []byte) error {
 	return nil
 }
 
-func (c *Conn) processNewConnectionID(sequence uint16, body []byte) (bool, error) {
+func (c *Conn) processNewConnectionID(sequence uint16, body []byte) error {
 	message, err := parseNewConnectionID(body)
 	if err != nil {
-		return false, err
+		return err
 	}
 	c.writeMu.Lock()
 	defer c.writeMu.Unlock()
 	if !c.connectionIDNegotiated || !c.peerCIDUpdatesAllowed {
-		return false, alertError(alertUnexpectedMessage, &ProtocolError{"unexpected NewConnectionId"})
+		return alertError(alertUnexpectedMessage, &ProtocolError{"unexpected NewConnectionId"})
 	}
 	if c.hasNewCIDSequence && sequence <= c.lastNewCIDSequence {
-		return false, nil
+		return nil
 	}
 	existing := make([][]byte, 0, 1+len(c.peerSpareConnectionIDs))
 	existing = append(existing, append([]byte(nil), c.sendConnectionID...))
 	existing = append(existing, c.peerSpareConnectionIDs...)
 	_, mergeErr := mergeConnectionIDs(existing, message.connectionIDs)
 	if mergeErr != nil {
-		return false, alertError(alertIllegalParameter, mergeErr)
+		return alertError(alertIllegalParameter, mergeErr)
 	}
 	c.lastNewCIDSequence = sequence
 	c.hasNewCIDSequence = true
@@ -324,10 +324,10 @@ func (c *Conn) processNewConnectionID(sequence uint16, body []byte) (bool, error
 			}
 		}
 		if err = c.activatePeerConnectionIDLocked(cid); err != nil {
-			return false, err
+			return err
 		}
 	}
-	return true, nil
+	return nil
 }
 
 func (c *Conn) processRequestConnectionID(sequence uint16, body []byte) (uint8, bool, error) {

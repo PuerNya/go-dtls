@@ -87,7 +87,7 @@ func TestConnectionIDUpdateMessagesRejectMalformed(t *testing.T) {
 	client.connectionIDNegotiated = true
 	client.peerCIDUpdatesAllowed = true
 	client.sendConnectionID = []byte{1}
-	if _, err := client.processNewConnectionID(1, nil); err == nil {
+	if err := client.processNewConnectionID(1, nil); err == nil {
 		t.Fatal("accepted truncated NewConnectionId")
 	} else if description, ok := protocolAlert(err); !ok || description != alertDecodeError {
 		t.Fatalf("truncated NewConnectionId alert=%d ok=%v err=%v", description, ok, err)
@@ -119,7 +119,7 @@ func TestConnectionIDUpdateRequiresNegotiation(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if _, err = server.processNewConnectionID(1, body); err == nil {
+	if err = server.processNewConnectionID(1, body); err == nil {
 		t.Fatal("accepted NewConnectionId without CID negotiation")
 	}
 	if _, _, err = server.processRequestConnectionID(1, []byte{1}); err == nil {
@@ -150,7 +150,7 @@ func TestConnectionIDResourceLimits(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if _, err = server.processNewConnectionID(1, body); err != nil {
+	if err = server.processNewConnectionID(1, body); err != nil {
 		t.Fatal(err)
 	}
 	if len(server.peerSpareConnectionIDs) != 1 {
@@ -202,7 +202,7 @@ func TestPeerConnectionIDSetRejectsPrefixesAndBoundsStorage(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	_, err = client.processNewConnectionID(1, prefixBody)
+	err = client.processNewConnectionID(1, prefixBody)
 	var local *localAlertError
 	if !errors.As(err, &local) || local.description != alertIllegalParameter {
 		t.Fatalf("prefix collision returned %v", err)
@@ -212,7 +212,7 @@ func TestPeerConnectionIDSetRejectsPrefixesAndBoundsStorage(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	_, err = client.processNewConnectionID(2, overflowBody)
+	err = client.processNewConnectionID(2, overflowBody)
 	if err != nil {
 		t.Fatalf("bounded CID advertisement returned %v", err)
 	}

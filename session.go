@@ -925,7 +925,7 @@ func (c *Conn) ackProtectedRecord(number recordNumber) error {
 		return err
 	}
 	for _, wire := range acks {
-		if _, err = c.writeRecord(wire); err != nil {
+		if err = c.writeRecord(wire); err != nil {
 			return err
 		}
 	}

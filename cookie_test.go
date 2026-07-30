@@ -60,9 +60,7 @@ func TestCookieAutomaticRotationAndConcurrentUse(t *testing.T) {
 
 	var wg sync.WaitGroup
 	for range 32 {
-		wg.Add(1)
-		go func() {
-			defer wg.Done()
+		wg.Go(func() {
 			for range 100 {
 				cookie, sealErr := p.seal(address, hash)
 				if sealErr != nil {
@@ -74,7 +72,7 @@ func TestCookieAutomaticRotationAndConcurrentUse(t *testing.T) {
 					return
 				}
 			}
-		}()
+		})
 	}
 	wg.Wait()
 }

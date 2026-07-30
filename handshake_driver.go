@@ -106,10 +106,10 @@ func (c *Conn) runHandshake(ctx context.Context) (result error) {
 		}
 	}()
 	if c.isClient {
-		result = c.clientHandshake(ctx)
+		result = c.clientHandshake()
 		return result
 	}
-	result = c.serverHandshake(ctx)
+	result = c.serverHandshake()
 	return result
 }
 
@@ -297,8 +297,8 @@ func (c *Conn) receiveSecondClientHello(conn net.Conn, inbox *handshakeInbox, hr
 	}
 }
 
-func receiveHandshakeMessageWithEarly(conn net.Conn, inbox *handshakeInbox, cipher, early *recordCipher, onEarly func([]byte) error, outgoing *flight, ackCipher *recordCipher, mtu int, owner *Conn) ([]completedHandshake, error) {
-	batch, err := receiveHandshakeMessageWithEarlyBatch(conn, inbox, cipher, early, onEarly, outgoing, ackCipher, mtu, owner)
+func receiveHandshakeMessageWithEarly(conn net.Conn, inbox *handshakeInbox, cipher *recordCipher, outgoing *flight, ackCipher *recordCipher, mtu int, owner *Conn) ([]completedHandshake, error) {
+	batch, err := receiveHandshakeMessageWithEarlyBatch(conn, inbox, cipher, nil, nil, outgoing, ackCipher, mtu, owner)
 	if err != nil {
 		return nil, err
 	}
@@ -603,7 +603,7 @@ func (c *Conn) receiveACKWithRetransmit(outgoing *flight, ciphers ...*recordCiph
 	}
 }
 
-func (c *Conn) clientHandshake(ctx context.Context) error {
+func (c *Conn) clientHandshake() error {
 	var transcriptDigest [maxSupportedHashSize]byte
 	key, err := generateEphemeralKey(c.config.CurvePreferences[0], c.config.Rand)
 	if err != nil {
@@ -693,7 +693,7 @@ func (c *Conn) clientHandshake(ctx context.Context) error {
 				c.writeMu.Unlock()
 				return sealErr
 			}
-			if _, writeErr := c.writeRecord(wire); writeErr != nil {
+			if writeErr := c.writeRecord(wire); writeErr != nil {
 				c.writeMu.Unlock()
 				return writeErr
 			}
@@ -996,7 +996,7 @@ func (c *Conn) clientHandshake(ctx context.Context) error {
 				if !offered {
 					return &ProtocolError{"server selected an unoffered signature scheme"}
 				}
-				if parseErr = verifyCertificateVerify(peerCerts[0].PublicKey, cv.algorithm, suite, transcript.sumInto(transcriptDigest[:0]), cv.signature, true); parseErr != nil {
+				if parseErr = verifyCertificateVerify(peerCerts[0].PublicKey, cv.algorithm, transcript.sumInto(transcriptDigest[:0]), cv.signature, true); parseErr != nil {
 					return alertError(alertDecryptError, parseErr)
 				}
 				verifiedServerSignature = true
@@ -1061,7 +1061,7 @@ func (c *Conn) clientHandshake(ctx context.Context) error {
 			if selectErr != nil {
 				return selectErr
 			}
-			signature, signErr := signCertificateVerify(c.config.Rand, signer, scheme, suite, transcript.sumInto(transcriptDigest[:0]), false)
+			signature, signErr := signCertificateVerify(c.config.Rand, signer, scheme, transcript.sumInto(transcriptDigest[:0]), false)
 			if signErr != nil {
 				return signErr
 			}
@@ -1232,7 +1232,7 @@ func requireCertificateSignatureAlgorithms(hello *clientHello, resumed bool) err
 	return nil
 }
 
-func (c *Conn) serverHandshake(ctx context.Context) error {
+func (c *Conn) serverHandshake() error {
 	var transcriptDigest [maxSupportedHashSize]byte
 	var amplification amplificationGuard
 	preValidationConn := &amplificationConn{Conn: c.conn, guard: &amplification}
@@ -1573,7 +1573,7 @@ func (c *Conn) serverHandshake(ctx context.Context) error {
 		serverMessages = append(serverMessages, handshakeMessage{typ: certificateType, sequence: serverSequence, body: certificateBody})
 		_ = transcript.add(certificateType, serverSequence, certificateBody)
 		serverSequence++
-		signature, err := signCertificateVerify(c.config.Rand, signer, scheme, suite, transcript.sumInto(transcriptDigest[:0]), true)
+		signature, err := signCertificateVerify(c.config.Rand, signer, scheme, transcript.sumInto(transcriptDigest[:0]), true)
 		if err != nil {
 			return err
 		}
@@ -1676,7 +1676,7 @@ func (c *Conn) serverHandshake(ctx context.Context) error {
 				if !offered {
 					return alertError(alertIllegalParameter, &ProtocolError{"client selected an unoffered signature scheme"})
 				}
-				if parseErr = verifyCertificateVerify(clientCerts[0].PublicKey, cv.algorithm, suite, transcript.sumInto(transcriptDigest[:0]), cv.signature, false); parseErr != nil {
+				if parseErr = verifyCertificateVerify(clientCerts[0].PublicKey, cv.algorithm, transcript.sumInto(transcriptDigest[:0]), cv.signature, false); parseErr != nil {
 					return alertError(alertDecryptError, parseErr)
 				}
 				verifiedClientSignature = true
@@ -1721,7 +1721,7 @@ func (c *Conn) serverHandshake(ctx context.Context) error {
 		return err
 	}
 	for _, wire := range ackRecords {
-		if _, err = c.writeRecord(wire); err != nil {
+		if err = c.writeRecord(wire); err != nil {
 			return err
 		}
 	}

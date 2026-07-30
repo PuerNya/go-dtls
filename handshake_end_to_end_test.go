@@ -1173,7 +1173,7 @@ func TestRepeatedBidirectionalKeyUpdatesRemainBounded(t *testing.T) {
 		t.Fatal(err)
 	}
 	clientEpoch, serverEpoch := uint64(3), uint64(3)
-	for i := 0; i < 64; i++ {
+	for i := range 64 {
 		if i%2 == 0 {
 			if err := client.SendKeyUpdate(false); err != nil {
 				t.Fatalf("client update %d: %v", i, err)
@@ -1342,6 +1342,7 @@ func TestEndToEndNewSessionTicket(t *testing.T) {
 	}
 	if cached == nil {
 		t.Fatal("client did not cache NewSessionTicket")
+		return
 	}
 	protector, err := newSessionTicketProtector(ticketKey, nil, time.Now)
 	if err != nil {

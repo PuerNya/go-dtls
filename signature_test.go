@@ -32,15 +32,15 @@ func TestCertificateVerifySignatures(t *testing.T) {
 		scheme tls.SignatureScheme
 	}{{rsaKey, tls.PSSWithSHA256}, {ecKey, tls.ECDSAWithP256AndSHA256}, {edKey, tls.Ed25519}}
 	for _, tc := range cases {
-		sig, err := signCertificateVerify(rand.Reader, tc.key, tc.scheme, suite, transcript, true)
+		sig, err := signCertificateVerify(rand.Reader, tc.key, tc.scheme, transcript, true)
 		if err != nil {
 			t.Fatal(err)
 		}
-		if err = verifyCertificateVerify(tc.key.Public(), tc.scheme, suite, transcript, sig, true); err != nil {
+		if err = verifyCertificateVerify(tc.key.Public(), tc.scheme, transcript, sig, true); err != nil {
 			t.Fatalf("scheme %v: %v", tc.scheme, err)
 		}
 		sig[0] ^= 1
-		if err = verifyCertificateVerify(tc.key.Public(), tc.scheme, suite, transcript, sig, true); err == nil {
+		if err = verifyCertificateVerify(tc.key.Public(), tc.scheme, transcript, sig, true); err == nil {
 			t.Fatalf("scheme %v accepted tampered signature", tc.scheme)
 		}
 	}

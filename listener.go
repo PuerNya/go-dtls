@@ -229,7 +229,6 @@ func (l *packetListener) registerSessionCID(session *packetSession, cid []byte) 
 	}
 	l.cidSessions[string(cid)] = session
 	return nil
-
 }
 
 func (l *packetListener) registerSessionCIDs(session *packetSession, cids [][]byte) error {

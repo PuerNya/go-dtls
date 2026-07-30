@@ -339,12 +339,12 @@ func normalizeDatagramWriteError(err error, addr net.Addr) error {
 	return err
 }
 
-func (c *Conn) writeRecord(wire []byte) (int, error) {
-	n, err := c.conn.Write(wire)
+func (c *Conn) writeRecord(wire []byte) error {
+	_, err := c.conn.Write(wire)
 	if err == nil {
-		return n, nil
+		return nil
 	}
-	return n, normalizeDatagramWriteError(err, c.RemoteAddr())
+	return normalizeDatagramWriteError(err, c.RemoteAddr())
 }
 
 // Client returns a client-side DTLS association over conn. The underlying
@@ -855,7 +855,7 @@ func (c *Conn) dispatchDatagramFrom(datagram []byte, from net.Addr) error {
 							c.writeMu.Unlock()
 							return beginErr
 						}
-						if _, beginErr = c.writeRecord(wire); beginErr != nil {
+						if beginErr = c.writeRecord(wire); beginErr != nil {
 							c.writeMu.Unlock()
 							return beginErr
 						}
@@ -1005,7 +1005,7 @@ func (c *Conn) dispatchDatagramFrom(datagram []byte, from net.Addr) error {
 								return reassemblyErr
 							}
 							if fragment.typ == handshakeTypeNewConnectionID {
-								_, reassemblyErr = c.processNewConnectionID(fragment.messageSequence, body)
+								reassemblyErr = c.processNewConnectionID(fragment.messageSequence, body)
 							} else {
 								requestCount, respond, reassemblyErr = c.processRequestConnectionID(fragment.messageSequence, body)
 							}
@@ -1040,7 +1040,7 @@ func (c *Conn) dispatchDatagramFrom(datagram []byte, from net.Addr) error {
 							acks, _, responseErr = buildACKRecordsInto(ackScratch[:0], []recordNumber{number}, c.currentMTU(), 0, c.sendCipher)
 							if responseErr == nil {
 								for _, wire := range acks {
-									if _, responseErr = c.writeRecord(wire); responseErr != nil {
+									if responseErr = c.writeRecord(wire); responseErr != nil {
 										break
 									}
 								}
@@ -1051,7 +1051,7 @@ func (c *Conn) dispatchDatagramFrom(datagram []byte, from net.Addr) error {
 									responseErr = beginErr
 									if responseErr == nil {
 										c.sendCipher = c.sendingTraffic.cipher
-										if _, responseErr = c.writeRecord(wire); responseErr == nil {
+										if responseErr = c.writeRecord(wire); responseErr == nil {
 											startRetransmission = true
 										}
 									}
@@ -1096,7 +1096,7 @@ func (c *Conn) requestKeyUpdateAfterAuthFailures() error {
 	}
 	wire, _, err := c.sendingTraffic.beginKeyUpdate(true)
 	if err == nil {
-		_, err = c.writeRecord(wire)
+		err = c.writeRecord(wire)
 	}
 	c.writeMu.Unlock()
 	if err != nil {
@@ -1183,7 +1183,7 @@ func (c *Conn) WriteDatagram(p []byte) (int, error) {
 			c.writeMu.Unlock()
 			return 0, err
 		}
-		if _, err = c.writeRecord(wire); err != nil {
+		if err = c.writeRecord(wire); err != nil {
 			if !c.config.IgnorePathMTU && isMessageTooLong(err) {
 				if _, reduced := c.reducePathMTU(); reduced {
 					continue
@@ -1238,7 +1238,7 @@ func (c *Conn) maybeStartAutomaticKeyUpdateLocked() (bool, error) {
 	if err != nil {
 		return false, err
 	}
-	if _, err = c.writeRecord(wire); err != nil {
+	if err = c.writeRecord(wire); err != nil {
 		return false, err
 	}
 	return true, nil
@@ -1373,7 +1373,7 @@ func (c *Conn) SendKeyUpdate(requestPeer bool) error {
 		c.writeMu.Unlock()
 		return err
 	}
-	_, err = c.writeRecord(wire)
+	err = c.writeRecord(wire)
 	c.writeMu.Unlock()
 	if err == nil {
 		c.startKeyUpdateRetransmission()
@@ -1408,7 +1408,7 @@ func (c *Conn) startKeyUpdateRetransmission() {
 			}
 			wire, _, err := c.sendingTraffic.retransmitKeyUpdate()
 			if err == nil {
-				_, err = c.writeRecord(wire)
+				err = c.writeRecord(wire)
 			}
 			c.writeMu.Unlock()
 			if err != nil {

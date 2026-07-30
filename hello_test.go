@@ -311,7 +311,7 @@ func TestHelloRejectsTruncation(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	for i := 0; i < len(b); i++ {
+	for i := range b {
 		if _, err := parseClientHello(b[:i]); err == nil {
 			t.Fatalf("accepted truncation at %d", i)
 		}

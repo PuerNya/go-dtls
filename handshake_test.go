@@ -206,7 +206,7 @@ func TestReassemblyLimit(t *testing.T) {
 
 func TestReassemblyAggregateLimits(t *testing.T) {
 	r := newReassemblerWithLimits(10, 2, 6)
-	for seq := uint16(0); seq < 2; seq++ {
+	for seq := range uint16(2) {
 		if _, _, err := r.add(handshakeFragment{typ: 1, messageSequence: seq, length: 3, body: []byte{1}}); err != nil {
 			t.Fatal(err)
 		}

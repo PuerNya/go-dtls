@@ -9,11 +9,11 @@ import (
 func TestACKGatedTrafficUpdate(t *testing.T) {
 	suite, _ := cipherSuiteForID(TLS_AES_128_GCM_SHA256)
 	secret := bytes.Repeat([]byte{4}, suite.hash.Size())
-	sender, err := newSendingTraffic(suite, secret, 3, 7, 64)
+	sender, err := newSendingTraffic(suite, secret, 3, 7)
 	if err != nil {
 		t.Fatal(err)
 	}
-	receiver, err := newReceivingTraffic(suite, secret, 3, 64)
+	receiver, err := newReceivingTraffic(suite, secret, 3)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -95,7 +95,7 @@ func TestSendingTrafficReusesAndClearsKeyUpdateStorage(t *testing.T) {
 			t.Fatal(err)
 		}
 		initial := bytes.Repeat([]byte{0x5a}, suite.hash.Size())
-		sender, err := newSendingTraffic(suite, initial, 3, 0, 64)
+		sender, err := newSendingTraffic(suite, initial, 3, 0)
 		if err != nil {
 			t.Fatal(err)
 		}
@@ -193,7 +193,7 @@ func TestApplicationTrafficSecretsShareCapacityIsolatedStorage(t *testing.T) {
 func TestReceivingTrafficBoundsRetainedEpochs(t *testing.T) {
 	suite, _ := cipherSuiteForID(TLS_AES_128_GCM_SHA256)
 	secret := bytes.Repeat([]byte{7}, suite.hash.Size())
-	receiver, err := newReceivingTraffic(suite, secret, 3, 64)
+	receiver, err := newReceivingTraffic(suite, secret, 3)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -220,7 +220,7 @@ func TestReceivingTrafficSharesAndClearsEpochSecretStorage(t *testing.T) {
 			t.Fatal(err)
 		}
 		initial := bytes.Repeat([]byte{0x5a}, suite.hash.Size())
-		receiver, err := newReceivingTraffic(suite, initial, 3, 64)
+		receiver, err := newReceivingTraffic(suite, initial, 3)
 		if err != nil {
 			t.Fatal(err)
 		}
@@ -248,7 +248,7 @@ func TestReceivingTrafficSharesAndClearsEpochSecretStorage(t *testing.T) {
 
 func TestKeyUpdateSequenceMaySkipOtherPostHandshakeMessages(t *testing.T) {
 	suite, _ := cipherSuiteForID(TLS_AES_128_GCM_SHA256)
-	receiver, err := newReceivingTraffic(suite, bytes.Repeat([]byte{8}, suite.hash.Size()), 3, 64)
+	receiver, err := newReceivingTraffic(suite, bytes.Repeat([]byte{8}, suite.hash.Size()), 3)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -266,7 +266,7 @@ func TestKeyUpdateSequenceMaySkipOtherPostHandshakeMessages(t *testing.T) {
 func TestSendingEpochLimitDoesNotConstrainReceiver(t *testing.T) {
 	suite, _ := cipherSuiteForID(TLS_AES_128_GCM_SHA256)
 	secret := bytes.Repeat([]byte{9}, suite.hash.Size())
-	sender, err := newSendingTraffic(suite, secret, maxSendingEpoch, 0, 64)
+	sender, err := newSendingTraffic(suite, secret, maxSendingEpoch, 0)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -276,7 +276,7 @@ func TestSendingEpochLimitDoesNotConstrainReceiver(t *testing.T) {
 	if sender.canBeginKeyUpdate() {
 		t.Fatal("sender advertised a KeyUpdate response at the 2^48-1 epoch limit")
 	}
-	receiver, err := newReceivingTraffic(suite, secret, maxSendingEpoch, 64)
+	receiver, err := newReceivingTraffic(suite, secret, maxSendingEpoch)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -287,7 +287,7 @@ func TestSendingEpochLimitDoesNotConstrainReceiver(t *testing.T) {
 
 func TestSendingTrafficRejectsHandshakeMessageSequenceWrap(t *testing.T) {
 	suite, _ := cipherSuiteForID(TLS_AES_128_GCM_SHA256)
-	sender, err := newSendingTraffic(suite, bytes.Repeat([]byte{10}, suite.hash.Size()), 3, ^uint16(0), 64)
+	sender, err := newSendingTraffic(suite, bytes.Repeat([]byte{10}, suite.hash.Size()), 3, ^uint16(0))
 	if err != nil {
 		t.Fatal(err)
 	}

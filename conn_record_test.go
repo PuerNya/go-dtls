@@ -123,7 +123,7 @@ func TestConnRequestsKeyUpdateBeforeAuthenticationFailureLimit(t *testing.T) {
 
 	receiver := server.receiveEpochs.ciphers[3]
 	receiver.authFailureLimit = 4
-	for i := 0; i < 3; i++ {
+	for i := range 3 {
 		wire, err := client.sendCipher.seal(recordTypeApplicationData, []byte("forged"))
 		if err != nil {
 			t.Fatal(err)
@@ -694,7 +694,7 @@ func TestDeferredKeyUpdateResponseIsClearedAtSendingEpochLimit(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	traffic, err := newSendingTraffic(suite, bytes.Repeat([]byte{1}, suite.hash.Size()), maxSendingEpoch-1, 0, 64)
+	traffic, err := newSendingTraffic(suite, bytes.Repeat([]byte{1}, suite.hash.Size()), maxSendingEpoch-1, 0)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -926,7 +926,7 @@ func TestProtectedHandshakeApplicationRecordBufferIsCountBounded(t *testing.T) {
 	if _, complete, err := server.postHandshakeReassembly.addProtected(fragment, 3); err != nil || complete {
 		t.Fatalf("incomplete fragment: complete=%v err=%v", complete, err)
 	}
-	for sequence := uint64(0); sequence < 8; sequence++ {
+	for sequence := range uint64(8) {
 		buffered, err := server.bufferIncompleteHandshakeApplicationLocked(nil, recordNumber{epoch: 3, sequence: sequence}, nil)
 		if err != nil || !buffered {
 			t.Fatalf("buffer %d: buffered=%v err=%v", sequence, buffered, err)
@@ -937,7 +937,7 @@ func TestProtectedHandshakeApplicationRecordBufferIsCountBounded(t *testing.T) {
 	}
 
 	server.postHandshakeAuthState = &postHandshakeAuthState{hasResponseEpoch: true, responseEpoch: 3}
-	for sequence := uint64(0); sequence < 8; sequence++ {
+	for sequence := range uint64(8) {
 		buffered, err := server.bufferPostHandshakeAuthApplicationLocked(nil, recordNumber{epoch: 3, sequence: sequence}, nil)
 		if err != nil || !buffered {
 			t.Fatalf("PHA buffer %d: buffered=%v err=%v", sequence, buffered, err)

@@ -132,7 +132,7 @@ func TestListenerBoundsAndReclaimsSessions(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	for i := 0; i < 4; i++ {
+	for i := range 4 {
 		initial, marshalErr := marshalPlainRecord(record{typ: recordTypeHandshake, sequence: uint64(i), payload: fragment})
 		if marshalErr != nil {
 			t.Fatal(marshalErr)
@@ -194,7 +194,7 @@ func TestInitialClientHelloDatagramFilter(t *testing.T) {
 	if !isInitialClientHelloDatagram(datagram, 1024) {
 		t.Fatal("rejected a structurally valid initial ClientHello fragment")
 	}
-	for i := 0; i < len(datagram); i++ {
+	for i := range datagram {
 		if isInitialClientHelloDatagram(datagram[:i], 1024) {
 			t.Fatalf("accepted truncation at %d", i)
 		}
@@ -225,7 +225,7 @@ func TestListenerConcurrentClients(t *testing.T) {
 	const clients = 8
 	serverErrors := make(chan error, clients)
 	go func() {
-		for i := 0; i < clients; i++ {
+		for range clients {
 			conn, acceptErr := listener.Accept()
 			if acceptErr != nil {
 				serverErrors <- acceptErr
@@ -245,7 +245,7 @@ func TestListenerConcurrentClients(t *testing.T) {
 	}()
 	var wait sync.WaitGroup
 	clientErrors := make(chan error, clients)
-	for i := 0; i < clients; i++ {
+	for i := range clients {
 		wait.Add(1)
 		go func(index int) {
 			defer wait.Done()
@@ -273,12 +273,12 @@ func TestListenerConcurrentClients(t *testing.T) {
 		}(i)
 	}
 	wait.Wait()
-	for i := 0; i < clients; i++ {
+	for range clients {
 		if err = <-clientErrors; err != nil {
 			t.Fatal(err)
 		}
 	}
-	for i := 0; i < clients; i++ {
+	for range clients {
 		if err = <-serverErrors; err != nil {
 			t.Fatal(err)
 		}
@@ -871,7 +871,7 @@ func TestListenerMixedCIDDatagramDoesNotCrossAssociations(t *testing.T) {
 	client, peer := establishedConnPair(t)
 	defer client.conn.Close()
 	defer peer.conn.Close()
-	receiving, err := newReceivingTraffic(suite, secretA, 3, 64)
+	receiving, err := newReceivingTraffic(suite, secretA, 3)
 	if err != nil {
 		t.Fatal(err)
 	}

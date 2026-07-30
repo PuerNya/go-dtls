@@ -367,7 +367,7 @@ func TestProtectedFlightUsesTenRecordSlidingWindow(t *testing.T) {
 		t.Fatalf("initial burst=%d, want 10", len(writer.records))
 	}
 	var firstFive []recordNumber
-	for i := 0; i < 5; i++ {
+	for i := range 5 {
 		firstFive = append(firstFive, flight.records[i].number)
 	}
 	flight.ack(firstFive)

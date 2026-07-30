@@ -227,7 +227,7 @@ func (c *Conn) processPostHandshakeCertificateRequest(sequence uint16, body []by
 		if selectErr != nil {
 			return selectErr
 		}
-		signature, signErr := signCertificateVerify(c.config.Rand, signer, scheme, c.sendingTraffic.suite, transcript.sum(), false)
+		signature, signErr := signCertificateVerify(c.config.Rand, signer, scheme, transcript.sum(), false)
 		if signErr != nil {
 			return signErr
 		}
@@ -362,7 +362,7 @@ func (c *Conn) processPostHandshakeAuthMessageLocked(state *postHandshakeAuthSta
 			err = alertError(alertIllegalParameter, &ProtocolError{"post-handshake client selected an unoffered signature scheme"})
 		}
 		if err == nil {
-			err = verifyCertificateVerify(state.peerCertificates[0].PublicKey, verify.algorithm, c.receivingTraffic.suite, state.transcript.sum(), verify.signature, false)
+			err = verifyCertificateVerify(state.peerCertificates[0].PublicKey, verify.algorithm, state.transcript.sum(), verify.signature, false)
 			if err != nil {
 				err = alertError(alertDecryptError, err)
 			}
@@ -472,7 +472,7 @@ func (c *Conn) writeACKLocked(number recordNumber) error {
 		return err
 	}
 	for _, wire := range records {
-		if _, err = c.writeRecord(wire); err != nil {
+		if err = c.writeRecord(wire); err != nil {
 			return err
 		}
 	}

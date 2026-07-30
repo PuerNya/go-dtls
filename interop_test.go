@@ -23,7 +23,7 @@ func wolfSSLPaths(t *testing.T) (root, server, client string) {
 	server = filepath.Join(root, "build-zig", "examples", "server", "server.exe")
 	client = filepath.Join(root, "build-zig", "examples", "client", "client.exe")
 	for _, path := range []string{server, client} {
-		if _, err := os.Stat(path); err != nil {
+		if _, err := os.Stat(path); err != nil { // #nosec G703 -- path comes from local WOLFSSL_ROOT in this opt-in test.
 			t.Fatalf("wolfSSL executable %q: %v", path, err)
 		}
 	}
@@ -63,7 +63,7 @@ func testInteropWolfSSLServer(t *testing.T, cipherName string, suites []uint16, 
 	if cipherName != "" {
 		args = append(args, "-l", cipherName)
 	}
-	cmd := exec.Command(serverPath, args...)
+	cmd := exec.Command(serverPath, args...) // #nosec G204 -- validated local WOLFSSL_ROOT executable in this opt-in test.
 	cmd.Dir = root
 	var output bytes.Buffer
 	cmd.Stdout, cmd.Stderr = &output, &output
@@ -136,7 +136,7 @@ func testInteropWolfSSLClient(t *testing.T, cipherName string, suites []uint16, 
 	if cipherName != "" {
 		args = append(args, "-l", cipherName)
 	}
-	cmd := exec.Command(clientPath, args...)
+	cmd := exec.Command(clientPath, args...) // #nosec G204 -- validated local WOLFSSL_ROOT executable in this opt-in test.
 	cmd.Dir = root
 	var output bytes.Buffer
 	cmd.Stdout, cmd.Stderr = &output, &output

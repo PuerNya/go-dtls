@@ -12,7 +12,7 @@ import (
 	"io"
 )
 
-func certificateVerifyInput(suite *cipherSuite, transcriptHash []byte, server bool) []byte {
+func certificateVerifyInput(transcriptHash []byte, server bool) []byte {
 	contextString := "TLS 1.3, client CertificateVerify"
 	if server {
 		contextString = "TLS 1.3, server CertificateVerify"
@@ -48,7 +48,7 @@ func signatureParameters(scheme tls.SignatureScheme) (crypto.Hash, *rsa.PSSOptio
 	}
 }
 
-func signCertificateVerify(random io.Reader, signer crypto.Signer, scheme tls.SignatureScheme, suite *cipherSuite, transcriptHash []byte, server bool) ([]byte, error) {
+func signCertificateVerify(random io.Reader, signer crypto.Signer, scheme tls.SignatureScheme, transcriptHash []byte, server bool) ([]byte, error) {
 	if random == nil {
 		random = rand.Reader
 	}
@@ -56,7 +56,7 @@ func signCertificateVerify(random io.Reader, signer crypto.Signer, scheme tls.Si
 	if err != nil {
 		return nil, err
 	}
-	input := certificateVerifyInput(suite, transcriptHash, server)
+	input := certificateVerifyInput(transcriptHash, server)
 	message := input
 	var opts crypto.SignerOpts = hash
 	if hash != 0 {
@@ -74,12 +74,12 @@ func signCertificateVerify(random io.Reader, signer crypto.Signer, scheme tls.Si
 	return sig, nil
 }
 
-func verifyCertificateVerify(public crypto.PublicKey, scheme tls.SignatureScheme, suite *cipherSuite, transcriptHash, signature []byte, server bool) error {
+func verifyCertificateVerify(public crypto.PublicKey, scheme tls.SignatureScheme, transcriptHash, signature []byte, server bool) error {
 	hash, pss, err := signatureParameters(scheme)
 	if err != nil {
 		return err
 	}
-	input := certificateVerifyInput(suite, transcriptHash, server)
+	input := certificateVerifyInput(transcriptHash, server)
 	digest := input
 	if hash != 0 {
 		h := hash.New()

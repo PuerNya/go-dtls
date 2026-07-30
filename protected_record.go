@@ -2,6 +2,7 @@ package dtls13
 
 import (
 	"crypto/cipher"
+	"crypto/subtle"
 	"encoding/binary"
 	"errors"
 )
@@ -203,7 +204,7 @@ func (c *recordCipher) nonce(sequence uint64) []byte {
 func (c *recordCipher) nonceInto(sequence uint64, nonce []byte) []byte {
 	nonce = nonce[:c.ivLen]
 	copy(nonce, c.iv[:c.ivLen])
-	for i := 0; i < 8; i++ {
+	for i := range 8 {
 		nonce[len(nonce)-1-i] ^= byte(sequence >> (8 * i))
 	}
 	return nonce
@@ -439,14 +440,7 @@ func (c *recordCipher) openRecord(datagram []byte, inPlace bool) (content []byte
 }
 
 func equalBytes(a, b []byte) bool {
-	if len(a) != len(b) {
-		return false
-	}
-	var different byte
-	for i := range a {
-		different |= a[i] ^ b[i]
-	}
-	return different == 0
+	return subtle.ConstantTimeCompare(a, b) == 1
 }
 
 func validInnerContentType(contentType uint8) bool {

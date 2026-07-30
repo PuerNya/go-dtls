@@ -108,7 +108,7 @@ func FuzzHandshakeMessageParsers(f *testing.F) {
 
 func FuzzProtectedRecordOpenModes(f *testing.F) {
 	suiteIDs := []uint16{TLS_AES_128_GCM_SHA256, TLS_AES_256_GCM_SHA384, TLS_CHACHA20_POLY1305_SHA256, TLS_AES_128_CCM_SHA256}
-	for mode := uint8(0); mode < 8; mode++ {
+	for mode := range uint8(8) {
 		suite, err := cipherSuiteForID(suiteIDs[int(mode)&3])
 		if err != nil {
 			f.Fatal(err)
