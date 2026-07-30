@@ -21,6 +21,7 @@ DTLS — протокол ненадежных дейтаграмм, а не б�
 - Каждый вызов `ReadDatagram` потребляет одну аутентифицированную запись Application Data. Если буфер слишком мал, остаток отбрасывается, а `DatagramInfo.Truncated` сообщает об усечении.
 - По умолчанию прикладная дейтаграмма, превышающая текущий MTU пути или предел записи RFC, завершается ошибкой `ErrDatagramTooLarge` без частичной отправки. `IgnorePathMTU` позволяет пропустить только первую проверку.
 - Для сообщений рукопожатия по-прежнему применяются фрагментация RFC 9147, ACK, восстановление после потерь и экспоненциальная задержка. Эти механизмы надежности не меняют семантику прикладных дейтаграмм.
+- ECH по RFC 9849 шифрует настоящий ClientHello; отклонение, HRR, возобновление и 0-RTT работают fail-closed.
 - `Listener` принимает аутентифицированные ассоциации DTLS из UDP-сокета и возвращает строго типизированный `*dtls13.Conn`.
 
 ## Требования
@@ -211,6 +212,7 @@ if _, err := conn.WriteDatagram(payload); errors.Is(err, dtls13.ErrDatagramTooLa
 | `ErrDatagramTooLarge` | Прикладная дейтаграмма превышает текущий PMTU или предел записи; транспорт может вернуть эту ошибку и при `IgnorePathMTU`; проверяйте через `errors.Is` |
 | `ErrEarlyDataUnavailable` | Нет подходящего ticket для early data либо соединение не может отправить 0-RTT |
 | `ErrEarlyDataRejected` | Рукопожатие завершено, но узел отклонил отправленный 0-RTT из-за HRR, повтора или политики |
+| `*ECHRejectionError` | Сервер отклонил ECH после аутентификации соединения `public_name`; ошибка может содержать `RetryConfigList`, допустимый только для того же источника конфигурации и endpoint |
 | `io.EOF` | Узел отправил корректный `close_notify`, закрыв направление чтения |
 
 Крайние сроки, закрытие сокета и ошибки нижележащего UDP следуют модели ошибок пакета Go `net`. Вызывающий код не должен зависеть от текста ошибки.
@@ -225,6 +227,7 @@ if _, err := conn.WriteDatagram(payload); errors.Is(err, dtls13.ErrDatagramTooLa
 | KeyUpdate | `SendKeyUpdate(requestPeer)` | Надежно отправляется, эпоха отправки переключается после ACK; также запускается автоматически при приближении к пределу использования AEAD |
 | CID / проверка пути | `ConnectionID`, `GetConnectionID`, `SendNewConnectionIDs`, `RequestConnectionIDs`, `UseNextConnectionID` | Поддерживает согласование и обновление CID по RFC 9146 и по умолчанию согласует RRC по RFC 9853; Listener меняет привязку только после проверки нового пути |
 | Сжатие сертификатов | `EnableCertificateCompression` | Явно включает zlib по RFC 8879 для сертификатов сервера и клиентских сертификатов mTLS/PHA; если сжатое сообщение не меньше, отправляется обычный Certificate |
+| Encrypted ClientHello | `EncryptedClientHelloConfigList`, `EncryptedClientHelloKeys`, `EncryptedClientHelloGrease` | Inner/Outer ClientHello, HPKE, HRR, подтверждение принятия, retry-конфигурации, возобновление и 0-RTT по RFC 9849 |
 | Аутентификация клиента в рукопожатии | `ClientAuth`, `ClientCAs`, `Certificates` | Использует политики клиентских сертификатов из `crypto/tls` |
 | Аутентификация клиента после рукопожатия | `PostHandshakeAuth`, `RequestClientCertificate` | Сначала клиент объявляет поддержку, затем сервер инициирует PHA |
 | Exporter | `ConnectionState().ExportKeyingMaterial` | Экспортирует материал RFC 8446, раздел 7.5, с меткой DTLS `dtls13` |
@@ -252,6 +255,10 @@ if _, err := conn.WriteDatagram(payload); errors.Is(err, dtls13.ErrDatagramTooLa
 | `CipherSuites` | AES-128-GCM, AES-256-GCM, ChaCha20-Poly1305, AES-128-CCM |
 | `CurvePreferences` | X25519, P-256 |
 | `ExternalPSKs` | По умолчанию пусто; принимает неизменяемые внешние PSK от `ImportExternalPSK` или `NewDirectExternalPSK`; несовместимо с `ClientAuth` |
+| `EncryptedClientHelloConfigList` | По умолчанию `nil`; клиент передает полный ECHConfigList RFC 9849 с двухбайтовой длиной; ненулевое значение делает принятие ECH обязательным |
+| `EncryptedClientHelloRejectionVerify` | Необязательная замена встроенной проверки отклонения ECH через `RootCAs` и `public_name` |
+| `EncryptedClientHelloKeys` / `GetEncryptedClientHelloKeys` | Серверные ECHConfig и ключи HPKE; хотя бы один ключ должен иметь `SendAsRetry`, callback выполняется до выбора SNI, ALPN и сертификата |
+| `EncryptedClientHelloGrease` | По умолчанию `false`; отправляет GREASE ECH без настоящей конфигурации, отклонение не прерывает обычное соединение |
 | `MTU` | Полезная нагрузка UDP 1200 байт; минимум 256 |
 | `IgnorePathMTU` | По умолчанию `false`; только Application Data пропускает внутреннюю проверку PMTU, рукопожатие не меняется |
 | `RecordSizeLimit` | `0` выбирает значение по умолчанию `2^14+1`; диапазон `64..2^14+1` задает максимальный полный `DTLSInnerPlaintext`, принимаемый узлом, и объявляется по RFC 8449 независимо от PMTU |
@@ -269,6 +276,38 @@ if _, err := conn.WriteDatagram(payload); errors.Is(err, dtls13.ErrDatagramTooLa
 | `MaxEarlyData` | 0, то есть 0-RTT по умолчанию выключен |
 | `MaxConnectionIDs` | 8 CID в каждом направлении |
 | `DisableReturnRoutabilityCheck` | По умолчанию `false`; RRC отключается только при эквивалентной проверке адреса приложением |
+
+### Encrypted ClientHello
+
+Клиент получает доверенный параметр `ech` из DNS SVCB/HTTPS и декодирует его представление Base64 по RFC 9848. Библиотека принимает полный ECHConfigList в wire-формате и не выполняет DNS-запрос:
+
+```go
+echConfigList, err := base64.StdEncoding.DecodeString(dnsECHParameter)
+if err != nil {
+	log.Fatal(err)
+}
+
+clientConfig := &dtls13.Config{
+	RootCAs:                        roots,
+	ServerName:                     "private.example",
+	EncryptedClientHelloConfigList: echConfigList,
+}
+```
+
+Сервер устанавливает один или несколько ECHConfig и соответствующие закрытые ключи HPKE, созданные средствами развертывания. `Config` содержит один ECHConfig без внешней длины ECHConfigList; `PrivateKey` использует формат закрытого ключа соответствующего KEM из `crypto/hpke`:
+
+```go
+serverConfig := &dtls13.Config{
+	Certificates: []tls.Certificate{certificate},
+	EncryptedClientHelloKeys: []dtls13.EncryptedClientHelloKey{{
+		Config:      echConfig,
+		PrivateKey:  echPrivateKey,
+		SendAsRetry: true,
+	}},
+}
+```
+
+При настроенном настоящем ECH клиент завершается успешно только после проверки подтверждения принятия в HRR или ServerHello. Аутентифицированное отклонение возвращает `*ECHRejectionError` и проверяет внешнее соединение по ECH `public_name`, даже если задан `InsecureSkipVerify`. Обычный `VerifyPeerCertificate` для отклоненного соединения не вызывается, клиентский сертификат не отправляется. `RetryConfigList` разрешено использовать только с тем же источником DNS-конфигурации и transport endpoint. Для собственной проверки public name задайте `EncryptedClientHelloRejectionVerify`. `ConnectionState().ECHAccepted` сообщает о принятии настоящего ECH; GREASE его не устанавливает.
 
 ### Внешние PSK и importer
 
@@ -348,6 +387,8 @@ Ticket без идентичности клиента используется �
 | [RFC 8879](https://www.rfc-editor.org/rfc/rfc8879) | Реализовано | Явно включаемый zlib; направленное согласование ClientHello/CertificateRequest, сертификаты сервера и клиента mTLS/PHA, transcript CompressedCertificate, безопасный откат и ограничения распаковки |
 | [RFC 9257](https://www.rfc-editor.org/rfc/rfc9257) | Реализовано | Внешние PSK не короче 128 бит, только DHE, opaque identity, несколько identity, откат к сертификату, рекомендации по приватности и требования развертывания к парам ролей |
 | [RFC 9258](https://www.rfc-editor.org/rfc/rfc9258) | Реализовано | Реализованы `ImportedIdentity`, DTLS `0xfefc`, целевые KDF SHA-256/384, исходный hash EPSK, `dtls13derived psk` и `imp binder` |
+| [RFC 9848](https://www.rfc-editor.org/rfc/rfc9848) | Реализовано/интеграция приложения | Принимается полный ECHConfigList, декодированный из DNS-параметра `ech`; запрос SVCB/HTTPS и декодирование Base64 выполняет приложение |
+| [RFC 9849](https://www.rfc-editor.org/rfc/rfc9849) | Реализовано | Реализованы HPKE, Inner/Outer ClientHello, padding, HRR, подтверждение принятия, retry-конфигурации, аутентифицированное отклонение, GREASE, возобновление и 0-RTT |
 | [RFC 9846](https://www.rfc-editor.org/rfc/rfc9846) | Реализовано для включенных возможностей | `user_canceled(90)` игнорируется с продолжением ожидания `close_notify` во время рукопожатия, ожидания финального ACK и post-handshake; локальная криптографическая ошибка без более точного предупреждения отправляет `general_error(117)`, а конкретное предупреждение протокола всегда имеет приоритет |
 | [RFC 9325](https://www.rfc-editor.org/rfc/rfc9325) | Частично | Покрыты PFS, AEAD, SNI/ALPN, tickets, 0-RTT, KeyUpdate и ограничения сертификатов; OCSP stapling отсутствует, а модуль намеренно не реализует поддержку DTLS 1.2, требуемую этим BCP |
 | [RFC 9525](https://www.rfc-editor.org/rfc/rfc9525) | Частично | Go X.509 и `ServerName` покрывают DNS-ID/IP-ID; URI-ID, SRV-ID и прикладные service identity делегированы callback-функциям проверки вызывающего кода |
@@ -398,12 +439,14 @@ Ticket без идентичности клиента используется �
 | [RFC 8879](https://www.rfc-editor.org/rfc/rfc8879) | Сжатие сертификатов TLS/DTLS | Явно включаемый стандартный zlib; реализованы согласование CH/CR, сертификаты сервера и клиента, HRR, mTLS, PHA, фрагментация/повторная передача, transcript и ограниченная распаковка; если сжатие не дает выигрыша, используется обычный Certificate |
 | [RFC 9257](https://www.rfc-editor.org/rfc/rfc9257) | Рекомендации TLS 1.3 по внешним PSK | Реализованы DHE-only, несколько identity, откат при неизвестной identity, описание риска открытой identity, привязка происхождения ticket и политика 0-RTT для внешнего PSK |
 | [RFC 9258](https://www.rfc-editor.org/rfc/rfc9258) | PSK Importer для TLS/DTLS 1.3 | Реализованы целевой вывод SHA-256/384, метка DTLS, wire-кодирование ImportedIdentity и отдельная метка binder |
+| [RFC 9848](https://www.rfc-editor.org/rfc/rfc9848) | Получение конфигурации ECH через DNS | Библиотека разбирает полный ECHConfigList; получение DNS SVCB/HTTPS и декодирование presentation-format Base64 выполняет приложение |
+| [RFC 9849](https://www.rfc-editor.org/rfc/rfc9849) | Encrypted ClientHello для TLS/DTLS | Реализованы клиент и сервер, HPKE, реконструкция Inner/Outer, padding, повторное использование контекста HRR, подтверждение принятия, retry-конфигурации, аутентификация отклонения, GREASE, возобновление PSK и 0-RTT |
 | [RFC 9325](https://www.rfc-editor.org/rfc/rfc9325) | BCP безопасности развертывания TLS/DTLS | Tickets используют AES-256-GCM и имеют срок от одной секунды до семи дней; ограничения RSA 2048 бит и сертификатов SHA-1/MD5 применяются к полному рукопожатию, корням доверия и возобновлению; исключения OCSP и DTLS 1.2 описаны в общем статусе |
 | [RFC 9525](https://www.rfc-editor.org/rfc/rfc9525) | Проверка идентичности службы | DNS-ID/IP-ID строго проверяются по умолчанию; семантику приложения для других reference identifier реализует вызывающий код |
 | [RFC 9853](https://www.rfc-editor.org/rfc/rfc9853) | Return Routability Check при смене адреса CID | Реализовано; enhanced check по умолчанию, basic check после отказа старого пути, смена привязки только после проверки, отдельное ограничение усиления пути-кандидата и проверка с резервным CID при его наличии |
 | [RFC 8701](https://www.rfc-editor.org/rfc/rfc8701) | GREASE против окостенения протокола | Получатель допускает корректные неизвестные значения с сохранением инвариантов HRR; отправитель активно GREASE не создает |
 
-Не реализованы необязательные расширения RFC 9149 Ticket Requests, RFC 9849 ECH и RFC 9954 Hybrid Key Exchange.
+Не реализованы необязательные расширения RFC 9149 Ticket Requests и RFC 9954 Hybrid Key Exchange.
 
 ### Границы реализации
 
@@ -414,7 +457,7 @@ Ticket без идентичности клиента используется �
 - Отправитель использует допустимый режим «одна запись на UDP-дейтаграмму» и не предоставляет необязательный API агрегации нескольких записей.
 - Параллельные множественные запросы NewSessionTicket или PHA не предоставляются; RFC разрешает, но не требует эту возможность.
 - Автоматическая смена привязки RRC требует транспорт, принимающий данные от разных источников и способный отправлять выбранному адресу. Стандартный Listener это поддерживает; подключенные UDP-клиенты ограничены фильтрацией узла операционной системой. Пустой CID не позволяет однозначно маршрутизировать разные пятиэлементные кортежи.
-- Сборка wolfSSL master `f699037` (строка версии 5.9.2) поддерживает CID, KeyUpdate, PHA, session tickets, 0-RTT, `SESSION_CERTS` и прямые внешние PSK, но не RFC 8449, RFC 8879, importer RFC 9258 и RRC RFC 9853. Тесты сжатия сертификатов подтверждают только безопасное игнорирование неизвестного расширения и откат к обычному Certificate. Ограничения узла: HRR сервера отклоняет 0-RTT клиента go-dtls; клиент не разбирает mTLS ticket go-dtls размером 1421 байт; клиент не повторяет Finished после потери финального ACK.
+- Сборка wolfSSL master `f699037` (строка версии 5.9.2) поддерживает CID, KeyUpdate, PHA, session tickets, 0-RTT, `SESSION_CERTS` и прямые внешние PSK, но не RFC 8449, RFC 8879, importer RFC 9258 и RRC RFC 9853. Ее сборка ECH/HPKE не завершает DTLS-рукопожатие с принятым ECH, поэтому зафиксировано только успешное обычное рукопожатие с ECH GREASE; совместимость accepted-ECH не заявляется. Другие ограничения узла: HRR сервера отклоняет 0-RTT клиента go-dtls; клиент не разбирает mTLS ticket go-dtls размером 1421 байт; клиент не повторяет Finished после потери финального ACK.
 
 ## Тесты производительности
 
@@ -422,10 +465,12 @@ Ticket без идентичности клиента используется �
 
 | Сценарий | Репрезентативный результат |
 | --- | --- |
-| Полное сертификатное рукопожатие и закрытие, `BenchmarkConnectionHandshakeLifecycle` | Около `625.9 us/op`, `99725 B/op`, `761 allocs/op` |
+| Полное сертификатное рукопожатие и закрытие, `BenchmarkConnectionHandshakeLifecycle` | Около `619.4 us/op`, `99508 B/op`, `760 allocs/op` |
 | Рукопожатие RFC 9257/9258 с внешним PSK и закрытие, `BenchmarkExternalPSKHandshakeLifecycle` | Около `355.4 us/op`, `98287 B/op`, `727 allocs/op` |
-| Полный mTLS, `BenchmarkMutualTLSHandshakeLifecycle/Full` | Около `915.1 us/op`, `116112 B/op`, `976 allocs/op` |
-| Возобновленный mTLS, `BenchmarkMutualTLSHandshakeLifecycle/Resumed` | Около `459.9 us/op`, `115250 B/op`, `800-801 allocs/op` |
+| Полный mTLS, `BenchmarkMutualTLSHandshakeLifecycle/Full` | Около `912.9 us/op`, `116237 B/op`, `974 allocs/op` |
+| Возобновленный mTLS, `BenchmarkMutualTLSHandshakeLifecycle/Resumed` | Около `457.3 us/op`, `115336 B/op`, `799-800 allocs/op` |
+| Полное рукопожатие ECH RFC 9849, `BenchmarkECHHandshakeLifecycle/Direct` | Около `1.53 ms/op`, `148615 B/op`, `1260 allocs/op` |
+| ECH RFC 9849 с HRR, `BenchmarkECHHandshakeLifecycle/HRR` | Около `1.63 ms/op`, `151391 B/op`, `1281 allocs/op` |
 | Рукопожатие RFC 8879 zlib с сертификатом сервера, цепочка из четырех сертификатов | Около `1.049 ms/op`, `123323 B/op`, `1022 allocs/op` |
 | Полный mTLS RFC 8879 zlib, цепочки из четырех сертификатов в обоих направлениях | Около `1.746 ms/op`, `160719 B/op`, `1469 allocs/op` |
 | Сжатие / распаковка RFC 8879 zlib | Около `7.2-7.7 us/op`, `4 allocs/op` / `6.3-6.9 us/op`, `4290-4300 B/op`, `6 allocs/op` |
@@ -453,6 +498,7 @@ go test -run '^$' -bench . -benchmem
 
 ```sh
 go test -run '^$' -bench '^BenchmarkConnectionHandshakeLifecycle$' -benchmem -benchtime=2000x -cpu=1
+go test -run '^$' -bench '^BenchmarkECHHandshakeLifecycle/(Direct|HRR)$' -benchmem -benchtime=2000x -cpu=1
 go test -run '^$' -bench '^BenchmarkExternalPSKHandshakeLifecycle$' -benchmem -benchtime=2000x -cpu=1
 go test -run '^$' -bench '^BenchmarkMutualTLSHandshakeLifecycle/(Full|Resumed)$' -benchmem -count=10
 go test -run '^$' -bench '^BenchmarkCertificateCompression' -benchmem
@@ -467,12 +513,13 @@ go test -run '^$' -bench '^BenchmarkProtectedRecord(Seal|RoundTripInPlace)$' -be
 - Тесты RFC 8449 охватывают CH/EE, минимум 64, направленные ограничения, недопустимые значения и сочетания расширений, аутентифицированное превышение, HRR, возобновление, 0-RTT, KeyUpdate, ACK, независимость от PMTU и совместимость со сторонними узлами без согласования расширения.
 - Тесты RFC 8879 охватывают согласование ClientHello/CertificateRequest, zlib, CompressedCertificate, transcript, недопустимые алгоритмы/потоки/длины, ограничения распаковки, откат к обычному Certificate, HRR, возобновление, mTLS/PHA, пределы записей, фрагментацию/повторную передачу, слабые сети, жизненный цикл ресурсов и безопасный откат со сторонними узлами без поддержки расширения.
 - Тесты RFC 9257/9258 охватывают независимый вывод importer, разделение KDF SHA-256/384 и binder `imp`/`ext`, прямые и импортированные PSK, несколько identity, фильтрацию HRR, ошибки identity/key/context, откат к сертификату, состояние соединения, возобновление и отзыв ticket, политику 0-RTT и слабые сети.
+- Тесты RFC 9848/9849 охватывают публичные векторы конфигурации, ECHConfig/ECHConfigList, HPKE, Inner/Outer и padding, реконструкцию внешних расширений, подтверждение принятия HRR и отказ от downgrade, аутентифицированные retry-конфигурации, подавление клиентского сертификата, GREASE, возобновление, 0-RTT, фрагментацию, слабые сети и реальный UDP.
 - Тесты слабой сети охватывают двунаправленные потери, задержку, изменение порядка и дублирование, включая комбинации CH/SH/Finished/ACK/HRR/возобновления mTLS.
 - Тесты mTLS охватывают полное рукопожатие, возобновление PSK, 0-RTT, откат политики/CA и срок аутентификации обновленного ticket.
 - Тесты предупреждений RFC 9846 охватывают рукопожатие, ожидание финального ACK, изменение порядка после рукопожатия, `close_notify` и локальные криптографические ошибки.
 - Тесты RFC 9853 охватывают сообщения/state machine RRC, реальный UDP NAT rebinding, обновления CID, комбинации слабой сети и жизненный цикл ресурсов соединения.
 - Fuzzing parser/record охватывает дифференциальную проверку копирующего и in-place расшифрования для всех четырех AEAD.
-- Двунаправленные тесты через реальный UDP с wolfSSL master `f699037` охватывают HRR, рукопожатия с сертификатами RSA-PSS, Finished ACK, прикладные данные, AES-GCM, AES-128-CCM, прямые внешние PSK, CID, KeyUpdate, PHA и обычное возобновление сессии. В поддерживаемых направлениях также проверяются инициированные go-dtls немедленная смена CID, возобновление mTLS и повтор Finished после потери финального ACK, а также 0-RTT, инициированный клиентом wolfSSL.
+- Двунаправленные тесты через реальный UDP с wolfSSL master `f699037` охватывают HRR, рукопожатия с сертификатами RSA-PSS, Finished ACK, прикладные данные, AES-GCM, AES-128-CCM, прямые внешние PSK, CID, KeyUpdate, PHA и обычное возобновление сессии. В поддерживаемых направлениях также проверяются инициированные go-dtls немедленная смена CID, возобновление mTLS и повтор Finished после потери финального ACK, а также 0-RTT, инициированный клиентом wolfSSL. Для ECH проверяется только откат GREASE, поскольку узел пока не завершает DTLS accepted-ECH.
 
 Требования к среде разработки, обязательным проверкам, производительности и commit описаны в [CONTRIBUTING.ru.md](CONTRIBUTING.ru.md).
 

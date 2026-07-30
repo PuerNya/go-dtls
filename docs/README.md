@@ -21,6 +21,7 @@ DTLS 是不可靠报文协议，不是 TLS 字节流：
 - 一次 `ReadDatagram` 消费一条认证后的 Application Data record；缓冲区过小时会丢弃余部，并通过 `DatagramInfo.Truncated` 报告。
 - 默认情况下，超过当前路径 MTU 或 RFC record 上限的应用报文返回 `ErrDatagramTooLarge`，不会部分发送；`IgnorePathMTU` 可只跳过前一项检查。
 - 握手消息仍按 RFC 9147 执行分片、ACK、丢包恢复和指数退避；这些可靠性机制不会改变应用数据的报文语义。
+- RFC 9849 ECH 可加密真实 ClientHello；拒绝、HRR、恢复和 0-RTT 均保持 fail-closed。
 - `Listener` 从 UDP socket 接受经过认证的 DTLS association，并返回强类型 `*dtls13.Conn`。
 
 ## 环境要求
@@ -216,6 +217,7 @@ ACK 和 post-handshake flight 仍按 PMTU 分片、重传和退避。该选项�
 | `ErrDatagramTooLarge` | 应用 datagram 超过当前 PMTU 或 record 上限；开启 `IgnorePathMTU` 后底层仍可能返回；可用 `errors.Is` 判断 |
 | `ErrEarlyDataUnavailable` | 没有可用的 early-data ticket，或该连接不能发送 0-RTT |
 | `ErrEarlyDataRejected` | 握手完成，但对端因 HRR、重放或策略拒绝了已发送的 0-RTT |
+| `*ECHRejectionError` | 服务端经过 `public_name` 连接认证后拒绝 ECH；可能携带仅限同一配置来源和 endpoint 使用的 `RetryConfigList` |
 | `io.EOF` | 对端发送了合法 `close_notify`，读取方向已关闭 |
 
 deadline、socket 关闭和底层 UDP 错误沿 Go `net` 错误模型返回；调用方不应依赖错误字符串。
@@ -230,6 +232,7 @@ deadline、socket 关闭和底层 UDP 错误沿 Go `net` 错误模型返回；�
 | KeyUpdate | `SendKeyUpdate(requestPeer)` | 可靠发送并在 ACK 后切换发送 epoch；接近 AEAD 使用上限时也会自动触发 |
 | CID / 路径验证 | `ConnectionID`、`GetConnectionID`、`SendNewConnectionIDs`、`RequestConnectionIDs`、`UseNextConnectionID` | 支持 RFC 9146 CID 协商和更新，并默认协商 RFC 9853 RRC；Listener 只在新路径验证完成后 rebind |
 | 证书压缩 | `EnableCertificateCompression` | 显式启用 RFC 8879 zlib；支持服务端证书以及 mTLS/PHA 客户端证书，压缩后不更小时自动发送普通 Certificate |
+| Encrypted ClientHello | `EncryptedClientHelloConfigList`、`EncryptedClientHelloKeys`、`EncryptedClientHelloGrease` | RFC 9849 Inner/Outer ClientHello、HPKE、HRR、accept confirmation、retry configs、恢复和 0-RTT |
 | 握手内客户端认证 | `ClientAuth`、`ClientCAs`、`Certificates` | 使用 `crypto/tls` 的客户端证书策略 |
 | 握手后客户端认证 | `PostHandshakeAuth`、`RequestClientCertificate` | 客户端先声明支持，服务端再发起 PHA |
 | Exporter | `ConnectionState().ExportKeyingMaterial` | 提供 RFC 8446 section 7.5、使用 DTLS `dtls13` label 的导出材料 |
@@ -257,6 +260,10 @@ deadline、socket 关闭和底层 UDP 错误沿 Go `net` 错误模型返回；�
 | `CipherSuites` | AES-128-GCM、AES-256-GCM、ChaCha20-Poly1305、AES-128-CCM |
 | `CurvePreferences` | X25519、P-256 |
 | `ExternalPSKs` | 默认空；通过 `ImportExternalPSK` 或 `NewDirectExternalPSK` 配置不可变外部 PSK；不能和 `ClientAuth` 组合 |
+| `EncryptedClientHelloConfigList` | 默认 `nil`；客户端传入包含两字节长度的完整 RFC 9849 ECHConfigList，非 `nil` 时 ECH 必须被接受 |
+| `EncryptedClientHelloRejectionVerify` | 可选；替代内置 `RootCAs` + `public_name` 检查来认证 ECH 拒绝连接 |
+| `EncryptedClientHelloKeys` / `GetEncryptedClientHelloKeys` | 服务端 ECHConfig 与 HPKE 私钥；至少一个 key 必须设置 `SendAsRetry`，callback 在 SNI/ALPN/证书选择前执行 |
+| `EncryptedClientHelloGrease` | 默认 `false`；没有真实 ECH 配置时发送 GREASE ECH，拒绝不导致普通连接失败 |
 | `MTU` | 1200 字节 UDP payload；最小 256 |
 | `IgnorePathMTU` | 默认 `false`；仅让 Application Data 跳过库内 PMTU 检查，握手不受影响 |
 | `RecordSizeLimit` | `0` 表示默认 `2^14+1`；可配置 `64..2^14+1`，作为本端接收的完整 `DTLSInnerPlaintext` 上限并通过 RFC 8449 主动协商；与 PMTU 独立 |
@@ -274,6 +281,38 @@ deadline、socket 关闭和底层 UDP 错误沿 Go `net` 错误模型返回；�
 | `MaxEarlyData` | 0，即默认关闭 0-RTT |
 | `MaxConnectionIDs` | 每个方向 8 个 CID |
 | `DisableReturnRoutabilityCheck` | 默认 `false`；仅在应用提供等价地址验证时关闭 RRC |
+
+### Encrypted ClientHello
+
+客户端负责按 RFC 9848 从可信 DNS SVCB/HTTPS `ech` 参数取得配置并解码 Base64；库接收完整 wire-format ECHConfigList，不执行 DNS 查询：
+
+```go
+echConfigList, err := base64.StdEncoding.DecodeString(dnsECHParameter)
+if err != nil {
+	log.Fatal(err)
+}
+
+clientConfig := &dtls13.Config{
+	RootCAs:                       roots,
+	ServerName:                    "private.example",
+	EncryptedClientHelloConfigList: echConfigList,
+}
+```
+
+服务端配置一个或多个由部署工具生成的 ECHConfig 和对应 HPKE 私钥。`Config` 是单个 ECHConfig，不带 ECHConfigList 的外层长度；`PrivateKey` 使用对应 KEM 的 `crypto/hpke` 私钥编码：
+
+```go
+serverConfig := &dtls13.Config{
+	Certificates: []tls.Certificate{certificate},
+	EncryptedClientHelloKeys: []dtls13.EncryptedClientHelloKey{{
+		Config:      echConfig,
+		PrivateKey:  echPrivateKey,
+		SendAsRetry: true,
+	}},
+}
+```
+
+配置真实 ECH 后，客户端只在验证 HRR 或 ServerHello accept confirmation 后成功；认证拒绝返回 `*ECHRejectionError`，并按 ECH `public_name` 验证外层连接，即使设置了 `InsecureSkipVerify` 也不会跳过。拒绝连接不调用普通 `VerifyPeerCertificate`，也不会发送客户端证书。`RetryConfigList` 只能在相同 DNS 配置来源和 transport endpoint 范围内用于重试。需要自定义 public-name 验证时设置 `EncryptedClientHelloRejectionVerify`。`ConnectionState().ECHAccepted` 报告真实 ECH 是否接受；GREASE 不会设置该值。
 
 ### 外部 PSK 与 importer
 
@@ -353,6 +392,8 @@ serverConfig := &dtls13.Config{
 | [RFC 8879](https://www.rfc-editor.org/rfc/rfc8879) | 完成 | 显式 opt-in zlib；CH/CertificateRequest 分方向协商，服务端证书及 mTLS/PHA 客户端证书、CompressedCertificate transcript、安全回退和解压上限完成 |
 | [RFC 9257](https://www.rfc-editor.org/rfc/rfc9257) | 完成 | 外部 PSK 至少 128 bit、DHE-only、opaque identity、多身份、证书回退和身份隐私已实现，pairwise/角色部署约束已明确记录 |
 | [RFC 9258](https://www.rfc-editor.org/rfc/rfc9258) | 完成 | `ImportedIdentity`、DTLS `0xfefc`、SHA-256/384 target KDF、EPSK source hash、`dtls13derived psk` 和 `imp binder` 完成 |
+| [RFC 9848](https://www.rfc-editor.org/rfc/rfc9848) | 完成/应用集成 | 接收 DNS `ech` 参数解码后的完整 ECHConfigList；SVCB/HTTPS 查询和 Base64 解码由应用承担 |
+| [RFC 9849](https://www.rfc-editor.org/rfc/rfc9849) | 完成 | HPKE、Inner/Outer ClientHello、padding、HRR、accept confirmation、retry configs、认证拒绝、GREASE、恢复和 0-RTT 完成 |
 | [RFC 9846](https://www.rfc-editor.org/rfc/rfc9846) | 完成（已启用范围） | 握手内、final ACK 等待和握手后均忽略 `user_canceled(90)` 并继续等 `close_notify`；没有更具体 alert 的本地加密失败发送 `general_error(117)`，具体协议 alert 始终优先 |
 | [RFC 9325](https://www.rfc-editor.org/rfc/rfc9325) | 部分实现 | PFS、AEAD、SNI/ALPN、ticket、0-RTT、KeyUpdate 和证书安全下限已覆盖；缺少 OCSP stapling，且本模块有意不实现该 BCP 要求的 DTLS 1.2 |
 | [RFC 9525](https://www.rfc-editor.org/rfc/rfc9525) | 部分实现 | Go X.509 与 `ServerName` 覆盖 DNS-ID/IP-ID；URI-ID、SRV-ID 和应用 service identity 由调用方验证回调承担 |
@@ -403,12 +444,14 @@ serverConfig := &dtls13.Config{
 | [RFC 8879](https://www.rfc-editor.org/rfc/rfc8879) | TLS/DTLS Certificate Compression | 显式 opt-in 标准 zlib；CH/CR 协商、服务端与客户端证书、HRR、mTLS、PHA、分片/重传、transcript 和有界解压完成；不更小时回退普通 Certificate |
 | [RFC 9257](https://www.rfc-editor.org/rfc/rfc9257) | TLS 1.3 external PSK 使用指导 | DHE-only、多身份、未知身份回退、明文 identity 风险、票据来源绑定及外部 PSK 0-RTT 禁用策略完成 |
 | [RFC 9258](https://www.rfc-editor.org/rfc/rfc9258) | TLS/DTLS 1.3 PSK Importer | SHA-256/384 目标派生、DTLS label、ImportedIdentity wire 和独立 binder label 完成 |
+| [RFC 9848](https://www.rfc-editor.org/rfc/rfc9848) | ECH DNS 配置引导 | 库解析完整 ECHConfigList；DNS SVCB/HTTPS 获取和 presentation-format Base64 解码属于应用集成 |
+| [RFC 9849](https://www.rfc-editor.org/rfc/rfc9849) | TLS/DTLS Encrypted ClientHello | client/server、HPKE、Inner/Outer 重建、padding、HRR context reuse、accept confirmation、retry configs、拒绝认证、GREASE、PSK 恢复和 0-RTT 完成 |
 | [RFC 9325](https://www.rfc-editor.org/rfc/rfc9325) | TLS/DTLS 部署安全 BCP | ticket 使用 AES-256-GCM，寿命限制为 1 秒至 7 天；RSA 2048 位及 SHA-1/MD5 证书下限在完整握手、信任锚和恢复路径统一执行；OCSP 和 DTLS 1.2 范围例外见总体状态 |
 | [RFC 9525](https://www.rfc-editor.org/rfc/rfc9525) | 服务身份校验 | DNS-ID/IP-ID 默认严格验证；其他 reference identifier 需要调用方实现应用语义 |
 | [RFC 9853](https://www.rfc-editor.org/rfc/rfc9853) | CID 地址变化的 Return Routability Check | 完成；默认 enhanced check，旧路径失效后执行 basic check，验证成功才 rebind；候选路径执行独立放大限制，并在可用时使用 spare CID 探测 |
 | [RFC 8701](https://www.rfc-editor.org/rfc/rfc8701) | GREASE 抗僵化 | 接收端容忍合法未知值并保持 HRR 不变量；发送端不主动生成 GREASE |
 
-未实现的可选扩展包括 RFC 9149 Ticket Requests、RFC 9849 ECH 和 RFC 9954 Hybrid Key Exchange。
+未实现的可选扩展包括 RFC 9149 Ticket Requests 和 RFC 9954 Hybrid Key Exchange。
 
 ### 范围边界
 
@@ -419,7 +462,7 @@ serverConfig := &dtls13.Config{
 - 发送端采用一条 record 一个 UDP datagram 的合法模式，未暴露可选的多 record 聚合 API。
 - 未暴露并行多个 NewSessionTicket 或 PHA 请求；RFC 允许但不要求这些并行能力。
 - RRC 自动 rebind 依赖 transport 能接收不同来源并定向发送；标准 Listener 支持，connected UDP 客户端受操作系统 peer 过滤约束。空 CID 不能跨五元组唯一路由。
-- wolfSSL master `f699037`（版本字符串 5.9.2）互通构建支持 CID、KeyUpdate、PHA、session ticket、0-RTT、`SESSION_CERTS` 和 direct external PSK，但不实现 RFC 8449、RFC 8879、RFC 9258 importer 或 RFC 9853 RRC。证书压缩用例只证明安全忽略未知扩展并回退普通 Certificate。对端限制为：服务端 HRR 拒绝本库客户端 0-RTT；客户端不能解析本库 1421 字节 mTLS ticket；客户端在最终 ACK 丢失后不重传 Finished。
+- wolfSSL master `f699037`（版本字符串 5.9.2）互通构建支持 CID、KeyUpdate、PHA、session ticket、0-RTT、`SESSION_CERTS` 和 direct external PSK，但不实现 RFC 8449、RFC 8879、RFC 9258 importer 或 RFC 9853 RRC。其 ECH/HPKE 构建无法完成 DTLS accepted-ECH 握手，因此只记录成功的 GREASE ECH 普通握手，不声称 accepted-ECH 互通。对端其他限制为：服务端 HRR 拒绝本库客户端 0-RTT；客户端不能解析本库 1421 字节 mTLS ticket；客户端在最终 ACK 丢失后不重传 Finished。
 
 ## Benchmark
 
@@ -427,10 +470,12 @@ serverConfig := &dtls13.Config{
 
 | 场景 | 代表结果 |
 | --- | --- |
-| 普通完整证书握手和关闭 `BenchmarkConnectionHandshakeLifecycle` | 约 `625.9 us/op`、`99725 B/op`、`761 allocs/op` |
+| 普通完整证书握手和关闭 `BenchmarkConnectionHandshakeLifecycle` | 约 `619.4 us/op`、`99508 B/op`、`760 allocs/op` |
 | RFC 9257/9258 外部 PSK 握手和关闭 `BenchmarkExternalPSKHandshakeLifecycle` | 约 `355.4 us/op`、`98287 B/op`、`727 allocs/op` |
-| 完整 mTLS `BenchmarkMutualTLSHandshakeLifecycle/Full` | 约 `915.1 us/op`、`116112 B/op`、`976 allocs/op` |
-| mTLS 恢复 `BenchmarkMutualTLSHandshakeLifecycle/Resumed` | 约 `459.9 us/op`、`115250 B/op`、`800-801 allocs/op` |
+| 完整 mTLS `BenchmarkMutualTLSHandshakeLifecycle/Full` | 约 `912.9 us/op`、`116237 B/op`、`974 allocs/op` |
+| mTLS 恢复 `BenchmarkMutualTLSHandshakeLifecycle/Resumed` | 约 `457.3 us/op`、`115336 B/op`、`799-800 allocs/op` |
+| RFC 9849 ECH 完整握手 `BenchmarkECHHandshakeLifecycle/Direct` | 约 `1.53 ms/op`、`148615 B/op`、`1260 allocs/op` |
+| RFC 9849 ECH + HRR `BenchmarkECHHandshakeLifecycle/HRR` | 约 `1.63 ms/op`、`151391 B/op`、`1281 allocs/op` |
 | RFC 8879 zlib 服务端证书握手（四段证书链） | 约 `1.049 ms/op`、`123323 B/op`、`1022 allocs/op` |
 | RFC 8879 zlib 完整 mTLS（双向四段证书链） | 约 `1.746 ms/op`、`160719 B/op`、`1469 allocs/op` |
 | RFC 8879 zlib 压缩 / 解压 | 约 `7.2-7.7 us/op`、`4 allocs/op` / `6.3-6.9 us/op`、`4290-4300 B/op`、`6 allocs/op` |
@@ -458,6 +503,7 @@ go test -run '^$' -bench . -benchmem
 
 ```sh
 go test -run '^$' -bench '^BenchmarkConnectionHandshakeLifecycle$' -benchmem -benchtime=2000x -cpu=1
+go test -run '^$' -bench '^BenchmarkECHHandshakeLifecycle/(Direct|HRR)$' -benchmem -benchtime=2000x -cpu=1
 go test -run '^$' -bench '^BenchmarkExternalPSKHandshakeLifecycle$' -benchmem -benchtime=2000x -cpu=1
 go test -run '^$' -bench '^BenchmarkMutualTLSHandshakeLifecycle/(Full|Resumed)$' -benchmem -count=10
 go test -run '^$' -bench '^BenchmarkCertificateCompression' -benchmem
@@ -472,12 +518,13 @@ go test -run '^$' -bench '^BenchmarkProtectedRecord(Seal|RoundTripInPlace)$' -be
 - RFC 8449 测试覆盖 CH/EE、最小 64、方向独立限制、非法值与扩展组合、authenticated 超限、HRR、恢复、0-RTT、KeyUpdate、ACK、PMTU 独立性和未协商第三方兼容性。
 - RFC 8879 测试覆盖 CH/CertificateRequest 协商、zlib、CompressedCertificate、transcript、非法算法/压缩流/长度、解压上限、普通 Certificate 回退、HRR、恢复、mTLS/PHA、record limit、分片重传、弱网、资源生命周期和第三方不支持时的安全回退。
 - RFC 9257/9258 测试覆盖独立 importer 派生、SHA-256/384 KDF 隔离、`imp/ext` binder 隔离、直接与导入 PSK、多 identity、HRR 过滤、identity/key/context 错误、证书回退、连接状态、ticket 恢复与撤销、0-RTT 策略及弱网。
+- RFC 9848/9849 测试覆盖公开配置向量、ECHConfig/ECHConfigList、HPKE、Inner/Outer 与 padding、outer extension 重建、HRR accept confirmation 和降级拒绝、认证 retry configs、客户端证书抑制、GREASE、恢复、0-RTT、分片、弱网和真实 UDP。
 - 弱网测试覆盖双向丢包、延迟、乱序和重复，以及 CH/SH/Finished/ACK/HRR/mTLS 恢复组合。
 - mTLS 测试覆盖完整握手、PSK 恢复、0-RTT、CA/策略回退和 ticket 续签认证寿命。
 - RFC 9846 alert 测试覆盖握手、final ACK 等待、握手后乱序、`close_notify` 和本地加密失败。
 - RFC 9853 测试覆盖 RRC message/状态机、真实 UDP NAT rebind、CID 更新、弱网组合和连接资源生命周期。
 - parser/record fuzz 覆盖四套 AEAD 的复制与原地解密差分。
-- wolfSSL master `f699037` 双向真实 UDP 互通测试覆盖 HRR、RSA-PSS 证书握手、Finished ACK、应用数据、AES-GCM、AES-128-CCM、direct external PSK、CID、KeyUpdate、PHA 和普通 session resumption；另覆盖本库客户端发起的 immediate CID 切换、mTLS 恢复、丢最终 ACK 后的 Finished 重传，以及 wolfSSL 客户端发起的 0-RTT。
+- wolfSSL master `f699037` 双向真实 UDP 互通测试覆盖 HRR、RSA-PSS 证书握手、Finished ACK、应用数据、AES-GCM、AES-128-CCM、direct external PSK、CID、KeyUpdate、PHA 和普通 session resumption；另覆盖本库客户端发起的 immediate CID 切换、mTLS 恢复、丢最终 ACK 后的 Finished 重传，以及 wolfSSL 客户端发起的 0-RTT。ECH 只验证 GREASE 回退；对端当前无法完成 DTLS accepted-ECH。
 
 开发环境、必需检查、性能验证和提交规范见 [CONTRIBUTING.md](CONTRIBUTING.md)。
 

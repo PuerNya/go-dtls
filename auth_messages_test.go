@@ -47,7 +47,7 @@ func TestValidateEncryptedExtensions(t *testing.T) {
 		extSupportedGroups: groups,
 		extRecordSizeLimit: {0x01, 0x00},
 	}}
-	protocol, earlyData, err := validateEncryptedExtensions(hello, message)
+	protocol, earlyData, _, err := validateEncryptedExtensions(hello, message)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -136,7 +136,7 @@ func TestValidateEncryptedExtensionsRejectsInvalidExtensions(t *testing.T) {
 	for _, test := range tests {
 		t.Run(test.name, func(t *testing.T) {
 			message := &encryptedExtensions{extensions: test.extensions}
-			if _, _, err := validateEncryptedExtensions(test.hello, message); err == nil {
+			if _, _, _, err := validateEncryptedExtensions(test.hello, message); err == nil {
 				t.Fatal("accepted invalid EncryptedExtensions")
 			} else if test.wantAlert != 0 {
 				if description, ok := protocolAlert(err); !ok || description != test.wantAlert {

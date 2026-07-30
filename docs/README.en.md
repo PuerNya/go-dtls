@@ -21,6 +21,7 @@ DTLS is an unreliable datagram protocol, not a TLS byte stream:
 - Each `ReadDatagram` consumes one authenticated Application Data record. If the buffer is too small, the remainder is discarded and reported through `DatagramInfo.Truncated`.
 - By default, an application datagram exceeding the current path MTU or the RFC record limit returns `ErrDatagramTooLarge` without a partial write. `IgnorePathMTU` can skip only the former check.
 - Handshake messages still use RFC 9147 fragmentation, ACKs, loss recovery, and exponential backoff. These reliability mechanisms do not change application datagram semantics.
+- RFC 9849 ECH encrypts the real ClientHello; rejection, HRR, resumption, and 0-RTT remain fail-closed.
 - `Listener` accepts authenticated DTLS associations from a UDP socket and returns a strongly typed `*dtls13.Conn`.
 
 ## Requirements
@@ -211,6 +212,7 @@ A short `ReadDatagram` buffer is not a streaming read. When `Truncated=true`, th
 | `ErrDatagramTooLarge` | The application datagram exceeds the current PMTU or record limit; the transport may still return it with `IgnorePathMTU`; use `errors.Is` |
 | `ErrEarlyDataUnavailable` | No early-data ticket is available, or this connection cannot send 0-RTT |
 | `ErrEarlyDataRejected` | The handshake completed, but the peer rejected sent 0-RTT because of HRR, replay, or policy |
+| `*ECHRejectionError` | The server rejected ECH after authenticating the `public_name` connection; it may carry a `RetryConfigList` restricted to the same configuration source and endpoint |
 | `io.EOF` | The peer sent a valid `close_notify`, closing the read direction |
 
 Deadlines, socket closure, and underlying UDP errors follow Go's `net` error model. Callers must not depend on error strings.
@@ -225,6 +227,7 @@ Deadlines, socket closure, and underlying UDP errors follow Go's `net` error mod
 | KeyUpdate | `SendKeyUpdate(requestPeer)` | Reliably sent, with the sending epoch switched after ACK; also triggered automatically near AEAD usage limits |
 | CID / path validation | `ConnectionID`, `GetConnectionID`, `SendNewConnectionIDs`, `RequestConnectionIDs`, `UseNextConnectionID` | Supports RFC 9146 CID negotiation and updates and negotiates RFC 9853 RRC by default; Listener rebinds only after validating the new path |
 | Certificate compression | `EnableCertificateCompression` | Explicitly enables RFC 8879 zlib for server certificates and mTLS/PHA client certificates; sends a plain Certificate when compression is not smaller |
+| Encrypted ClientHello | `EncryptedClientHelloConfigList`, `EncryptedClientHelloKeys`, `EncryptedClientHelloGrease` | RFC 9849 Inner/Outer ClientHello, HPKE, HRR, acceptance confirmation, retry configurations, resumption, and 0-RTT |
 | Handshake client authentication | `ClientAuth`, `ClientCAs`, `Certificates` | Uses the client-certificate policies from `crypto/tls` |
 | Post-handshake client authentication | `PostHandshakeAuth`, `RequestClientCertificate` | The client first advertises support, then the server initiates PHA |
 | Exporter | `ConnectionState().ExportKeyingMaterial` | Exports RFC 8446 section 7.5 material with the DTLS `dtls13` label |
@@ -252,6 +255,10 @@ Where TLS 1.3 semantics match, `Config` follows `crypto/tls.Config`. A configura
 | `CipherSuites` | AES-128-GCM, AES-256-GCM, ChaCha20-Poly1305, AES-128-CCM |
 | `CurvePreferences` | X25519, P-256 |
 | `ExternalPSKs` | Empty by default; configure immutable external PSKs created by `ImportExternalPSK` or `NewDirectExternalPSK`; cannot be combined with `ClientAuth` |
+| `EncryptedClientHelloConfigList` | `nil` by default; clients provide the complete RFC 9849 ECHConfigList including its two-byte length; non-nil makes acceptance mandatory |
+| `EncryptedClientHelloRejectionVerify` | Optional replacement for built-in `RootCAs` plus `public_name` verification of an ECH rejection connection |
+| `EncryptedClientHelloKeys` / `GetEncryptedClientHelloKeys` | Server ECHConfig and HPKE keys; at least one key must set `SendAsRetry`, and the callback runs before SNI, ALPN, or certificate selection |
+| `EncryptedClientHelloGrease` | `false` by default; sends GREASE ECH without a real configuration, and rejection does not fail the ordinary connection |
 | `MTU` | 1200-byte UDP payload; minimum 256 |
 | `IgnorePathMTU` | `false` by default; only Application Data skips the library PMTU check, while handshake behavior is unchanged |
 | `RecordSizeLimit` | `0` selects the `2^14+1` default; values from `64..2^14+1` set the complete `DTLSInnerPlaintext` this endpoint accepts and are advertised with RFC 8449 independently of PMTU |
@@ -269,6 +276,38 @@ Where TLS 1.3 semantics match, `Config` follows `crypto/tls.Config`. A configura
 | `MaxEarlyData` | 0, so 0-RTT is disabled by default |
 | `MaxConnectionIDs` | 8 CIDs per direction |
 | `DisableReturnRoutabilityCheck` | `false` by default; disable RRC only when the application provides equivalent address validation |
+
+### Encrypted ClientHello
+
+The client obtains a trusted DNS SVCB/HTTPS `ech` parameter and decodes its Base64 presentation form as required by RFC 9848. The library accepts the complete wire-format ECHConfigList and does not perform DNS lookup:
+
+```go
+echConfigList, err := base64.StdEncoding.DecodeString(dnsECHParameter)
+if err != nil {
+	log.Fatal(err)
+}
+
+clientConfig := &dtls13.Config{
+	RootCAs:                        roots,
+	ServerName:                     "private.example",
+	EncryptedClientHelloConfigList: echConfigList,
+}
+```
+
+The server installs one or more ECHConfig values and corresponding HPKE private keys generated by deployment tooling. `Config` is one ECHConfig without the outer ECHConfigList length; `PrivateKey` uses the corresponding KEM private-key encoding from `crypto/hpke`:
+
+```go
+serverConfig := &dtls13.Config{
+	Certificates: []tls.Certificate{certificate},
+	EncryptedClientHelloKeys: []dtls13.EncryptedClientHelloKey{{
+		Config:      echConfig,
+		PrivateKey:  echPrivateKey,
+		SendAsRetry: true,
+	}},
+}
+```
+
+With real ECH configured, the client succeeds only after validating the HRR or ServerHello acceptance confirmation. An authenticated rejection returns `*ECHRejectionError` and verifies the outer connection against the ECH `public_name`, even when `InsecureSkipVerify` is set. A rejection connection does not invoke ordinary `VerifyPeerCertificate` and does not send a client certificate. Use `RetryConfigList` only with the same DNS configuration source and transport endpoint. Set `EncryptedClientHelloRejectionVerify` for custom public-name verification. `ConnectionState().ECHAccepted` reports acceptance of real ECH; GREASE does not set it.
 
 ### External PSKs and the Importer
 
@@ -348,6 +387,8 @@ Normative keywords are interpreted according to BCP 14. `MUST`, `MUST NOT`, `REQ
 | [RFC 8879](https://www.rfc-editor.org/rfc/rfc8879) | Complete | Explicit opt-in zlib; directional ClientHello/CertificateRequest negotiation, server and mTLS/PHA client certificates, CompressedCertificate transcripts, safe fallback, and decompression bounds |
 | [RFC 9257](https://www.rfc-editor.org/rfc/rfc9257) | Complete | At least 128-bit external PSKs, DHE-only handshakes, opaque identities, multiple identities, certificate fallback, privacy guidance, and pairwise/role deployment requirements are covered |
 | [RFC 9258](https://www.rfc-editor.org/rfc/rfc9258) | Complete | `ImportedIdentity`, DTLS `0xfefc`, SHA-256/384 target KDFs, the EPSK source hash, `dtls13derived psk`, and `imp binder` are implemented |
+| [RFC 9848](https://www.rfc-editor.org/rfc/rfc9848) | Complete/application integration | Accepts the complete ECHConfigList decoded from a DNS `ech` parameter; SVCB/HTTPS lookup and Base64 decoding belong to the application |
+| [RFC 9849](https://www.rfc-editor.org/rfc/rfc9849) | Complete | HPKE, Inner/Outer ClientHello, padding, HRR, acceptance confirmation, retry configurations, authenticated rejection, GREASE, resumption, and 0-RTT |
 | [RFC 9846](https://www.rfc-editor.org/rfc/rfc9846) | Complete for enabled features | Ignores `user_canceled(90)` and continues waiting for `close_notify` during the handshake, final-ACK wait, and post-handshake processing; local cryptographic failure without a more specific alert sends `general_error(117)`, while a specific protocol alert always takes precedence |
 | [RFC 9325](https://www.rfc-editor.org/rfc/rfc9325) | Partial | PFS, AEAD, SNI/ALPN, tickets, 0-RTT, KeyUpdate, and certificate security limits are covered; OCSP stapling is absent, and this module intentionally does not implement the DTLS 1.2 support required by the BCP |
 | [RFC 9525](https://www.rfc-editor.org/rfc/rfc9525) | Partial | Go X.509 and `ServerName` cover DNS-ID/IP-ID; URI-ID, SRV-ID, and application service identities are delegated to caller verification callbacks |
@@ -398,12 +439,14 @@ This table contains all 11 `Normative References` from the RFC Editor XML for RF
 | [RFC 8879](https://www.rfc-editor.org/rfc/rfc8879) | TLS/DTLS Certificate Compression | Explicit opt-in standard zlib; CH/CR negotiation, server and client certificates, HRR, mTLS, PHA, fragmentation/retransmission, transcripts, and bounded decompression are complete; plain Certificate is used when smaller |
 | [RFC 9257](https://www.rfc-editor.org/rfc/rfc9257) | TLS 1.3 external PSK guidance | DHE-only use, multiple identities, unknown-identity fallback, cleartext identity risks, ticket-origin binding, and the external-PSK 0-RTT policy are implemented |
 | [RFC 9258](https://www.rfc-editor.org/rfc/rfc9258) | TLS/DTLS 1.3 PSK Importer | SHA-256/384 target derivation, the DTLS label, ImportedIdentity wire encoding, and the distinct binder label are implemented |
+| [RFC 9848](https://www.rfc-editor.org/rfc/rfc9848) | ECH DNS configuration bootstrapping | The library parses a complete ECHConfigList; DNS SVCB/HTTPS retrieval and presentation-format Base64 decoding are application integration |
+| [RFC 9849](https://www.rfc-editor.org/rfc/rfc9849) | TLS/DTLS Encrypted ClientHello | Client and server, HPKE, Inner/Outer reconstruction, padding, HRR context reuse, acceptance confirmation, retry configurations, rejection authentication, GREASE, PSK resumption, and 0-RTT are complete |
 | [RFC 9325](https://www.rfc-editor.org/rfc/rfc9325) | TLS/DTLS deployment security BCP | Tickets use AES-256-GCM and are limited to one second through seven days; RSA 2048-bit and SHA-1/MD5 certificate limits are enforced on full handshakes, trust anchors, and resumption paths; see Overall Status for the OCSP and DTLS 1.2 scope exceptions |
 | [RFC 9525](https://www.rfc-editor.org/rfc/rfc9525) | Service identity verification | DNS-ID/IP-ID are verified strictly by default; callers implement application semantics for other reference identifiers |
 | [RFC 9853](https://www.rfc-editor.org/rfc/rfc9853) | Return Routability Check for CID address changes | Complete; enhanced check by default, basic check after the old path fails, rebind only after validation, independent candidate-path amplification limit, and spare-CID probing when available |
 | [RFC 8701](https://www.rfc-editor.org/rfc/rfc8701) | GREASE anti-ossification | Receivers tolerate valid unknown values while preserving HRR invariants; senders do not actively generate GREASE |
 
-Unsupported optional extensions include RFC 9149 Ticket Requests, RFC 9849 ECH, and RFC 9954 Hybrid Key Exchange.
+Unsupported optional extensions include RFC 9149 Ticket Requests and RFC 9954 Hybrid Key Exchange.
 
 ### Scope Boundaries
 
@@ -414,7 +457,7 @@ The following items do not reduce completion of mandatory RFC 9147 semantics, bu
 - The sender uses the valid one-record-per-UDP-datagram mode and exposes no optional multi-record aggregation API.
 - Concurrent multiple NewSessionTicket or PHA requests are not exposed; the RFC permits but does not require this capability.
 - Automatic RRC rebinding requires a transport that receives from different sources and can send to a selected destination. The standard Listener supports this; connected UDP clients are constrained by operating-system peer filtering. An empty CID cannot uniquely route across five-tuples.
-- The wolfSSL master `f699037` build (version string 5.9.2) supports CID, KeyUpdate, PHA, session tickets, 0-RTT, `SESSION_CERTS`, and direct external PSKs, but not RFC 8449, RFC 8879, the RFC 9258 importer, or RFC 9853 RRC. Certificate-compression tests prove only safe unknown-extension handling and plain-Certificate fallback. Peer limits are explicit: the server's HRR rejects go-dtls client 0-RTT; the client cannot parse the 1421-byte go-dtls mTLS ticket; and the client does not retransmit Finished after losing the final ACK.
+- The wolfSSL master `f699037` build (version string 5.9.2) supports CID, KeyUpdate, PHA, session tickets, 0-RTT, `SESSION_CERTS`, and direct external PSKs, but not RFC 8449, RFC 8879, the RFC 9258 importer, or RFC 9853 RRC. Its ECH/HPKE build cannot complete a DTLS accepted-ECH handshake, so only the successful ordinary handshake with ECH GREASE is recorded; accepted-ECH interoperability is not claimed. Other peer limits are explicit: the server's HRR rejects go-dtls client 0-RTT; the client cannot parse the 1421-byte go-dtls mTLS ticket; and the client does not retransmit Finished after losing the final ACK.
 
 ## Benchmark
 
@@ -422,10 +465,12 @@ The following representative results were measured on an AMD Ryzen 7 7435H with 
 
 | Scenario | Representative result |
 | --- | --- |
-| Full certificate handshake and close, `BenchmarkConnectionHandshakeLifecycle` | About `625.9 us/op`, `99725 B/op`, `761 allocs/op` |
+| Full certificate handshake and close, `BenchmarkConnectionHandshakeLifecycle` | About `619.4 us/op`, `99508 B/op`, `760 allocs/op` |
 | RFC 9257/9258 external-PSK handshake and close, `BenchmarkExternalPSKHandshakeLifecycle` | About `355.4 us/op`, `98287 B/op`, `727 allocs/op` |
-| Full mTLS, `BenchmarkMutualTLSHandshakeLifecycle/Full` | About `915.1 us/op`, `116112 B/op`, `976 allocs/op` |
-| Resumed mTLS, `BenchmarkMutualTLSHandshakeLifecycle/Resumed` | About `459.9 us/op`, `115250 B/op`, `800-801 allocs/op` |
+| Full mTLS, `BenchmarkMutualTLSHandshakeLifecycle/Full` | About `912.9 us/op`, `116237 B/op`, `974 allocs/op` |
+| Resumed mTLS, `BenchmarkMutualTLSHandshakeLifecycle/Resumed` | About `457.3 us/op`, `115336 B/op`, `799-800 allocs/op` |
+| RFC 9849 ECH full handshake, `BenchmarkECHHandshakeLifecycle/Direct` | About `1.53 ms/op`, `148615 B/op`, `1260 allocs/op` |
+| RFC 9849 ECH with HRR, `BenchmarkECHHandshakeLifecycle/HRR` | About `1.63 ms/op`, `151391 B/op`, `1281 allocs/op` |
 | RFC 8879 zlib server-certificate handshake, four-certificate chain | About `1.049 ms/op`, `123323 B/op`, `1022 allocs/op` |
 | RFC 8879 zlib full mTLS, four-certificate chains in both directions | About `1.746 ms/op`, `160719 B/op`, `1469 allocs/op` |
 | RFC 8879 zlib compression / decompression | About `7.2-7.7 us/op`, `4 allocs/op` / `6.3-6.9 us/op`, `4290-4300 B/op`, `6 allocs/op` |
@@ -453,6 +498,7 @@ Run full-connection and record-layer benchmarks separately:
 
 ```sh
 go test -run '^$' -bench '^BenchmarkConnectionHandshakeLifecycle$' -benchmem -benchtime=2000x -cpu=1
+go test -run '^$' -bench '^BenchmarkECHHandshakeLifecycle/(Direct|HRR)$' -benchmem -benchtime=2000x -cpu=1
 go test -run '^$' -bench '^BenchmarkExternalPSKHandshakeLifecycle$' -benchmem -benchtime=2000x -cpu=1
 go test -run '^$' -bench '^BenchmarkMutualTLSHandshakeLifecycle/(Full|Resumed)$' -benchmem -count=10
 go test -run '^$' -bench '^BenchmarkCertificateCompression' -benchmem
@@ -467,12 +513,13 @@ The repository also includes focused benchmarks for cipher suites, ACK, records/
 - RFC 8449 tests cover CH/EE, the minimum of 64, directional limits, invalid values and extension combinations, authenticated overflow, HRR, resumption, 0-RTT, KeyUpdate, ACK, PMTU independence, and compatibility with third parties that do not negotiate it.
 - RFC 8879 tests cover ClientHello/CertificateRequest negotiation, zlib, CompressedCertificate, transcripts, invalid algorithms/streams/lengths, decompression limits, plain-Certificate fallback, HRR, resumption, mTLS/PHA, record limits, fragmentation/retransmission, weak networks, resource lifecycles, and safe fallback with third parties that do not support it.
 - RFC 9257/9258 tests cover independent importer derivation, SHA-256/384 KDF separation, `imp`/`ext` binder separation, direct and imported PSKs, multiple identities, HRR filtering, identity/key/context failures, certificate fallback, connection state, ticket resumption and revocation, the 0-RTT policy, and weak networks.
+- RFC 9848/9849 tests cover public configuration vectors, ECHConfig/ECHConfigList, HPKE, Inner/Outer and padding, outer-extension reconstruction, HRR acceptance confirmation and downgrade rejection, authenticated retry configurations, client-certificate suppression, GREASE, resumption, 0-RTT, fragmentation, weak networks, and real UDP.
 - Weak-network tests cover bidirectional loss, delay, reordering, and duplication, including CH/SH/Finished/ACK/HRR/mTLS-resumption combinations.
 - mTLS tests cover full handshakes, PSK resumption, 0-RTT, CA/policy fallback, and renewed-ticket authentication lifetime.
 - RFC 9846 alert tests cover handshake processing, final-ACK waiting, post-handshake reordering, `close_notify`, and local cryptographic failure.
 - RFC 9853 tests cover RRC messages/state machines, real UDP NAT rebinding, CID updates, weak-network combinations, and connection resource lifecycles.
 - Parser/record fuzzing covers copy and in-place decryption differentials for all four AEADs.
-- Bidirectional real-UDP tests with wolfSSL master `f699037` cover HRR, RSA-PSS certificate handshakes, Finished ACK, application data, AES-GCM, AES-128-CCM, direct external PSKs, CID, KeyUpdate, PHA, and ordinary session resumption. Additional supported directions cover go-dtls-initiated immediate CID switching, mTLS resumption, and Finished retransmission after final-ACK loss, plus wolfSSL-client-initiated 0-RTT.
+- Bidirectional real-UDP tests with wolfSSL master `f699037` cover HRR, RSA-PSS certificate handshakes, Finished ACK, application data, AES-GCM, AES-128-CCM, direct external PSKs, CID, KeyUpdate, PHA, and ordinary session resumption. Additional supported directions cover go-dtls-initiated immediate CID switching, mTLS resumption, and Finished retransmission after final-ACK loss, plus wolfSSL-client-initiated 0-RTT. ECH coverage is limited to GREASE fallback because the peer cannot currently complete DTLS accepted-ECH.
 
 See [CONTRIBUTING.en.md](CONTRIBUTING.en.md) for the development environment, required checks, performance validation, and commit rules.
 

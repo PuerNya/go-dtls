@@ -30,6 +30,9 @@ type ConnectionState struct {
 	// DidResume is true when the connection used a PSK from a session ticket
 	// instead of performing a full certificate handshake.
 	DidResume bool
+	// ECHAccepted is true when RFC 9849 Encrypted ClientHello was offered and
+	// accepted. GREASE ECH does not set this field.
+	ECHAccepted bool
 	// CipherSuite is the negotiated TLS 1.3 cipher-suite identifier.
 	CipherSuite uint16
 	// NegotiatedProtocol is the ALPN protocol selected by the server, or the

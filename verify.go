@@ -37,6 +37,15 @@ func validateCertificateSecurityPolicy(certificates []*x509.Certificate, serverA
 }
 
 func verifyCertificateChain(config *Config, message *certificateMessage, peerIsServer bool, signatureSchemes []tls.SignatureScheme) ([]*x509.Certificate, [][]*x509.Certificate, error) {
+	return verifyCertificateChainWithOptions(config, message, peerIsServer, signatureSchemes, config.ServerName, config.InsecureSkipVerify, config.VerifyPeerCertificate)
+}
+
+func verifyCertificateChainForECHRejection(config *Config, message *certificateMessage, signatureSchemes []tls.SignatureScheme, publicName string) ([]*x509.Certificate, [][]*x509.Certificate, error) {
+	skipBuiltIn := config.EncryptedClientHelloRejectionVerify != nil
+	return verifyCertificateChainWithOptions(config, message, true, signatureSchemes, publicName, skipBuiltIn, nil)
+}
+
+func verifyCertificateChainWithOptions(config *Config, message *certificateMessage, peerIsServer bool, signatureSchemes []tls.SignatureScheme, serverName string, skipBuiltIn bool, verifyPeer func([][]byte, [][]*x509.Certificate) error) ([]*x509.Certificate, [][]*x509.Certificate, error) {
 	if len(message.certificates) == 0 {
 		if peerIsServer {
 			return nil, nil, alertError(alertDecodeError, errors.New("dtls13: server sent an empty certificate chain"))
@@ -65,7 +74,7 @@ func verifyCertificateChain(config *Config, message *certificateMessage, peerIsS
 		return nil, nil, alertError(alertBadCertificate, err)
 	}
 	var chains [][]*x509.Certificate
-	if !config.InsecureSkipVerify {
+	if !skipBuiltIn {
 		intermediates := x509.NewCertPool()
 		for _, cert := range certs[1:] {
 			intermediates.AddCert(cert)
@@ -73,7 +82,7 @@ func verifyCertificateChain(config *Config, message *certificateMessage, peerIsS
 		opts := x509.VerifyOptions{Intermediates: intermediates, CurrentTime: config.Time()}
 		if peerIsServer {
 			opts.Roots = config.RootCAs
-			opts.DNSName = config.ServerName
+			opts.DNSName = serverName
 			opts.KeyUsages = []x509.ExtKeyUsage{x509.ExtKeyUsageServerAuth}
 		} else {
 			opts.Roots = config.ClientCAs
@@ -104,8 +113,8 @@ func verifyCertificateChain(config *Config, message *certificateMessage, peerIsS
 			return nil, nil, alertError(alertBadCertificate, policyErr)
 		}
 	}
-	if config.VerifyPeerCertificate != nil {
-		if err := config.VerifyPeerCertificate(raw, chains); err != nil {
+	if verifyPeer != nil {
+		if err := verifyPeer(raw, chains); err != nil {
 			return nil, nil, alertError(alertAccessDenied, err)
 		}
 	}

@@ -71,6 +71,36 @@
 // performs an equivalent check. Encryption without authentication does not
 // prevent an active attacker from impersonating a peer.
 //
+// # Encrypted ClientHello
+//
+// [Config.EncryptedClientHelloConfigList] enables [RFC 9849] Encrypted
+// ClientHello on a client. The value is the complete ECHConfigList wire value,
+// including its two-byte length. Obtaining that value through an [RFC 9848]
+// DNS SVCB or HTTPS record and decoding its Base64 presentation form are
+// application responsibilities.
+//
+// Servers configure [Config.EncryptedClientHelloKeys] or
+// [Config.GetEncryptedClientHelloKeys]. The callback runs against the outer
+// ClientHello before SNI, ALPN, PSK, or certificate selection. Once configured,
+// ECH is mandatory for the client: it completes the connection only after a
+// valid HelloRetryRequest or ServerHello acceptance confirmation. Inner and
+// outer ClientHello processing, HPKE encryption, padding, HRR context reuse,
+// retry configurations, resumption, and 0-RTT follow RFC 9849.
+//
+// An authenticated rejection returns [ECHRejectionError]. The rejection
+// connection is verified against the ECH public_name using RootCAs, regardless
+// of [Config.InsecureSkipVerify], or by
+// [Config.EncryptedClientHelloRejectionVerify]. Normal
+// [Config.VerifyPeerCertificate] is not called, and the client does not send a
+// client certificate on a rejected ECH connection. Callers may retry with the
+// returned configuration list only within the same configuration-source and
+// transport-endpoint scope.
+//
+// [Config.EncryptedClientHelloGrease] sends a GREASE ECH extension when no real
+// ECH configuration is present; rejection does not fail that ordinary
+// connection. [ConnectionState.ECHAccepted] distinguishes accepted ECH from
+// GREASE or rejection.
+//
 // # External pre-shared keys
 //
 // [Config.ExternalPSKs] enables certificate-free authentication with external
@@ -208,6 +238,8 @@
 // [RFC 9146]: https://www.rfc-editor.org/rfc/rfc9146
 // [RFC 9257]: https://www.rfc-editor.org/rfc/rfc9257
 // [RFC 9258]: https://www.rfc-editor.org/rfc/rfc9258
+// [RFC 9848]: https://www.rfc-editor.org/rfc/rfc9848
+// [RFC 9849]: https://www.rfc-editor.org/rfc/rfc9849
 // [RFC 9853]: https://www.rfc-editor.org/rfc/rfc9853
 //
 // [RFC 9846]: https://www.rfc-editor.org/rfc/rfc9846

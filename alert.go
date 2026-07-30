@@ -30,6 +30,7 @@ const (
 	alertCertificateRequired   uint8 = 116
 	alertGeneralError          uint8 = 117
 	alertNoApplicationProtocol uint8 = 120
+	alertECHRequired           uint8 = 121
 )
 
 type alertMessage struct{ level, description uint8 }

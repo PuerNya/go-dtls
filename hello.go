@@ -3,6 +3,7 @@ package dtls13
 import (
 	"crypto/tls"
 	"encoding/binary"
+	"errors"
 )
 
 const (
@@ -30,7 +31,8 @@ func knownExtensionType(typ uint16) bool {
 	case extServerName, extSupportedGroups, extSupportedVersions, extKeyShare,
 		extSignatureAlgorithms, extALPN, extPadding, extCompressCertificate, extRecordSizeLimit, extPreSharedKey, extEarlyData,
 		extCookie, extPSKKeyExchangeModes, extPostHandshakeAuth,
-		extSignatureAlgorithmsCert, extConnectionID, extReturnRoutability:
+		extSignatureAlgorithmsCert, extConnectionID, extReturnRoutability,
+		extECH, extECHOuterExtensions:
 		return true
 	default:
 		return false
@@ -48,7 +50,7 @@ type pskIdentityEntry struct {
 type clientHello struct {
 	random                        [32]byte
 	sessionID                     []byte
-	legacyCookie                  []byte
+	encryptedClientHelloExtension []byte
 	cookie                        []byte
 	cipherSuites                  []uint16
 	keyShares                     []keyShareEntry
@@ -74,6 +76,18 @@ type clientHello struct {
 	certificateCompressionOffered bool
 	unknownExtensions             map[uint16][]byte
 }
+
+func (h *clientHello) encryptedClientHello() []byte {
+	if h == nil {
+		return nil
+	}
+	return h.encryptedClientHelloExtension
+}
+
+func (h *clientHello) setEncryptedClientHello(value []byte) {
+	h.encryptedClientHelloExtension = value
+}
+
 type serverHello struct {
 	random            [32]byte
 	sessionID         []byte
@@ -855,9 +869,6 @@ func parseExtensionsMode(b []byte, copyValues bool) (map[uint16][]byte, error) {
 }
 
 func (h *clientHello) marshal() ([]byte, error) {
-	if len(h.legacyCookie) != 0 {
-		return nil, &ProtocolError{"DTLS 1.3 legacy_cookie must be empty"}
-	}
 	if len(h.cipherSuites) == 0 {
 		return nil, &ProtocolError{"ClientHello has no cipher suites"}
 	}
@@ -939,7 +950,7 @@ func (h *clientHello) marshal() ([]byte, error) {
 			return nil, err
 		}
 	}
-	var extensionStorage [16]orderedExtension
+	var extensionStorage [18]orderedExtension
 	extensions := extensionStorage[:0]
 	if serverName != nil {
 		extensions = append(extensions, orderedExtension{typ: extServerName, value: serverName})
@@ -977,6 +988,9 @@ func (h *clientHello) marshal() ([]byte, error) {
 	if h.earlyData {
 		extensions = append(extensions, orderedExtension{typ: extEarlyData})
 	}
+	if ech := h.encryptedClientHello(); ech != nil {
+		extensions = append(extensions, orderedExtension{typ: extECH, value: ech})
+	}
 	if hasPSK {
 		extensions = append(extensions,
 			orderedExtension{typ: extPSKKeyExchangeModes, value: marshalPSKKeyExchangeModes()},
@@ -998,7 +1012,7 @@ func (h *clientHello) marshal() ([]byte, error) {
 	w.u16(int(dtlsLegacyVersion))
 	w.b = append(w.b, h.random[:]...)
 	w.bytes8(h.sessionID)
-	w.bytes8(h.legacyCookie)
+	w.bytes8(nil)
 	suitesStart := w.startVector16()
 	for _, suite := range h.cipherSuites {
 		w.u16(int(suite))
@@ -1017,14 +1031,14 @@ func parseClientHello(b []byte) (*clientHello, error) {
 	h := &clientHello{}
 	copy(h.random[:], p.take(32))
 	h.sessionID = append([]byte(nil), p.bytes8()...)
-	h.legacyCookie = append([]byte(nil), p.bytes8()...)
+	legacyCookie := p.bytes8()
 	suites := p.bytes16()
 	compression := p.bytes8()
 	extBytes := p.take(len(p.b) - p.off)
 	if err := p.done(); err != nil {
 		return nil, err
 	}
-	if len(h.legacyCookie) != 0 {
+	if len(legacyCookie) != 0 {
 		return nil, alertError(alertIllegalParameter, &ProtocolError{"DTLS 1.3 ClientHello legacy_cookie must be empty"})
 	}
 	if len(h.sessionID) > 32 || len(suites) < 2 || len(suites)%2 != 0 || len(compression) != 1 || compression[0] != 0 {
@@ -1043,13 +1057,26 @@ func parseClientHello(b []byte) (*clientHello, error) {
 		switch extension.typ {
 		case extServerName, extSupportedGroups, extSignatureAlgorithms, extSignatureAlgorithmsCert, extALPN, extPadding, extCompressCertificate, extRecordSizeLimit,
 			extSupportedVersions, extCookie, extKeyShare, extPostHandshakeAuth,
-			extConnectionID, extReturnRoutability, extEarlyData, extPSKKeyExchangeModes, extPreSharedKey:
+			extConnectionID, extReturnRoutability, extEarlyData, extPSKKeyExchangeModes, extPreSharedKey, extECH:
 		default:
 			if h.unknownExtensions == nil {
 				h.unknownExtensions = make(map[uint16][]byte)
 			}
 			h.unknownExtensions[extension.typ] = append([]byte(nil), extension.value...)
 		}
+	}
+	if _, ok := orderedExtensionValue(exts, extECHOuterExtensions); ok {
+		return nil, alertError(alertIllegalParameter, &ProtocolError{"ech_outer_extensions is only valid in EncodedClientHelloInner"})
+	}
+	if raw, ok := orderedExtensionValue(exts, extECH); ok {
+		if _, _, _, _, _, parseErr := parseECHExt(raw); parseErr != nil {
+			description := uint8(alertDecodeError)
+			if errors.Is(parseErr, errInvalidECHExt) {
+				description = alertIllegalParameter
+			}
+			return nil, alertError(description, parseErr)
+		}
+		h.setEncryptedClientHello(append([]byte(nil), raw...))
 	}
 	versions, ok := orderedExtensionValue(exts, extSupportedVersions)
 	if !ok {

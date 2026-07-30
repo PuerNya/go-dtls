@@ -234,6 +234,19 @@ func TestInteropWolfSSLServer(t *testing.T) {
 	testInteropWolfSSLServer(t, "", nil, false, nil)
 }
 
+func TestInteropWolfSSLServerECHGrease(t *testing.T) {
+	testInteropWolfSSLServerOptions(t, wolfSSLInteropOptions{
+		configure: func(_ *testing.T, _ string, config *Config) {
+			config.EncryptedClientHelloGrease = true
+		},
+		connected: func(t *testing.T, conn *Conn, _ int) {
+			if conn.ConnectionState().ECHAccepted {
+				t.Fatal("GREASE ECH was reported as accepted")
+			}
+		},
+	})
+}
+
 func TestInteropWolfSSLServerAES128CCM(t *testing.T) {
 	testInteropWolfSSLServer(t, "TLS13-AES128-CCM-SHA256", []uint16{TLS_AES_128_CCM_SHA256}, false, nil)
 }

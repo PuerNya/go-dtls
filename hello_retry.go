@@ -13,10 +13,12 @@ var helloRetryRequestRandom = func() [32]byte {
 }()
 
 type helloRetryRequest struct {
-	sessionID     []byte
-	cipherSuite   uint16
-	selectedGroup tls.CurveID
-	cookie        []byte
+	sessionID          []byte
+	cookie             []byte
+	echConfirmation    [echAcceptConfirmationLen]byte
+	cipherSuite        uint16
+	selectedGroup      tls.CurveID
+	hasECHConfirmation bool
 }
 
 func (h *helloRetryRequest) marshal() ([]byte, error) {
@@ -39,7 +41,8 @@ func (h *helloRetryRequest) marshal() ([]byte, error) {
 		return true
 	}
 	if !addExtension(2) || (len(h.cookie) > 0 && !addExtension(2+len(h.cookie))) ||
-		(h.selectedGroup != 0 && !addExtension(2)) {
+		(h.selectedGroup != 0 && !addExtension(2)) ||
+		(h.hasECHConfirmation && !addExtension(len(h.echConfirmation))) {
 		return nil, &ProtocolError{"16-bit vector overflow"}
 	}
 	w := newWireBuilder(2 + len(helloRetryRequestRandom) + 1 + len(h.sessionID) + 2 + 1 + extsLength)
@@ -61,6 +64,10 @@ func (h *helloRetryRequest) marshal() ([]byte, error) {
 		w.u16(2)
 		w.u16(int(h.selectedGroup))
 	}
+	if h.hasECHConfirmation {
+		w.u16(int(extECH))
+		w.bytes16(h.echConfirmation[:])
+	}
 	w.endVector16(start)
 	return w.b, w.err
 }
@@ -81,7 +88,7 @@ func parseHelloRetryRequest(b []byte) (*helloRetryRequest, error) {
 	if p.u8() != 0 {
 		return nil, &ProtocolError{"invalid HelloRetryRequest compression method"}
 	}
-	var extensionStorage [3]orderedExtension
+	var extensionStorage [4]orderedExtension
 	exts, err := parseOrderedExtensionsView(p.take(len(p.b)-p.off), extensionStorage[:0])
 	if err != nil {
 		return nil, err
@@ -109,8 +116,15 @@ func parseHelloRetryRequest(b []byte) (*helloRetryRequest, error) {
 			return nil, err
 		}
 	}
+	if raw, ok = orderedExtensionValue(exts, extECH); ok {
+		if len(raw) != echAcceptConfirmationLen {
+			return nil, alertError(alertDecodeError, &ProtocolError{"invalid HelloRetryRequest ECH confirmation length"})
+		}
+		copy(h.echConfirmation[:], raw)
+		h.hasECHConfirmation = true
+	}
 	for _, extension := range exts {
-		if extension.typ != extSupportedVersions && extension.typ != extCookie && extension.typ != extKeyShare {
+		if extension.typ != extSupportedVersions && extension.typ != extCookie && extension.typ != extKeyShare && extension.typ != extECH {
 			if knownExtensionType(extension.typ) {
 				return nil, alertError(alertIllegalParameter, &ProtocolError{"recognized extension is not permitted in HelloRetryRequest"})
 			}

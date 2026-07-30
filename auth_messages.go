@@ -52,11 +52,11 @@ func (m *encryptedExtensions) marshal() ([]byte, error) {
 	appendOrderedExtensions(&w, extensions)
 	return w.b, w.err
 }
-func parseEncryptedExtensions(b []byte) (*encryptedExtensions, error) {
-	m := &encryptedExtensions{}
+func parseEncryptedExtensions(b []byte) (encryptedExtensions, error) {
+	var m encryptedExtensions
 	exts, err := parseOrderedExtensionsView(b, m.parsedStorage[:0])
 	if err != nil {
-		return nil, err
+		return encryptedExtensions{}, err
 	}
 	if len(exts) > len(m.parsedStorage) {
 		m.parsedOverflow = exts
@@ -103,6 +103,13 @@ func validateEncryptedExtension(hello *clientHello, typ uint16, raw []byte) (pro
 		if _, parseErr := parseSupportedGroups(raw); parseErr != nil {
 			return "", false, parseErr
 		}
+	case extECH:
+		if len(hello.encryptedClientHello()) == 0 {
+			return "", false, alertError(alertUnsupportedExtension, &ProtocolError{"unsolicited ECH retry configurations"})
+		}
+		if _, parseErr := parseECHConfigList(raw); parseErr != nil {
+			return "", false, alertError(alertDecodeError, parseErr)
+		}
 	default:
 		if knownExtensionType(typ) {
 			return "", false, alertError(alertIllegalParameter, &ProtocolError{"recognized extension is not permitted in EncryptedExtensions"})
@@ -112,9 +119,9 @@ func validateEncryptedExtension(hello *clientHello, typ uint16, raw []byte) (pro
 	return protocol, earlyData, nil
 }
 
-func validateEncryptedExtensions(hello *clientHello, message *encryptedExtensions) (protocol string, earlyData bool, err error) {
+func validateEncryptedExtensions(hello *clientHello, message *encryptedExtensions) (protocol string, earlyData bool, retryConfigs []byte, err error) {
 	if hello == nil || message == nil {
-		return "", false, &ProtocolError{"missing EncryptedExtensions context"}
+		return "", false, nil, &ProtocolError{"missing EncryptedExtensions context"}
 	}
 	hasRecordSizeLimit, hasMaxFragmentLength := false, false
 	if message.extensions != nil {
@@ -131,9 +138,16 @@ func validateEncryptedExtensions(hello *clientHello, message *encryptedExtension
 		}
 	}
 	if hasRecordSizeLimit && hasMaxFragmentLength {
-		return "", false, alertError(alertIllegalParameter, &ProtocolError{"record_size_limit and max_fragment_length cannot both be negotiated"})
+		return "", false, nil, alertError(alertIllegalParameter, &ProtocolError{"record_size_limit and max_fragment_length cannot both be negotiated"})
 	}
 	validate := func(typ uint16, raw []byte) error {
+		if typ == extECH {
+			if _, _, validateErr := validateEncryptedExtension(hello, typ, raw); validateErr != nil {
+				return validateErr
+			}
+			retryConfigs = raw
+			return nil
+		}
 		if typ == extRecordSizeLimit {
 			if !hello.hasRecordSizeLimit {
 				return alertError(alertUnsupportedExtension, &ProtocolError{"unsolicited record_size_limit"})
@@ -156,10 +170,10 @@ func validateEncryptedExtensions(hello *clientHello, message *encryptedExtension
 	if message.extensions != nil {
 		for typ, raw := range message.extensions {
 			if err = validate(typ, raw); err != nil {
-				return "", false, err
+				return "", false, nil, err
 			}
 		}
-		return protocol, earlyData, nil
+		return protocol, earlyData, retryConfigs, nil
 	}
 	parsed := message.parsedOverflow
 	if parsed == nil {
@@ -167,10 +181,10 @@ func validateEncryptedExtensions(hello *clientHello, message *encryptedExtension
 	}
 	for _, extension := range parsed {
 		if err = validate(extension.typ, extension.value); err != nil {
-			return "", false, err
+			return "", false, nil, err
 		}
 	}
-	return protocol, earlyData, nil
+	return protocol, earlyData, retryConfigs, nil
 }
 
 func validateEarlyDataSelection(accepted bool, selectedIdentity *uint16) error {

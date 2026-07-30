@@ -3,6 +3,7 @@ package dtls13
 import (
 	"context"
 	"crypto"
+	"crypto/subtle"
 	"crypto/tls"
 	"crypto/x509"
 	"errors"
@@ -621,6 +622,15 @@ func (c *Conn) clientHandshake() error {
 	if _, err = io.ReadFull(c.config.Rand, hello.random[:]); err != nil {
 		return err
 	}
+	var ech *echClientContext
+	if c.config.EncryptedClientHelloConfigList != nil {
+		ech, err = newECHClientContext(c.config.EncryptedClientHelloConfigList)
+		if err != nil {
+			return err
+		}
+		hello.setEncryptedClientHello([]byte{echInnerType})
+	}
+	greaseECH := ech == nil && c.config.EncryptedClientHelloGrease
 	clientSession, sessionSuite := usableClientSession(c.config, c.conn)
 	var pskOffers []clientPSKOffer
 	var externalOffers []clientPSKOffer
@@ -671,6 +681,38 @@ func (c *Conn) clientHandshake() error {
 	if err != nil {
 		return err
 	}
+	if greaseECH {
+		grease, greaseErr := generateGREASEECH(hello, c.config.Rand)
+		err = greaseErr
+		if err != nil {
+			return err
+		}
+		hello.setEncryptedClientHello(grease)
+		if len(pskOffers) > 0 {
+			helloBody, err = marshalClientHelloWithPSKOffers(hello, pskOffers, nil, nil)
+		} else if clientSession != nil {
+			helloBody, err = marshalClientHelloWithPSKBinder(hello, sessionSuite, clientSession.psk, nil, nil)
+		} else {
+			helloBody, err = hello.marshal()
+		}
+		if err != nil {
+			return err
+		}
+	}
+	if ech != nil {
+		ech.innerHello = hello
+		ech.innerBody = helloBody
+		outer, outerErr := makeECHOuter(hello, ech.config, c.config.Rand)
+		if outerErr != nil {
+			return outerErr
+		}
+		helloBody, err = computeOuterECH(outer, hello, ech, true)
+		if err != nil {
+			return err
+		}
+		ech.outerHello = outer
+		hello = outer
+	}
 	out, _, err := buildPlainFlight([]handshakeMessage{{typ: handshakeTypeClientHello, sequence: 0, body: helloBody}}, c.currentMTU(), 0, 0)
 	if err != nil {
 		return err
@@ -684,7 +726,11 @@ func (c *Conn) clientHandshake() error {
 		// including its binder, and can be sent before ServerHello arrives.
 		earlySchedule := newKeySchedule(sessionSuite, clientSession.psk)
 		transcriptHash := newTranscriptHash(sessionSuite.hash.New())
-		_ = transcriptHash.add(handshakeTypeClientHello, 0, helloBody)
+		earlyHelloBody := helloBody
+		if ech != nil {
+			earlyHelloBody = ech.innerBody
+		}
+		_ = transcriptHash.add(handshakeTypeClientHello, 0, earlyHelloBody)
 		earlyCipher, cipherErr := newRecordCipher(sessionSuite, earlySchedule.earlyTrafficSecret(transcriptHash.sumInto(transcriptDigest[:0])), 1, c.config.ReplayWindow)
 		if cipherErr != nil {
 			return cipherErr
@@ -739,12 +785,16 @@ func (c *Conn) clientHandshake() error {
 	serverHandshakeStart := uint16(1)
 	var helloRetrySuite uint16
 	var transcript *transcriptHash
+	echAccepted := false
 	if len(serverHelloBody) >= 34 && string(serverHelloBody[2:34]) == string(helloRetryRequestRandom[:]) {
 		if hello.earlyData {
 			c.earlyMu.Lock()
 			c.earlyRejected = c.earlySent
 			c.earlyMu.Unlock()
 			hello.earlyData = false
+		}
+		if ech != nil {
+			ech.innerHello.earlyData = false
 		}
 		hrr, parseErr := parseHelloRetryRequest(serverHelloBody)
 		if parseErr != nil {
@@ -772,6 +822,36 @@ func (c *Conn) clientHandshake() error {
 		_ = initial.add(handshakeTypeClientHello, 0, helloBody)
 		transcript = newTranscriptHash(suite.hash.New())
 		_ = transcript.addHelloRetryRequest(initial.sumInto(transcriptDigest[:0]), serverHelloBody)
+		if ech != nil {
+			innerInitial := newTranscriptHash(suite.hash.New())
+			_ = innerInitial.add(handshakeTypeClientHello, 0, ech.innerBody)
+			ech.innerTranscript = newTranscriptHash(suite.hash.New())
+			innerHash := innerInitial.sumInto(transcriptDigest[:0])
+			accepted := false
+			if hrr.hasECHConfirmation {
+				zeroHRR := *hrr
+				clear(zeroHRR.echConfirmation[:])
+				zeroBody, marshalErr := zeroHRR.marshal()
+				if marshalErr != nil {
+					return marshalErr
+				}
+				confirmationTranscript := newTranscriptHash(suite.hash.New())
+				_ = confirmationTranscript.addHelloRetryRequest(innerHash, zeroBody)
+				want := echAcceptConfirmation(suite, ech.innerHello.random, "hrr ech accept confirmation", confirmationTranscript.sumInto(transcriptDigest[:0]))
+				accepted = subtle.ConstantTimeCompare(want, hrr.echConfirmation[:]) == 1
+			}
+			_ = ech.innerTranscript.addHelloRetryRequest(innerInitial.sumInto(transcriptDigest[:0]), serverHelloBody)
+			if accepted {
+				ech.acceptedAtHRR = true
+				hello = ech.innerHello
+				initial = innerInitial
+				transcript = ech.innerTranscript
+			} else {
+				ech.rejected = true
+			}
+		} else if hrr.hasECHConfirmation && !greaseECH {
+			return alertError(alertUnsupportedExtension, &ProtocolError{"unsolicited ECH confirmation in HelloRetryRequest"})
+		}
 		if hrr.selectedGroup != 0 {
 			supported := false
 			alreadyOffered := false
@@ -799,7 +879,9 @@ func (c *Conn) clientHandshake() error {
 				}
 			}
 		}
-		if len(pskOffers) > 0 {
+		if ech != nil && ech.rejected {
+			helloBody, parseErr = hello.marshal()
+		} else if len(pskOffers) > 0 {
 			helloBody, parseErr = marshalClientHelloWithPSKOffers(hello, pskOffers, initial.sumInto(transcriptDigest[:0]), serverHelloBody)
 		} else if clientSession != nil && sessionSuite.hash == hrrSuite.hash && len(hello.pskIdentity) > 0 {
 			hello.obfuscatedAge = obfuscatedTicketAge(clientSession, c.config.Time())
@@ -814,7 +896,23 @@ func (c *Conn) clientHandshake() error {
 		if parseErr != nil {
 			return parseErr
 		}
-		second, _, parseErr := buildPlainFlight([]handshakeMessage{{typ: handshakeTypeClientHello, sequence: 1, body: helloBody}}, c.currentMTU(), 0, out.nextRecordSequence())
+		wireHelloBody := helloBody
+		if ech != nil && ech.acceptedAtHRR {
+			ech.innerHello = hello
+			ech.innerBody = helloBody
+			ech.outerHello.cookie = append([]byte(nil), hello.cookie...)
+			ech.outerHello.earlyData = false
+			ech.outerHello.keyShares = cloneClientHello(hello).keyShares
+			wireHelloBody, parseErr = computeOuterECH(ech.outerHello, hello, ech, false)
+			if parseErr != nil {
+				return parseErr
+			}
+			_ = ech.innerTranscript.add(handshakeTypeClientHello, 1, helloBody)
+			transcript = ech.innerTranscript
+		} else {
+			_ = transcript.add(handshakeTypeClientHello, 1, helloBody)
+		}
+		second, _, parseErr := buildPlainFlight([]handshakeMessage{{typ: handshakeTypeClientHello, sequence: 1, body: wireHelloBody}}, c.currentMTU(), 0, out.nextRecordSequence())
 		if parseErr != nil {
 			return parseErr
 		}
@@ -822,7 +920,6 @@ func (c *Conn) clientHandshake() error {
 		if parseErr = c.writeFlight(c.conn, second); parseErr != nil {
 			return parseErr
 		}
-		_ = transcript.add(handshakeTypeClientHello, 1, helloBody)
 		messages, parseErr = c.receiveHandshakeWithRetransmit(inbox, nil, second)
 		if parseErr != nil {
 			return parseErr
@@ -845,6 +942,32 @@ func (c *Conn) clientHandshake() error {
 	suite, err := cipherSuiteForID(sh.cipherSuite)
 	if err != nil {
 		return err
+	}
+	if ech != nil && !ech.rejected {
+		if ech.innerTranscript == nil {
+			ech.innerTranscript = newTranscriptHash(suite.hash.New())
+			_ = ech.innerTranscript.add(handshakeTypeClientHello, 0, ech.innerBody)
+		}
+		if len(serverHelloBody) < 34 {
+			return alertError(alertDecodeError, &ProtocolError{"truncated ServerHello ECH confirmation"})
+		}
+		zeroServerHello := append([]byte(nil), serverHelloBody...)
+		clear(zeroServerHello[26:34])
+		confirmationTranscript := ech.innerTranscript.clone()
+		_ = confirmationTranscript.add(handshakeTypeServerHello, serverHelloSequence, zeroServerHello)
+		want := echAcceptConfirmation(suite, ech.innerHello.random, "ech accept confirmation", confirmationTranscript.sumInto(transcriptDigest[:0]))
+		confirmed := subtle.ConstantTimeCompare(want, sh.random[24:]) == 1
+		if ech.acceptedAtHRR && !confirmed {
+			return alertError(alertIllegalParameter, &ProtocolError{"ServerHello did not confirm ECH after accepted HelloRetryRequest"})
+		}
+		if confirmed {
+			echAccepted = true
+			hello = ech.innerHello
+			helloBody = ech.innerBody
+			transcript = ech.innerTranscript
+		} else {
+			ech.rejected = true
+		}
 	}
 	offered := false
 	for _, id := range hello.cipherSuites {
@@ -876,6 +999,9 @@ func (c *Conn) clientHandshake() error {
 	}
 	c.returnRoutabilityCheckNegotiated = sh.returnRoutability
 	usingPSK := sh.selectedIdentity != nil
+	if ech != nil && ech.rejected && usingPSK {
+		return alertError(alertIllegalParameter, &ProtocolError{"server selected an outer GREASE PSK after rejecting ECH"})
+	}
 	var resumed bool
 	var externalPSK *externalPSKSelection
 	var selectedOffer *clientPSKOffer
@@ -964,9 +1090,19 @@ func (c *Conn) clientHandshake() error {
 					return parseErr
 				}
 				var acceptedEarly bool
-				negotiated, acceptedEarly, parseErr = validateEncryptedExtensions(hello, ee)
+				var retryConfigs []byte
+				negotiated, acceptedEarly, retryConfigs, parseErr = validateEncryptedExtensions(hello, &ee)
 				if parseErr != nil {
 					return parseErr
+				}
+				if retryConfigs != nil {
+					if ech != nil && echAccepted {
+						return alertError(alertUnsupportedExtension, &ProtocolError{"server sent ECH retry configurations after accepting ECH"})
+					}
+					if ech != nil && ech.rejected {
+						ech.retryConfigs = append([]byte(nil), retryConfigs...)
+					}
+					// GREASE clients validate but never retain retry configurations.
 				}
 				if ee.hasRecordSizeLimit {
 					c.recordSizeLimitNegotiated = true
@@ -1003,9 +1139,19 @@ func (c *Conn) clientHandshake() error {
 				if len(certificateSchemes) == 0 {
 					certificateSchemes = hello.signatureSchemes
 				}
-				peerCerts, chains, parseErr = verifyCertificateChain(c.config, certMsg, true, certificateSchemes)
+				if ech != nil && ech.rejected {
+					peerCerts, chains, parseErr = verifyCertificateChainForECHRejection(c.config, certMsg, certificateSchemes, ech.config.publicName)
+				} else {
+					peerCerts, chains, parseErr = verifyCertificateChain(c.config, certMsg, true, certificateSchemes)
+				}
 				if parseErr != nil {
 					return parseErr
+				}
+				if ech != nil && ech.rejected && c.config.EncryptedClientHelloRejectionVerify != nil {
+					rejectionState := ConnectionState{Version: VersionDTLS13, CipherSuite: suite.id, NegotiatedProtocol: negotiated, ServerName: ech.config.publicName, PeerCertificates: peerCerts, VerifiedChains: chains, ECHAccepted: false}
+					if verifyErr := c.config.EncryptedClientHelloRejectionVerify(rejectionState); verifyErr != nil {
+						return alertError(alertAccessDenied, verifyErr)
+					}
 				}
 				_ = transcript.add(message.typ, message.sequence, message.body)
 			case handshakeTypeCertificateRequest:
@@ -1072,7 +1218,7 @@ func (c *Conn) clientHandshake() error {
 	if certificateRequest != nil {
 		certMessage := &certificateMessage{requestContext: certificateRequest.requestContext}
 		var clientCertificate *tls.Certificate
-		if len(c.config.Certificates) > 0 {
+		if (ech == nil || !ech.rejected) && len(c.config.Certificates) > 0 {
 			candidate := &c.config.Certificates[0]
 			certificateSchemes := certificateRequest.certificateSignatureSchemes
 			if len(certificateSchemes) == 0 {
@@ -1154,6 +1300,9 @@ func (c *Conn) clientHandshake() error {
 	if err = c.installApplicationKeysAt(suite, schedule.clientApplicationTraffic, schedule.serverApplicationTraffic, clientFinishedSequence+1); err != nil {
 		return err
 	}
+	if ech != nil && ech.rejected {
+		return alertError(alertECHRequired, &ECHRejectionError{RetryConfigList: append([]byte(nil), ech.retryConfigs...)})
+	}
 	if err = schedule.deriveResumption(transcript.sumInto(transcriptDigest[:0])); err != nil {
 		return err
 	}
@@ -1169,7 +1318,7 @@ func (c *Conn) clientHandshake() error {
 	exporter := newExporter(suite, schedule.exporterMasterSecret)
 	exporter.externalPSK = externalPSK
 	c.mu.Lock()
-	c.state = ConnectionState{Version: VersionDTLS13, HandshakeComplete: true, DidResume: resumed, CipherSuite: suite.id, NegotiatedProtocol: negotiated, ServerName: c.config.ServerName, PeerCertificates: peerCerts, VerifiedChains: chains, LocalConnectionID: append([]byte(nil), c.receiveConnectionID...), PeerConnectionID: append([]byte(nil), c.sendConnectionID...), ReturnRoutabilityCheck: c.returnRoutabilityCheckNegotiated, RecordSizeLimitNegotiated: c.recordSizeLimitNegotiated, LocalRecordSizeLimit: c.localRecordSizeLimit, PeerRecordSizeLimit: c.peerRecordSizeLimit, exporter: exporter}
+	c.state = ConnectionState{Version: VersionDTLS13, HandshakeComplete: true, DidResume: resumed, ECHAccepted: echAccepted, CipherSuite: suite.id, NegotiatedProtocol: negotiated, ServerName: c.config.ServerName, PeerCertificates: peerCerts, VerifiedChains: chains, LocalConnectionID: append([]byte(nil), c.receiveConnectionID...), PeerConnectionID: append([]byte(nil), c.sendConnectionID...), ReturnRoutabilityCheck: c.returnRoutabilityCheckNegotiated, RecordSizeLimitNegotiated: c.recordSizeLimitNegotiated, LocalRecordSizeLimit: c.localRecordSizeLimit, PeerRecordSizeLimit: c.peerRecordSizeLimit, exporter: exporter}
 	c.mu.Unlock()
 	return nil
 }
@@ -1198,7 +1347,6 @@ func equalClientHelloAfterHRR(initial, second *clientHello, requestedGroup tls.C
 	}
 	return initial.random == second.random &&
 		equalBytes(initial.sessionID, second.sessionID) &&
-		equalBytes(initial.legacyCookie, second.legacyCookie) &&
 		slices.Equal(initial.cipherSuites, second.cipherSuites) &&
 		slices.Equal(initial.signatureSchemes, second.signatureSchemes) &&
 		slices.Equal(initial.certificateSignatureSchemes, second.certificateSignatureSchemes) &&
@@ -1301,10 +1449,36 @@ func (c *Conn) serverHandshake() error {
 		return &ProtocolError{"expected ClientHello"}
 	}
 	helloBody := messages.at(0).body
-	ch, err := parseClientHello(helloBody)
+	outerHello, err := parseClientHello(helloBody)
 	if err != nil {
 		return err
 	}
+	ch := outerHello
+	var echContext *echServerContext
+	var echKeys []EncryptedClientHelloKey
+	echOuterOffered := false
+	if len(outerHello.encryptedClientHello()) > 0 {
+		typ, _, _, _, _, parseErr := parseECHExt(outerHello.encryptedClientHello())
+		if parseErr != nil {
+			return parseErr
+		}
+		echOuterOffered = typ == echOuterType
+		if echOuterOffered {
+			echKeys = c.config.EncryptedClientHelloKeys
+			if c.config.GetEncryptedClientHelloKeys != nil {
+				echKeys, parseErr = c.config.GetEncryptedClientHelloKeys(&ClientHelloInfo{ServerName: outerHello.serverName, SupportedProtos: outerHello.alpn, Conn: c})
+				if parseErr != nil {
+					return parseErr
+				}
+			}
+		}
+		ch, helloBody, echContext, err = processECHClientHello(outerHello, helloBody, echKeys)
+		if err != nil {
+			return err
+		}
+	}
+	echAccepted := echContext != nil
+	echRejected := echOuterOffered && !echAccepted
 	c.postHandshakeAuthOffered = ch.postHandshakeAuth
 	initialClientHello := *ch
 	initialClientHello.cookie = nil
@@ -1386,7 +1560,18 @@ func (c *Conn) serverHandshake() error {
 				return shareErr
 			}
 		}
-		hrrBody, err = (&helloRetryRequest{cipherSuite: suite.id, cookie: cookie, selectedGroup: requestedGroup}).marshal()
+		hrr := &helloRetryRequest{cipherSuite: suite.id, cookie: cookie, selectedGroup: requestedGroup}
+		if echAccepted {
+			hrr.hasECHConfirmation = true
+			zeroBody, marshalErr := hrr.marshal()
+			if marshalErr != nil {
+				return marshalErr
+			}
+			confirmationTranscript := newTranscriptHash(suite.hash.New())
+			_ = confirmationTranscript.addHelloRetryRequest(initialHashTranscript.sumInto(transcriptDigest[:0]), zeroBody)
+			copy(hrr.echConfirmation[:], echAcceptConfirmation(suite, ch.random, "hrr ech accept confirmation", confirmationTranscript.sumInto(transcriptDigest[:0])))
+		}
+		hrrBody, err = hrr.marshal()
 		if err != nil {
 			return err
 		}
@@ -1408,6 +1593,12 @@ func (c *Conn) serverHandshake() error {
 		second, parseErr := parseClientHello(secondBody)
 		if parseErr != nil {
 			return parseErr
+		}
+		if echAccepted {
+			second, secondBody, parseErr = processSecondECHClientHello(second, secondBody, echContext)
+			if parseErr != nil {
+				return parseErr
+			}
 		}
 		if !equalClientHelloAfterHRR(&initialClientHello, second, requestedGroup) {
 			return &ProtocolError{"second ClientHello changed fields other than cookie"}
@@ -1529,10 +1720,6 @@ func (c *Conn) serverHandshake() error {
 	if _, err = io.ReadFull(c.config.Rand, sh.random[:]); err != nil {
 		return err
 	}
-	shBody, err := sh.marshal()
-	if err != nil {
-		return err
-	}
 	transcript := newTranscriptHash(suite.hash.New())
 	serverHelloSequence := uint16(0)
 	firstPlainRecordSequence := uint64(0)
@@ -1545,6 +1732,20 @@ func (c *Conn) serverHandshake() error {
 		}
 	} else {
 		_ = transcript.add(handshakeTypeClientHello, 0, helloBody)
+	}
+	if echAccepted {
+		clear(sh.random[24:])
+		zeroBody, marshalErr := sh.marshal()
+		if marshalErr != nil {
+			return marshalErr
+		}
+		confirmationTranscript := transcript.clone()
+		_ = confirmationTranscript.add(handshakeTypeServerHello, serverHelloSequence, zeroBody)
+		copy(sh.random[24:], echAcceptConfirmation(suite, ch.random, "ech accept confirmation", confirmationTranscript.sumInto(transcriptDigest[:0])))
+	}
+	shBody, err := sh.marshal()
+	if err != nil {
+		return err
 	}
 	_ = transcript.add(handshakeTypeServerHello, serverHelloSequence, shBody)
 	schedule := newKeySchedule(suite, psk)
@@ -1587,8 +1788,8 @@ func (c *Conn) serverHandshake() error {
 		serverFlightConn = preValidationConn
 	}
 	ee := &encryptedExtensions{recordSizeLimit: c.config.RecordSizeLimit, hasRecordSizeLimit: ch.hasRecordSizeLimit}
-	if negotiated != "" || c.earlyAccepted {
-		ee.extensions = make(map[uint16][]byte, 2)
+	if negotiated != "" || c.earlyAccepted || echRejected {
+		ee.extensions = make(map[uint16][]byte, 3)
 	}
 	if negotiated != "" {
 		ee.extensions[extALPN], err = marshalALPN([]string{negotiated})
@@ -1599,7 +1800,16 @@ func (c *Conn) serverHandshake() error {
 	if c.earlyAccepted {
 		ee.extensions[extEarlyData] = nil
 	}
-	eeBody, _ := ee.marshal()
+	if echRejected && len(echKeys) > 0 {
+		ee.extensions[extECH], err = buildRetryConfigList(echKeys)
+		if err != nil {
+			return err
+		}
+	}
+	eeBody, err := ee.marshal()
+	if err != nil {
+		return err
+	}
 	serverSequence := uint16(1 + serverSequenceOffset)
 	serverMessages := []handshakeMessage{{typ: handshakeTypeEncryptedExtensions, sequence: serverSequence, body: eeBody}}
 	_ = transcript.add(handshakeTypeEncryptedExtensions, serverSequence, eeBody)
@@ -1815,7 +2025,7 @@ func (c *Conn) serverHandshake() error {
 	exporter := newExporter(suite, schedule.exporterMasterSecret)
 	exporter.externalPSK = externalPSK
 	c.mu.Lock()
-	c.state = ConnectionState{Version: VersionDTLS13, HandshakeComplete: true, DidResume: resumed, CipherSuite: suite.id, NegotiatedProtocol: negotiated, PeerCertificates: clientCerts, VerifiedChains: clientChains, LocalConnectionID: append([]byte(nil), c.receiveConnectionID...), PeerConnectionID: append([]byte(nil), c.sendConnectionID...), ReturnRoutabilityCheck: c.returnRoutabilityCheckNegotiated, RecordSizeLimitNegotiated: c.recordSizeLimitNegotiated, LocalRecordSizeLimit: c.localRecordSizeLimit, PeerRecordSizeLimit: c.peerRecordSizeLimit, exporter: exporter}
+	c.state = ConnectionState{Version: VersionDTLS13, HandshakeComplete: true, DidResume: resumed, ECHAccepted: echAccepted, CipherSuite: suite.id, NegotiatedProtocol: negotiated, PeerCertificates: clientCerts, VerifiedChains: clientChains, LocalConnectionID: append([]byte(nil), c.receiveConnectionID...), PeerConnectionID: append([]byte(nil), c.sendConnectionID...), ReturnRoutabilityCheck: c.returnRoutabilityCheckNegotiated, RecordSizeLimitNegotiated: c.recordSizeLimitNegotiated, LocalRecordSizeLimit: c.localRecordSizeLimit, PeerRecordSizeLimit: c.peerRecordSizeLimit, exporter: exporter}
 	c.mu.Unlock()
 	if validated, ok := c.conn.(interface{ handshakeValidated() }); ok {
 		validated.handshakeValidated()

@@ -50,6 +50,44 @@ func BenchmarkConnectionHandshakeLifecycle(b *testing.B) {
 	}
 }
 
+func BenchmarkECHHandshakeLifecycle(b *testing.B) {
+	certificate, roots := testServerCertificate(b)
+	configList, key := testECHConfig(b, "public.test", 1)
+	for _, test := range []struct {
+		name   string
+		curves []tls.CurveID
+	}{
+		{name: "Direct"},
+		{name: "HRR", curves: []tls.CurveID{tls.CurveP256}},
+	} {
+		b.Run(test.name, func(b *testing.B) {
+			clientConfig := &Config{
+				RootCAs: roots, ServerName: "server.test", EncryptedClientHelloConfigList: configList,
+				SessionTicketsDisabled: true, HandshakeTimeout: time.Second,
+			}
+			serverConfig := &Config{
+				Certificates: []tls.Certificate{certificate}, EncryptedClientHelloKeys: []EncryptedClientHelloKey{key},
+				CurvePreferences: test.curves, SessionTicketsDisabled: true, HandshakeTimeout: time.Second,
+			}
+			b.ReportAllocs()
+			for b.Loop() {
+				left, right := memoryDatagramPair()
+				client := Client(left, clientConfig)
+				server := Server(right, serverConfig)
+				serverDone := make(chan error, 1)
+				go func() { serverDone <- server.Handshake() }()
+				clientErr := client.Handshake()
+				serverErr := <-serverDone
+				_ = left.Close()
+				_ = right.Close()
+				if clientErr != nil || serverErr != nil {
+					b.Fatalf("ECH handshake failed: client=%v server=%v", clientErr, serverErr)
+				}
+			}
+		})
+	}
+}
+
 func BenchmarkExternalPSKHandshakeLifecycle(b *testing.B) {
 	psk, err := ImportExternalPSK([]byte("benchmark-device"), bytes.Repeat([]byte{0x5d}, 32), []byte("client=benchmark;server=benchmark"), 0)
 	if err != nil {

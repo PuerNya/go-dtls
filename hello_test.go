@@ -121,10 +121,6 @@ func TestClientHelloRejectsUnadvertisedKeyShare(t *testing.T) {
 }
 
 func TestClientHelloRejectsLegacyCookie(t *testing.T) {
-	h := &clientHello{legacyCookie: []byte{1}, cipherSuites: []uint16{TLS_AES_128_GCM_SHA256}, keyShares: []keyShareEntry{{group: tls.X25519, data: bytes.Repeat([]byte{1}, 32)}}}
-	if _, err := h.marshal(); err == nil {
-		t.Fatal("marshaled nonempty legacy_cookie")
-	}
 	valid := &clientHello{cipherSuites: []uint16{TLS_AES_128_GCM_SHA256}, supportedGroups: []tls.CurveID{tls.X25519}, keyShares: []keyShareEntry{{group: tls.X25519, data: bytes.Repeat([]byte{1}, 32)}}}
 	wire, err := valid.marshal()
 	if err != nil {
@@ -633,7 +629,6 @@ func TestSecondClientHelloRejectsChangedInvariantFields(t *testing.T) {
 	}{
 		{"random", func(h *clientHello) { h.random[0]++ }},
 		{"session-id", func(h *clientHello) { h.sessionID = []byte{9} }},
-		{"legacy-cookie", func(h *clientHello) { h.legacyCookie = []byte{9} }},
 		{"cipher-suites", func(h *clientHello) { h.cipherSuites = []uint16{TLS_AES_256_GCM_SHA384} }},
 		{"key-share", func(h *clientHello) { h.keyShares = []keyShareEntry{{group: tls.X25519, data: []byte{9}}} }},
 		{"signature-schemes", func(h *clientHello) { h.signatureSchemes = []tls.SignatureScheme{tls.PSSWithSHA256} }},
