@@ -119,24 +119,31 @@ jobs:
             go test . -run '^$' \
               -bench '^(BenchmarkWolfSSLFeatureRealUDP|BenchmarkHybridKeyExchangeRealUDP)$' \
               -benchmem -benchtime=1x -count=5 -cpu=1 -timeout=45m | tee -a benchmark.txt
-      - name: Generate report
+      - name: Format and sort benchmark report
         env:
           WOLFSSL_COMMIT: ${{ steps.wolfssl.outputs.commit }}
         shell: bash
         run: |
           set -euo pipefail
-          go run ./tools/benchmark-report \
-            -input benchmark.txt \
-            -output benchmark.md \
-            -commit "$(git rev-parse HEAD)" \
-            -generated "$(date -u +%Y-%m-%dT%H:%M:%SZ)" \
+          tool="$RUNNER_TEMP/benchmark-report"
+          go build -o "$tool" ./tools/benchmark-report
+          common=(
+            -input benchmark.txt
+            -commit "$(git rev-parse HEAD)"
+            -generated "$(date -u +%Y-%m-%dT%H:%M:%SZ)"
             -wolfssl "$WOLFSSL_COMMIT (Linux Release static)"
+          )
+          "$tool" "${common[@]}" -language zh-CN -output benchmark.md
+          "$tool" "${common[@]}" -language en -output benchmark.en.md
+          "$tool" "${common[@]}" -language ru -output benchmark.ru.md
           cat benchmark.md >> "$GITHUB_STEP_SUMMARY"
       - uses: actions/upload-artifact@v7
         with:
           name: benchmark-output
           path: |
             benchmark.md
+            benchmark.en.md
+            benchmark.ru.md
             benchmark.txt
           retention-days: 30
           if-no-files-found: error
@@ -169,12 +176,15 @@ jobs:
             git init -b benchmark-results "$target"
             git -C "$target" remote add origin "$remote"
           fi
-          cp report/benchmark.md "$target/README.md"
+          cp report/benchmark*.md "$target/"
           cp report/benchmark.txt "$target/benchmark.txt"
-          printf '\n[Raw Go benchmark output](benchmark.txt)\n' >> "$target/README.md"
+          printf '\n[Go benchmark 原始输出](benchmark.txt)\n' >> "$target/benchmark.md"
+          printf '\n[Raw Go benchmark output](benchmark.txt)\n' >> "$target/benchmark.en.md"
+          printf '\n[Исходный вывод Go benchmark](benchmark.txt)\n' >> "$target/benchmark.ru.md"
+          cp "$target/benchmark.md" "$target/README.md"
           git -C "$target" config user.name github-actions[bot]
           git -C "$target" config user.email 41898282+github-actions[bot]@users.noreply.github.com
-          git -C "$target" add README.md benchmark.txt
+          git -C "$target" add README.md benchmark*.md benchmark.txt
           if git -C "$target" diff --cached --quiet; then
             exit 0
           fi

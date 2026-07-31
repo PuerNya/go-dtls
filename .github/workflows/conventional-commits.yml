@@ -2,27 +2,34 @@ name: Conventional Commits
 
 on:
   pull_request:
+    types: [opened, reopened, synchronize, edited]
 
 permissions:
   contents: read
 
 jobs:
   commits:
-    name: commit messages
+    name: commit messages and PR title
     runs-on: ubuntu-latest
     timeout-minutes: 5
     steps:
       - uses: actions/checkout@v7
         with:
           fetch-depth: 0
-      - name: Check Conventional Commits
+      - name: Check Conventional Commits and PR title
         env:
           BASE_SHA: ${{ github.event.pull_request.base.sha }}
           HEAD_SHA: ${{ github.event.pull_request.head.sha }}
+          PR_TITLE: ${{ github.event.pull_request.title }}
         shell: bash
         run: |
           pattern='^[a-z][a-z0-9-]*(\([[:alnum:]./_-]+\))?!?: [^[:space:]].*$'
           failed=0
+
+          if [[ ! $PR_TITLE =~ $pattern ]]; then
+            echo "::error title=Invalid pull request title::$PR_TITLE"
+            failed=1
+          fi
 
           while IFS=$'\t' read -r sha subject; do
             if [[ ! $subject =~ $pattern ]]; then
@@ -32,6 +39,6 @@ jobs:
           done < <(git log --reverse --format=$'%H\t%s' "$BASE_SHA..$HEAD_SHA")
 
           if ((failed)); then
-            echo 'Expected: type(scope)!: description'
+            echo 'Expected for every commit subject and the PR title: type(scope)!: description'
             exit 1
           fi

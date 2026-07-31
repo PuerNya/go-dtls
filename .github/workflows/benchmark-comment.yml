@@ -31,7 +31,7 @@ jobs:
           path: report
           github-token: ${{ secrets.GITHUB_TOKEN }}
           run-id: ${{ github.event.workflow_run.id }}
-      - name: Generate trusted PR report
+      - name: Format and sort trusted PR report
         shell: bash
         run: |
           set -euo pipefail
@@ -40,7 +40,9 @@ jobs:
             -input report/benchmark.txt \
             -output report/comment.md \
             -commit "${{ github.event.workflow_run.head_sha }}" \
-            -generated "${{ github.event.workflow_run.updated_at }}"
+            -generated "${{ github.event.workflow_run.updated_at }}" \
+            -language zh-CN \
+            -language-links=false
       - name: Update pull request comment
         uses: actions/github-script@v9
         env:

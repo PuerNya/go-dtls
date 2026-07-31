@@ -93,6 +93,8 @@ wolfSSL 支持目标功能时，还必须增加并运行真实 UDP 专项 benchm
 
 benchmark workflow 在 `master` push 后更新独立的 `benchmark-results` 分支；定时检查仅在 go-dtls 或 wolfSSL 的 `master` SHA 变化，且该 go-dtls SHA 没有 benchmark 正在排队或运行时触发并发布。pull request 只更新对应 PR 页面上的结果评论，不写入 `master` 或结果分支。不要手工维护 README 中的性能数字。
 
+新增或重命名任何 benchmark 或子 benchmark 时，必须同步更新 `tools/benchmark-report` 中对应的分类、排序和多语言标签。报告生成器会拒绝任何未被显式覆盖的 benchmark 输出，benchmark workflow 必须通过。
+
 第三方实现未启用或不支持目标扩展时，应明确互通边界，不得把跳过测试表述为通过。
 
 ## 文档
@@ -117,5 +119,7 @@ feat(cid): implement RFC 9853 return routability checks
 fix(record): reject invalid truncated sequence numbers
 docs(api): clarify datagram truncation behavior
 ```
+
+Pull request 标题必须使用相同格式。Conventional Commits workflow 会同时校验 PR 标题和分支中的每个 commit subject，并在标题编辑后重新运行。
 
 Pull request 应说明适用的 RFC 章节、行为变化、测试结果、race 结果、性能数据和互通范围。破坏性变更使用 `!`，并在正文中说明迁移方式。

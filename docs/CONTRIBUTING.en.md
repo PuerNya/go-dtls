@@ -93,6 +93,8 @@ When wolfSSL supports the target feature, also add and run a focused real-UDP be
 
 The benchmark workflow updates the separate `benchmark-results` branch after a push to `master`. The scheduled check triggers and publishes only when the go-dtls or wolfSSL `master` SHA changed and no benchmark for that go-dtls SHA is queued or running. A pull request only updates its benchmark comment and never writes to `master` or the results branch. Do not maintain performance numbers manually in README files.
 
+Adding or renaming any benchmark or sub-benchmark requires updating its category, order, and multilingual labels in `tools/benchmark-report`. The report generator rejects benchmark output without explicit coverage, and the benchmark workflow must pass.
+
 When a third-party implementation does not enable or support the target extension, state the interoperability boundary explicitly. Do not report a skipped test as passing.
 
 ## Documentation
@@ -117,5 +119,7 @@ feat(cid): implement RFC 9853 return routability checks
 fix(record): reject invalid truncated sequence numbers
 docs(api): clarify datagram truncation behavior
 ```
+
+The pull request title must use the same format. The Conventional Commits workflow checks both the PR title and every commit subject in the branch, and reruns when the title is edited.
 
 A pull request must identify the applicable RFC sections, behavior changes, test results, race results, performance data, and interoperability scope. Use `!` for a breaking change and explain migration in the body.

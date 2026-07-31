@@ -12,28 +12,217 @@ go version go1.26.0 linux/amd64
 goos: linux
 goarch: amd64
 cpu: Example CPU
-BenchmarkHandshake-2 10 9 ns/op 30 B/op 2 allocs/op
-BenchmarkHandshake-2 10 3 ns/op 10 B/op 0 allocs/op
-BenchmarkHandshake-2 10 6 ns/op 20 B/op 1 allocs/op
-BenchmarkPeer/Go|Wolf-2 1 2.5 go_ms/conn
+BenchmarkProtectedRecordSeal-2 10 1500 ns/op 800 MB/s 1280 B/op 1 allocs/op
+BenchmarkMarshalExtensions-2 10 9 ns/op 30 B/op 2 allocs/op
+BenchmarkMarshalExtensions-2 10 3 ns/op 10 B/op 0 allocs/op
+BenchmarkMarshalExtensions-2 10 6 ns/op 20 B/op 1 allocs/op
+BenchmarkWolfSSLFeatureRealUDP/KeyUpdate/GoClient/WolfSSLServer-2 1 2000000 ns/op 2.5 go_ms/conn
+BenchmarkWolfSSLFeatureRealUDP/SessionResumption/WolfSSLClient/GoServer-2 1 3000000 ns/op 3 wolf_process_ms/pair
+BenchmarkMutualTLSHandshakeLifecycle/Full-2 1 2000000 ns/op 100000 B/op 900 allocs/op
+BenchmarkConnectionHandshakeLifecycle-2 1 1500000 ns/op 90000 B/op 800 allocs/op
 `
 	report, err := parseReport(strings.NewReader(input))
 	if err != nil {
 		t.Fatal(err)
 	}
 	var output bytes.Buffer
-	if err = writeReport(&output, report, "abc123", "", "2026-07-31T00:00:00Z"); err != nil {
+	if err = writeReport(&output, report, "abc123", "", "2026-07-31T00:00:00Z", reportLanguages["en"], reportLanguageLinks("benchmark.en.md")); err != nil {
 		t.Fatal(err)
 	}
 	text := output.String()
 	for _, want := range []string{
-		"`BenchmarkHandshake-2` | 3 | 6 ns/op<br>20 B/op<br>1 allocs/op",
-		"`BenchmarkPeer/Go&#124;Wolf-2` | 1 | 2.5 go_ms/conn",
+		"[Connection lifecycle (2)](#section-connection-lifecycle)",
+		"[Real UDP interoperability (2)](#section-real-udp-interoperability)",
+		"  - [go-dtls client -> wolfSSL server (1)](#real-udp-go-dtls-client-wolfssl-server)",
+		"  - [wolfSSL client -> go-dtls server (1)](#real-udp-wolfssl-client-go-dtls-server)",
+		"[简体中文](benchmark.md) | [English](benchmark.en.md) | [Русский](benchmark.ru.md)",
+		"| Benchmark | Samples | Median time | Harness memory | Harness allocations |",
+		"| --- | :---: | :---: | :---: | :---: |",
+		"| --- | :---: | :---: | :---: | :---: | :---: |",
+		"## Connection lifecycle",
+		"Certificate-authenticated full handshake / AES-128-GCM | 1 | 1.5 ms/op | 90000 B/op | 800 allocs/op",
+		"Full mTLS handshake | 1 | 2 ms/op | 100000 B/op | 900 allocs/op",
+		"## Real UDP interoperability",
+		"### go-dtls client -> wolfSSL server",
+		"Median time is measured by the go-dtls client; `ms/conn` means one complete connection workload.",
+		"KeyUpdate + 1-RTT application-data round trip | 1 | 2.5 ms/conn | - | -",
+		"Median time is measured by the wolfSSL client; `ms/conn` means one connection, while `ms/pair` means a full-plus-resumed connection pair and includes the client's built-in wait.",
+		"Session resumption handshake | 1 | 3 ms/pair | - | -",
+		"## Record layer and reliability",
+		"Record seal | 1 | 1.5 us/op | 800 MB/s | 1280 B/op | 1 allocs/op",
+		"## Wire encoding and parsing",
+		"Marshal Extensions | 3 | 6 ns/op | 20 B/op | 1 allocs/op",
 		"- Platform: `linux/amd64, Example CPU`",
 		"- wolfSSL: `0123456789abcdef (Linux Release static)`",
 	} {
 		if !strings.Contains(text, want) {
 			t.Fatalf("report does not contain %q:\n%s", want, text)
+		}
+	}
+	if strings.Contains(text, "<details>") {
+		t.Fatalf("report still contains collapsed sections:\n%s", text)
+	}
+	for _, marker := range []string{"Implementation markers:", " (G)", " (W)"} {
+		if strings.Contains(text, marker) {
+			t.Fatalf("report still contains implementation marker %q:\n%s", marker, text)
+		}
+	}
+	if strings.Contains(text, "RFC ") {
+		t.Fatalf("report benchmark labels still contain RFC identifiers:\n%s", text)
+	}
+	if strings.Contains(text, "| `") {
+		t.Fatalf("report benchmark labels still use code spans:\n%s", text)
+	}
+	connectionSection := text[strings.Index(text, "## Connection lifecycle"):strings.Index(text, "## Real UDP interoperability")]
+	if strings.Contains(connectionSection, "Throughput") {
+		t.Fatalf("section without throughput metrics contains a throughput column:\n%s", connectionSection)
+	}
+	recordSection := text[strings.Index(text, "## Record layer and reliability"):strings.Index(text, "## Wire encoding and parsing")]
+	if !strings.Contains(recordSection, "Throughput") {
+		t.Fatalf("section with throughput metrics does not contain a throughput column:\n%s", recordSection)
+	}
+	connection := strings.Index(text, "## Connection lifecycle")
+	realUDP := strings.Index(text, "## Real UDP interoperability")
+	record := strings.Index(text, "## Record layer and reliability")
+	wire := strings.Index(text, "## Wire encoding and parsing")
+	if connection >= realUDP || realUDP >= record || record >= wire {
+		t.Fatalf("report sections are not in the expected order:\n%s", text)
+	}
+	connectionBenchmark := strings.Index(text, "Certificate-authenticated full handshake / AES-128-GCM")
+	mutualTLSBenchmark := strings.Index(text, "Full mTLS handshake")
+	if connectionBenchmark >= mutualTLSBenchmark {
+		t.Fatalf("benchmarks are not sorted by feature:\n%s", text)
+	}
+}
+
+func TestParseReportRejectsUncoveredBenchmark(t *testing.T) {
+	_, err := parseReport(strings.NewReader("BenchmarkNewFeature-2 1 100 ns/op 1 B/op 1 allocs/op\n"))
+	if err == nil || !strings.Contains(err.Error(), "not covered by the report generator") {
+		t.Fatalf("parseReport error = %v, want an uncovered benchmark error", err)
+	}
+
+	_, err = parseReport(strings.NewReader("BenchmarkParseExtensions/NewMode-2 1 100 ns/op 1 B/op 1 allocs/op\n"))
+	if err == nil || !strings.Contains(err.Error(), "unmapped part") {
+		t.Fatalf("parseReport error = %v, want an unmapped benchmark part error", err)
+	}
+}
+
+func TestBenchmarkLabel(t *testing.T) {
+	tests := []struct {
+		language string
+		input    string
+		want     string
+	}{
+		{"en", "BenchmarkConnectionHandshakeLifecycle-2", "Certificate-authenticated full handshake / AES-128-GCM"},
+		{"en", "BenchmarkMutualTLSHandshakeLifecycle/Resumed-2", "mTLS session resumption handshake"},
+		{"en", "BenchmarkHybridKeyExchangeRealUDP/X25519MLKEM768/WolfSSLClient/GoServer-2", "Post-quantum hybrid key exchange / X25519MLKEM768"},
+		{"en", "BenchmarkWolfSSLFeatureRealUDP/MutualTLSSessionResumption/GoClient/WolfSSLServer-2", "mTLS session resumption handshake"},
+		{"zh-CN", "BenchmarkCertificateCompressionHandshakeLifecycle/MutualTLS/Zlib-2", "zlib mTLS 证书压缩握手"},
+		{"zh-CN", "BenchmarkWolfSSLFeatureRealUDP/KeyUpdate/GoClient/WolfSSLServer-2", "KeyUpdate + 应用数据 1-RTT 往返"},
+		{"ru", "BenchmarkWolfSSLFeatureRealUDP/ApplicationDataRoundTrip/WolfSSLClient/GoServer-2", "Обмен прикладными данными 1-RTT"},
+		{"en", "BenchmarkProtectedRecordRoundTripSuites/ChaCha20Poly1305-2", "Record round trip / ChaCha20-Poly1305"},
+		{"zh-CN", "BenchmarkProtectedRecordRoundTripSuites/ChaCha20Poly1305-2", "记录往返 / ChaCha20-Poly1305"},
+		{"ru", "BenchmarkBuildProtectedACKRecords/SingleReuse-2", "Построение защищенного ACK / Повторное использование одного"},
+		{"en", "BenchmarkCalculatePSKBinder/1301-2", "Calculate PSK Binder / AES-128-GCM"},
+		{"en", "BenchmarkParseKeyShares/Client4/ViewInto-2", "Key share parse / 4 key shares / View Into"},
+		{"zh-CN", "BenchmarkParseKeyShares/Client4/ViewInto-2", "解析密钥份额 / 4 个密钥份额 / 写入视图"},
+		{"ru", "BenchmarkMarshalHandshakeMessages/CertificateVerify-2", "Кодирование рукопожатия / Проверка сертификата"},
+		{"zh-CN", "BenchmarkKeyScheduleSideDerivations/1301/EarlyTraffic-2", "密钥派生 / AES-128-GCM / 早期流量"},
+		{"en", "BenchmarkCertificateCompression/Decompress-2", "Decompress"},
+		{"zh-CN", "BenchmarkCertificateCompression/Decompress-2", "解压"},
+		{"ru", "BenchmarkCertificateCompression/Decompress-2", "Распаковка"},
+	}
+	for _, test := range tests {
+		if got := benchmarkLabel(test.input, reportLanguages[test.language]); got != test.want {
+			t.Errorf("benchmarkLabel(%q, %q) = %q, want %q", test.input, test.language, got, test.want)
+		}
+	}
+}
+
+func TestLocalizedReports(t *testing.T) {
+	report, err := parseReport(strings.NewReader("BenchmarkProtectedRecordSeal-2 1 100 ns/op 10 B/op 1 allocs/op\nBenchmarkBuildProtectedACKRecords/Single-2 1 100 ns/op 10 B/op 1 allocs/op\nBenchmarkWolfSSLFeatureRealUDP/KeyUpdate/GoClient/WolfSSLServer-2 1 100 ns/op 1 go_ms/conn\n"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, test := range []struct {
+		language string
+		want     []string
+	}{
+		{"zh-CN", []string{"# 自动化基准测试结果", "## 快速跳转", "  - [go-dtls 客户端 -> wolfSSL 服务端 (1)](#real-udp-go-dtls-client-wolfssl-server)", "## 真实 UDP 互通", "### go-dtls 客户端 -> wolfSSL 服务端", "中位耗时由 go-dtls 客户端计时；`ms/conn` 表示一次完整连接工作负载。", "KeyUpdate + 应用数据 1-RTT 往返", "## 记录层与可靠性", "受保护 ACK 构建 / 单条", "| 基准测试 | 样本数 | 中位耗时 | 测试框架内存 | 测试框架分配次数 |"}},
+		{"ru", []string{"# Результаты автоматических бенчмарков", "## Быстрая навигация", "  - [Клиент go-dtls -> сервер wolfSSL (1)](#real-udp-go-dtls-client-wolfssl-server)", "## Совместимость через реальный UDP", "### Клиент go-dtls -> сервер wolfSSL", "Медианное время измеряет клиент go-dtls; `ms/conn` означает одну полную операцию соединения.", "KeyUpdate + обмен прикладными данными 1-RTT", "## Уровень записей и надежность", "Построение защищенного ACK / Один", "| Бенчмарк | Замеры | Медианное время | Память стенда | Аллокации стенда |"}},
+	} {
+		var output bytes.Buffer
+		if err := writeReport(&output, report, "", "", "", reportLanguages[test.language], ""); err != nil {
+			t.Fatal(err)
+		}
+		for _, want := range test.want {
+			if !strings.Contains(output.String(), want) {
+				t.Errorf("%s report does not contain %q:\n%s", test.language, want, output.String())
+			}
+		}
+	}
+}
+
+func TestReportLanguageLinks(t *testing.T) {
+	const want = "[简体中文](benchmark-preview.md) | [English](benchmark-preview.en.md) | [Русский](benchmark-preview.ru.md)"
+	for _, output := range []string{"benchmark-preview.md", "benchmark-preview.en.md", "benchmark-preview.ru.md"} {
+		if got := reportLanguageLinks(output); got != want {
+			t.Errorf("reportLanguageLinks(%q) = %q, want %q", output, got, want)
+		}
+	}
+}
+
+func TestBenchmarkSection(t *testing.T) {
+	tests := []struct {
+		name string
+		want int
+	}{
+		{"BenchmarkConnectionHandshakeLifecycle", 0},
+		{"BenchmarkWolfSSLFeatureRealUDP/KeyUpdate/GoClient/GoServer", 1},
+		{"BenchmarkProtectedRecordSeal", 2},
+		{"BenchmarkKeyScheduleDerivation", 3},
+		{"BenchmarkParseExtensions", 4},
+		{"BenchmarkCertificateCompression/Zlib", 5},
+		{"BenchmarkSomethingElse", 6},
+	}
+	for _, test := range tests {
+		if got := benchmarkSection(test.name); got != test.want {
+			t.Errorf("benchmarkSection(%q) = %d, want %d", test.name, got, test.want)
+		}
+	}
+}
+
+func TestBenchmarkDisplayOrder(t *testing.T) {
+	tests := []struct {
+		name string
+		want int
+	}{
+		{"BenchmarkConnectionHandshakeLifecycle-2", 10},
+		{"BenchmarkMutualTLSHandshakeLifecycle/Resumed-2", 30},
+		{"BenchmarkCertificateCompressionHandshakeLifecycle/MutualTLS/Zlib-2", 80},
+		{"BenchmarkWolfSSLFeatureRealUDP/CertificateAES128GCM/GoClient/WolfSSLServer-2", 10},
+		{"BenchmarkWolfSSLFeatureRealUDP/EarlyData/WolfSSLClient/GoServer-2", 110},
+		{"BenchmarkHybridKeyExchangeRealUDP/X25519MLKEM768/WolfSSLClient/WolfSSLServer-2", 120},
+		{"BenchmarkUnknown-2", 1000},
+	}
+	for _, test := range tests {
+		if got := benchmarkDisplayOrder(test.name); got != test.want {
+			t.Errorf("benchmarkDisplayOrder(%q) = %d, want %d", test.name, got, test.want)
+		}
+	}
+}
+
+func TestRealUDPDirection(t *testing.T) {
+	tests := map[string]int{
+		"BenchmarkFeature/GoClient/GoServer":           0,
+		"BenchmarkFeature/GoClient/WolfSSLServer":      1,
+		"BenchmarkFeature/WolfSSLClient/GoServer":      2,
+		"BenchmarkFeature/WolfSSLClient/WolfSSLServer": 3,
+		"BenchmarkFeature":                             -1,
+	}
+	for name, want := range tests {
+		if got := realUDPDirection(name); got != want {
+			t.Errorf("realUDPDirection(%q) = %d, want %d", name, got, want)
 		}
 	}
 }
