@@ -143,7 +143,7 @@ func TestNewSessionTicketOverlongLifetimeIsParsedAndDiscarded(t *testing.T) {
 	}
 	suite, _ := cipherSuiteForID(TLS_AES_128_GCM_SHA256)
 	c := &Conn{config: config, resumptionSuite: suite, resumptionMasterSecret: make([]byte, suite.hash.Size())}
-	if err = c.processNewSessionTicket(w.b); err != nil {
+	if err = c.processNewSessionTicket(0, w.b); err != nil {
 		t.Fatal(err)
 	}
 	if _, ok := cache.Get("server.test"); ok {

@@ -173,6 +173,14 @@
 // can share [Config.SessionTicketKey] when tickets must remain valid across
 // server instances.
 //
+// [Config.SessionTicketRequest] explicitly enables the [RFC 9149]
+// ticket_request extension and requests separate ticket counts after full and
+// resumed handshakes. [Config.MaxSessionTickets] bounds the server response.
+// Without the extension, the server preserves the RFC 9147 behavior of issuing
+// one ticket. The built-in cache atomically consumes distinct requested tickets
+// for concurrent resumptions; custom caches keep their existing single-state
+// behavior.
+//
 // A server that authenticated a client certificate stores the presented and
 // verified chains in the encrypted ticket. RFC 9846 PSK resumption does not
 // repeat CertificateRequest, Certificate, or CertificateVerify. Before accepting
@@ -253,6 +261,7 @@
 // [RFC 8449]: https://www.rfc-editor.org/rfc/rfc8449
 // [RFC 8879]: https://www.rfc-editor.org/rfc/rfc8879
 // [RFC 9146]: https://www.rfc-editor.org/rfc/rfc9146
+// [RFC 9149]: https://www.rfc-editor.org/rfc/rfc9149
 // [RFC 9257]: https://www.rfc-editor.org/rfc/rfc9257
 // [RFC 9258]: https://www.rfc-editor.org/rfc/rfc9258
 // [RFC 9848]: https://www.rfc-editor.org/rfc/rfc9848

@@ -114,6 +114,7 @@ func TestBenchmarkLabel(t *testing.T) {
 		want     string
 	}{
 		{"en", "BenchmarkConnectionHandshakeLifecycle-2", "Certificate-authenticated full handshake / AES-128-GCM"},
+		{"en", "BenchmarkSessionTicketRequestHandshakeLifecycle-2", "Full handshake + 4 acknowledged session tickets"},
 		{"en", "BenchmarkMutualTLSHandshakeLifecycle/Resumed-2", "mTLS session resumption handshake"},
 		{"en", "BenchmarkHybridKeyExchangeRealUDP/X25519MLKEM768/WolfSSLClient/GoServer-2", "Post-quantum hybrid key exchange / X25519MLKEM768"},
 		{"en", "BenchmarkWolfSSLFeatureRealUDP/MutualTLSSessionResumption/GoClient/WolfSSLServer-2", "mTLS session resumption handshake"},
@@ -198,6 +199,7 @@ func TestBenchmarkDisplayOrder(t *testing.T) {
 		want int
 	}{
 		{"BenchmarkConnectionHandshakeLifecycle-2", 10},
+		{"BenchmarkSessionTicketRequestHandshakeLifecycle-2", 35},
 		{"BenchmarkMutualTLSHandshakeLifecycle/Resumed-2", 30},
 		{"BenchmarkCertificateCompressionHandshakeLifecycle/MutualTLS/Zlib-2", 80},
 		{"BenchmarkWolfSSLFeatureRealUDP/CertificateAES128GCM/GoClient/WolfSSLServer-2", 10},

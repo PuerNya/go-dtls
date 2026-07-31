@@ -205,6 +205,14 @@ type ClientSessionState struct {
 	peerCertificates []*x509.Certificate
 	verifiedChains   [][]*x509.Certificate
 	externalPSK      *externalPSKSelection
+	ticketGroup      [32]byte
+}
+
+type sessionTicketRequestState struct {
+	group     [32]byte
+	processed map[uint16]struct{}
+	received  uint16
+	limit     uint8
 }
 
 type lruSessionCache struct {
@@ -215,14 +223,15 @@ type lruSessionCache struct {
 }
 
 type sessionCacheEntry struct {
-	key   string
-	state *ClientSessionState
+	key    string
+	states []*ClientSessionState
 }
 
-// NewLRUClientSessionCache returns a concurrency-safe, fixed-capacity client
-// session cache. The least recently used entry is removed when the capacity is
-// exceeded. State is cloned on insertion and retrieval so callers cannot
-// mutate cached ticket secrets.
+// NewLRUClientSessionCache returns a concurrency-safe client session cache with
+// a fixed number of server entries. The least recently used server entry is
+// removed when the capacity is exceeded. RFC 9149 ticket requests may retain up
+// to 255 tickets per server entry. State is cloned on insertion and retrieval
+// so callers cannot mutate cached ticket secrets.
 //
 // If capacity is less than one, a default capacity of 64 is used.
 func NewLRUClientSessionCache(capacity int) ClientSessionCache {
@@ -256,23 +265,33 @@ func (c *lruSessionCache) Get(key string) (*ClientSessionState, bool) {
 	c.mu.Lock()
 	defer c.mu.Unlock()
 	element := c.entries[key]
-	if element == nil {
+	if element == nil || len(element.Value.(*sessionCacheEntry).states) == 0 {
 		return nil, false
 	}
 	c.order.MoveToFront(element)
-	return cloneClientSessionState(element.Value.(*sessionCacheEntry).state), true
+	states := element.Value.(*sessionCacheEntry).states
+	return cloneClientSessionState(states[len(states)-1]), true
 }
 
 func (c *lruSessionCache) Take(key string) (*ClientSessionState, bool) {
 	c.mu.Lock()
 	defer c.mu.Unlock()
 	element := c.entries[key]
-	if element == nil {
+	if element == nil || len(element.Value.(*sessionCacheEntry).states) == 0 {
 		return nil, false
 	}
-	delete(c.entries, key)
-	c.order.Remove(element)
-	return cloneClientSessionState(element.Value.(*sessionCacheEntry).state), true
+	entry := element.Value.(*sessionCacheEntry)
+	last := len(entry.states) - 1
+	state := entry.states[last]
+	entry.states[last] = nil
+	entry.states = entry.states[:last]
+	if len(entry.states) == 0 {
+		delete(c.entries, key)
+		c.order.Remove(element)
+	} else {
+		c.order.MoveToFront(element)
+	}
+	return cloneClientSessionState(state), true
 }
 
 func (c *lruSessionCache) Put(key string, state *ClientSessionState) {
@@ -286,16 +305,65 @@ func (c *lruSessionCache) Put(key string, state *ClientSessionState) {
 		return
 	}
 	if element := c.entries[key]; element != nil {
-		element.Value.(*sessionCacheEntry).state = cloneClientSessionState(state)
+		element.Value.(*sessionCacheEntry).states = []*ClientSessionState{cloneClientSessionState(state)}
 		c.order.MoveToFront(element)
 		return
 	}
-	element := c.order.PushFront(&sessionCacheEntry{key: key, state: cloneClientSessionState(state)})
+	element := c.order.PushFront(&sessionCacheEntry{key: key, states: []*ClientSessionState{cloneClientSessionState(state)}})
 	c.entries[key] = element
 	if c.order.Len() > c.capacity {
 		oldest := c.order.Back()
 		delete(c.entries, oldest.Value.(*sessionCacheEntry).key)
 		c.order.Remove(oldest)
+	}
+}
+
+func (c *lruSessionCache) putTicket(key string, state *ClientSessionState) {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	if state == nil {
+		return
+	}
+	element := c.entries[key]
+	if element == nil {
+		element = c.order.PushFront(&sessionCacheEntry{key: key})
+		c.entries[key] = element
+	} else {
+		c.order.MoveToFront(element)
+	}
+	entry := element.Value.(*sessionCacheEntry)
+	entry.states = append(entry.states, cloneClientSessionState(state))
+	if len(entry.states) > 255 {
+		copy(entry.states, entry.states[len(entry.states)-255:])
+		clear(entry.states[255:])
+		entry.states = entry.states[:255]
+	}
+	if c.order.Len() > c.capacity {
+		oldest := c.order.Back()
+		delete(c.entries, oldest.Value.(*sessionCacheEntry).key)
+		c.order.Remove(oldest)
+	}
+}
+
+func (c *lruSessionCache) removeGroup(key string, group [32]byte) {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	element := c.entries[key]
+	if element == nil {
+		return
+	}
+	entry := element.Value.(*sessionCacheEntry)
+	kept := entry.states[:0]
+	for _, state := range entry.states {
+		if state.ticketGroup != group {
+			kept = append(kept, state)
+		}
+	}
+	clear(entry.states[len(kept):])
+	entry.states = kept
+	if len(kept) == 0 {
+		delete(c.entries, key)
+		c.order.Remove(element)
 	}
 }
 
@@ -598,38 +666,37 @@ func clientSessionCacheKey(config *Config, conn net.Conn) string {
 	return conn.RemoteAddr().String()
 }
 
-func usableClientSession(config *Config, conn net.Conn) (*ClientSessionState, *cipherSuite) {
-	if config.SessionTicketsDisabled || config.ClientSessionCache == nil {
-		return nil, nil
+func sessionTicketGroup(state *ClientSessionState) [32]byte {
+	if state.ticketGroup != ([32]byte{}) {
+		return state.ticketGroup
 	}
+	return sha256.Sum256(state.ticket)
+}
+
+func discardClientSessionGroup(config *Config, conn net.Conn, group [32]byte) {
 	key := clientSessionCacheKey(config, conn)
-	var state *ClientSessionState
-	var ok bool
-	if cache, atomic := config.ClientSessionCache.(interface {
-		Take(string) (*ClientSessionState, bool)
-	}); atomic {
-		state, ok = cache.Take(key)
-	} else {
-		state, ok = config.ClientSessionCache.Get(key)
-		if ok {
-			config.ClientSessionCache.Put(key, nil)
-		}
+	if cache, ok := config.ClientSessionCache.(*lruSessionCache); ok {
+		cache.removeGroup(key, group)
+		return
 	}
-	if !ok || state == nil || len(state.ticket) == 0 || len(state.psk) == 0 {
-		return nil, nil
+	config.ClientSessionCache.Put(key, nil)
+}
+
+func validateClientSession(config *Config, state *ClientSessionState) *cipherSuite {
+	if state == nil || len(state.ticket) == 0 || len(state.psk) == 0 {
+		return nil
 	}
 	if validateCertificateSecurityPolicy(state.peerCertificates, true) != nil {
-		return nil, nil
+		return nil
 	}
 	for _, chain := range state.verifiedChains {
 		if validateCertificateSecurityPolicy(chain, true) != nil {
-			return nil, nil
+			return nil
 		}
 	}
 	age := config.Time().Sub(state.receivedAt)
 	if age < 0 || age > time.Duration(state.lifetime)*time.Second || state.serverName != config.ServerName {
-		config.ClientSessionCache.Put(key, nil)
-		return nil, nil
+		return nil
 	}
 	if state.protocol != "" {
 		found := false
@@ -640,7 +707,7 @@ func usableClientSession(config *Config, conn net.Conn) (*ClientSessionState, *c
 			}
 		}
 		if !found {
-			return nil, nil
+			return nil
 		}
 	}
 	suite, err := cipherSuiteForID(state.suite)
@@ -652,19 +719,53 @@ func usableClientSession(config *Config, conn net.Conn) (*ClientSessionState, *c
 		}
 	}
 	if err != nil || !compatible || len(state.psk) != suite.hash.Size() {
-		return nil, nil
+		return nil
 	}
 	if state.externalPSK != nil {
 		if state.externalPSK.key.hash != suite.hash {
-			return nil, nil
+			return nil
 		}
 		selection := matchExternalPSK(config, state.externalPSK.key.wireIdentity, state.externalPSK.key.hash, state.externalPSK.key.digest)
 		if selection == nil {
-			return nil, nil
+			return nil
 		}
 		state.externalPSK = selection
 	}
-	return state, suite
+	return suite
+}
+
+func usableClientSession(config *Config, conn net.Conn) (*ClientSessionState, *cipherSuite) {
+	if config.SessionTicketsDisabled || config.ClientSessionCache == nil {
+		return nil, nil
+	}
+	key := clientSessionCacheKey(config, conn)
+	cache, pooled := config.ClientSessionCache.(*lruSessionCache)
+	taker, atomic := config.ClientSessionCache.(interface {
+		Take(string) (*ClientSessionState, bool)
+	})
+	for {
+		var state *ClientSessionState
+		var ok bool
+		if atomic {
+			state, ok = taker.Take(key)
+		} else {
+			state, ok = config.ClientSessionCache.Get(key)
+			if ok {
+				config.ClientSessionCache.Put(key, nil)
+			}
+		}
+		if !ok {
+			return nil, nil
+		}
+		state.ticketGroup = sessionTicketGroup(state)
+		if suite := validateClientSession(config, state); suite != nil {
+			return state, suite
+		}
+		if !pooled {
+			return nil, nil
+		}
+		cache.removeGroup(key, state.ticketGroup)
+	}
 }
 
 func validClientAuthenticationTicket(config *Config, state *sessionTicketState) bool {
@@ -1010,70 +1111,77 @@ func verifyClientHelloPSKBinderAtWithLabel(body []byte, suite *cipherSuite, psk 
 	return nil
 }
 
-func (c *Conn) sendNewSessionTicket(schedule *keySchedule, suite *cipherSuite, serverName, protocol string, clientAuthAt int64, peerCertificates []*x509.Certificate, verifiedChains [][]*x509.Certificate, external *externalPSKSelection) error {
-	if c.config.SessionTicketsDisabled {
+func (c *Conn) sendNewSessionTickets(schedule *keySchedule, suite *cipherSuite, count uint8, serverName, protocol string, clientAuthAt int64, peerCertificates []*x509.Certificate, verifiedChains [][]*x509.Certificate, external *externalPSKSelection) error {
+	if c.config.SessionTicketsDisabled || count == 0 {
 		return nil
 	}
 	if err := ensureSessionTicketKey(c.config); err != nil {
 		return err
 	}
-	nonce := make([]byte, 8)
-	if _, err := io.ReadFull(c.config.Rand, nonce); err != nil {
-		return err
-	}
-	psk, err := schedule.resumptionPSK(nonce)
-	if err != nil {
-		return err
-	}
-	ageBytes := make([]byte, 4)
-	if _, err = io.ReadFull(c.config.Rand, ageBytes); err != nil {
-		return err
-	}
-	ageAdd := binary.BigEndian.Uint32(ageBytes)
 	protector, err := newSessionTicketProtector(c.config.SessionTicketKey, c.config.Rand, c.config.Time)
 	if err != nil {
 		return err
 	}
 	lifetime := uint32(c.config.SessionTicketLifetime / time.Second)
-	ticketState := &sessionTicketState{
-		createdAt: c.config.Time().Unix(), lifetime: lifetime, suite: suite.id, psk: psk,
-		serverName: serverName, protocol: protocol, ageAdd: ageAdd, maxEarlyData: c.config.MaxEarlyData, recordSizeLimit: c.localRecordSizeLimit,
-		clientAuthAt: clientAuthAt, peerCertificates: peerCertificates, verifiedChains: verifiedChains,
-	}
-	if external != nil {
-		kdf, _ := tlsKDFForHash(external.key.hash)
-		ticketState.externalPSK = &externalPSKTicketState{wire: external.key.wireIdentity, kdf: kdf, digest: external.key.digest}
-	}
-	ticket, err := protector.seal(ticketState)
-	if err != nil {
-		var protocolErr *ProtocolError
-		if len(peerCertificates) > 0 && errors.As(err, &protocolErr) && protocolErr.Reason == "16-bit vector overflow" {
+	messages := make([]handshakeMessage, 0, int(count))
+	createdAt := c.config.Time().Unix()
+	for range count {
+		nonce := make([]byte, 8)
+		if _, err = io.ReadFull(c.config.Rand, nonce); err != nil {
+			return err
+		}
+		psk, deriveErr := schedule.resumptionPSK(nonce)
+		if deriveErr != nil {
+			return deriveErr
+		}
+		var ageBytes [4]byte
+		if _, err = io.ReadFull(c.config.Rand, ageBytes[:]); err != nil {
+			return err
+		}
+		ageAdd := binary.BigEndian.Uint32(ageBytes[:])
+		ticketState := &sessionTicketState{
+			createdAt: createdAt, lifetime: lifetime, suite: suite.id, psk: psk,
+			serverName: serverName, protocol: protocol, ageAdd: ageAdd, maxEarlyData: c.config.MaxEarlyData, recordSizeLimit: c.localRecordSizeLimit,
+			clientAuthAt: clientAuthAt, peerCertificates: peerCertificates, verifiedChains: verifiedChains,
+		}
+		if external != nil {
+			kdf, _ := tlsKDFForHash(external.key.hash)
+			ticketState.externalPSK = &externalPSKTicketState{wire: external.key.wireIdentity, kdf: kdf, digest: external.key.digest}
+		}
+		ticket, sealErr := protector.seal(ticketState)
+		if sealErr != nil {
+			var protocolErr *ProtocolError
+			if len(peerCertificates) > 0 && errors.As(sealErr, &protocolErr) && protocolErr.Reason == "16-bit vector overflow" {
+				return nil
+			}
+			return sealErr
+		}
+		if len(ticket) > 65535 {
 			return nil
 		}
-		return err
-	}
-	if len(ticket) > 65535 {
-		return nil
-	}
-	body, err := (&newSessionTicketMessage{
-		lifetime: lifetime, ageAdd: ageAdd, nonce: nonce, ticket: ticket, maxEarlyData: c.config.MaxEarlyData,
-	}).marshal()
-	if err != nil {
-		return err
+		body, marshalErr := (&newSessionTicketMessage{
+			lifetime: lifetime, ageAdd: ageAdd, nonce: nonce, ticket: ticket, maxEarlyData: c.config.MaxEarlyData,
+		}).marshal()
+		if marshalErr != nil {
+			return marshalErr
+		}
+		messages = append(messages, handshakeMessage{typ: handshakeTypeNewSessionTicket, body: body})
 	}
 	c.writeMu.Lock()
 	if c.sendingTraffic == nil {
 		c.writeMu.Unlock()
 		return &ProtocolError{"application traffic state is not installed"}
 	}
-	if err = c.sendingTraffic.canAllocateMessageSequences(1); err != nil {
+	messageCount := uint32(len(messages))
+	if err = c.sendingTraffic.canAllocateMessageSequences(messageCount); err != nil {
 		c.writeMu.Unlock()
 		return err
 	}
 	sequence := c.sendingTraffic.messageSequence
-	flight, err := buildProtectedFlight([]handshakeMessage{{
-		typ: handshakeTypeNewSessionTicket, sequence: sequence, body: body,
-	}}, c.currentMTU(), c.sendCipher)
+	for i := range messages {
+		messages[i].sequence = sequence + uint16(i)
+	}
+	flight, err := buildProtectedFlight(messages, c.currentMTU(), c.sendCipher)
 	if err != nil {
 		c.writeMu.Unlock()
 		return err
@@ -1083,7 +1191,7 @@ func (c *Conn) sendNewSessionTicket(schedule *keySchedule, suite *cipherSuite, s
 		c.writeMu.Unlock()
 		return err
 	}
-	c.sendingTraffic.commitMessageSequences(1)
+	c.sendingTraffic.commitMessageSequences(messageCount)
 	c.ticketFlight = flight
 	c.writeMu.Unlock()
 	c.startTicketRetransmission()
@@ -1106,7 +1214,7 @@ func (c *Conn) ackProtectedRecord(number recordNumber) error {
 	return nil
 }
 
-func (c *Conn) processNewSessionTicket(body []byte) error {
+func (c *Conn) processNewSessionTicket(sequence uint16, body []byte) error {
 	message, err := parseNewSessionTicket(body)
 	if err != nil {
 		return err
@@ -1117,15 +1225,41 @@ func (c *Conn) processNewSessionTicket(body []byte) error {
 	if c.config.SessionTicketsDisabled || c.config.ClientSessionCache == nil || c.resumptionSuite == nil || len(c.resumptionMasterSecret) == 0 {
 		return nil
 	}
+	request := c.sessionTicketRequest
+	if request != nil {
+		if _, duplicate := request.processed[sequence]; duplicate {
+			return nil
+		}
+		if request.received >= uint16(request.limit) {
+			return nil
+		}
+		if request.processed == nil {
+			request.processed = make(map[uint16]struct{}, int(request.limit))
+		}
+		request.processed[sequence] = struct{}{}
+		request.received++
+	}
 	psk := deriveResumptionPSK(c.resumptionSuite, c.resumptionMasterSecret, message.nonce)
-	state := c.ConnectionState()
-	c.config.ClientSessionCache.Put(clientSessionCacheKey(c.config, c.conn), &ClientSessionState{
+	connectionState := c.ConnectionState()
+	group := sha256.Sum256(c.resumptionMasterSecret)
+	if request != nil && request.group != ([32]byte{}) {
+		group = request.group
+	}
+	clientState := &ClientSessionState{
 		ticket: append([]byte(nil), message.ticket...), psk: psk, nonce: append([]byte(nil), message.nonce...),
 		suite: c.resumptionSuite.id, receivedAt: c.config.Time(), lifetime: message.lifetime,
-		ageAdd: message.ageAdd, serverName: c.config.ServerName, protocol: state.NegotiatedProtocol,
-		maxEarlyData: message.maxEarlyData, recordSizeLimit: state.PeerRecordSizeLimit, peerCertificates: state.PeerCertificates, verifiedChains: state.VerifiedChains,
-		externalPSK: state.externalPSKSelection(),
-	})
+		ageAdd: message.ageAdd, serverName: c.config.ServerName, protocol: connectionState.NegotiatedProtocol,
+		maxEarlyData: message.maxEarlyData, recordSizeLimit: connectionState.PeerRecordSizeLimit, peerCertificates: connectionState.PeerCertificates, verifiedChains: connectionState.VerifiedChains,
+		externalPSK: connectionState.externalPSKSelection(), ticketGroup: group,
+	}
+	key := clientSessionCacheKey(c.config, c.conn)
+	if request != nil {
+		if cache, ok := c.config.ClientSessionCache.(*lruSessionCache); ok {
+			cache.putTicket(key, clientState)
+			return nil
+		}
+	}
+	c.config.ClientSessionCache.Put(key, clientState)
 	return nil
 }
 

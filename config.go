@@ -11,6 +11,19 @@ import (
 // VersionDTLS13 is the DTLS 1.3 version value carried in supported_versions.
 const VersionDTLS13 uint16 = 0xfefc
 
+const defaultMaxSessionTickets = 4
+
+// SessionTicketRequest configures the RFC 9149 ticket_request extension.
+// Enabled sends the extension. NewSessionCount is used when the server
+// performs a full handshake, and ResumptionCount is used when it accepts a
+// ticket-based resumption. Setting Enabled with both counts at zero explicitly
+// asks the server not to issue tickets for that handshake.
+type SessionTicketRequest struct {
+	Enabled         bool
+	NewSessionCount uint8
+	ResumptionCount uint8
+}
+
 // Config configures a DTLS client or server. Fields that represent TLS 1.3
 // concepts follow [crypto/tls.Config] where practical.
 //
@@ -81,6 +94,11 @@ type Config struct {
 	// be accepted and preserves ordinary certificate and resumption semantics.
 	// The zero value keeps the default handshake wire and cost unchanged.
 	EncryptedClientHelloGrease bool
+	// SessionTicketRequest configures the RFC 9149 ticket_request extension on
+	// a client. Its zero value preserves RFC 9147 behavior. The built-in LRU
+	// cache pools requested tickets and atomically consumes a distinct ticket
+	// per concurrent connection.
+	SessionTicketRequest SessionTicketRequest
 	// NextProtos lists supported ALPN protocol names in preference order. The
 	// server's order controls selection. If either peer provides no list, no
 	// protocol is negotiated; otherwise the handshake fails when there is no
@@ -226,6 +244,10 @@ type Config struct {
 	// SessionTicketsDisabled disables server NewSessionTicket messages and
 	// client ticket use. It also disables session resumption and 0-RTT.
 	SessionTicketsDisabled bool
+	// MaxSessionTickets limits how many tickets a server sends for one RFC 9149
+	// request. Zero selects 4. The limit does not affect clients that omit the
+	// extension, for which the server sends one ticket as before.
+	MaxSessionTickets uint8
 	// EarlyDataReplayCache is shared by server connections to prevent reuse of
 	// a PSK identity for 0-RTT. It must be safe for concurrent use. Nil uses a
 	// bounded process-wide cache. Deployments with more than one process must
@@ -470,6 +492,9 @@ func (c *Config) normalized() (*Config, error) {
 	}
 	if x.SessionTicketLifetime < time.Second || x.SessionTicketLifetime > 7*24*time.Hour {
 		return nil, &ConfigError{"SessionTicketLifetime must be between one second and seven days"}
+	}
+	if x.MaxSessionTickets == 0 {
+		x.MaxSessionTickets = defaultMaxSessionTickets
 	}
 	if len(x.ConnectionID) > 255 {
 		return nil, &ConfigError{"ConnectionID must not exceed 255 bytes"}

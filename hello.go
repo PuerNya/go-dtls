@@ -23,6 +23,7 @@ const (
 	extPostHandshakeAuth       uint16 = 49
 	extSignatureAlgorithmsCert uint16 = 50
 	extConnectionID            uint16 = 54
+	extTicketRequest           uint16 = 58
 	extReturnRoutability       uint16 = 61
 )
 
@@ -31,7 +32,7 @@ func knownExtensionType(typ uint16) bool {
 	case extServerName, extSupportedGroups, extSupportedVersions, extKeyShare,
 		extSignatureAlgorithms, extALPN, extPadding, extCompressCertificate, extRecordSizeLimit, extPreSharedKey, extEarlyData,
 		extCookie, extPSKKeyExchangeModes, extPostHandshakeAuth,
-		extSignatureAlgorithmsCert, extConnectionID, extReturnRoutability,
+		extSignatureAlgorithmsCert, extConnectionID, extTicketRequest, extReturnRoutability,
 		extECH, extECHOuterExtensions:
 		return true
 	default:
@@ -67,6 +68,7 @@ type clientHello struct {
 	pskBinders                    [][]byte
 	pskDHE                        bool
 	earlyData                     bool
+	ticketRequest                 SessionTicketRequest
 	connectionID                  []byte
 	hasConnectionID               bool
 	returnRoutability             bool
@@ -950,7 +952,7 @@ func (h *clientHello) marshal() ([]byte, error) {
 			return nil, err
 		}
 	}
-	var extensionStorage [18]orderedExtension
+	var extensionStorage [19]orderedExtension
 	extensions := extensionStorage[:0]
 	if serverName != nil {
 		extensions = append(extensions, orderedExtension{typ: extServerName, value: serverName})
@@ -978,6 +980,10 @@ func (h *clientHello) marshal() ([]byte, error) {
 	extensions = append(extensions, orderedExtension{typ: extKeyShare, value: ks})
 	if h.postHandshakeAuth {
 		extensions = append(extensions, orderedExtension{typ: extPostHandshakeAuth})
+	}
+	if h.ticketRequest.Enabled {
+		ticketRequest := [2]byte{h.ticketRequest.NewSessionCount, h.ticketRequest.ResumptionCount}
+		extensions = append(extensions, orderedExtension{typ: extTicketRequest, value: ticketRequest[:]})
 	}
 	if h.hasConnectionID {
 		extensions = append(extensions, orderedExtension{typ: extConnectionID, value: connectionID})
@@ -1048,7 +1054,7 @@ func parseClientHello(b []byte) (*clientHello, error) {
 		h.cipherSuites = append(h.cipherSuites, binary.BigEndian.Uint16(suites))
 		suites = suites[2:]
 	}
-	var extensionStorage [16]orderedExtension
+	var extensionStorage [18]orderedExtension
 	exts, err := parseOrderedExtensionsView(extBytes, extensionStorage[:0])
 	if err != nil {
 		return nil, err
@@ -1057,7 +1063,7 @@ func parseClientHello(b []byte) (*clientHello, error) {
 		switch extension.typ {
 		case extServerName, extSupportedGroups, extSignatureAlgorithms, extSignatureAlgorithmsCert, extALPN, extPadding, extCompressCertificate, extRecordSizeLimit,
 			extSupportedVersions, extCookie, extKeyShare, extPostHandshakeAuth,
-			extConnectionID, extReturnRoutability, extEarlyData, extPSKKeyExchangeModes, extPreSharedKey, extECH:
+			extConnectionID, extTicketRequest, extReturnRoutability, extEarlyData, extPSKKeyExchangeModes, extPreSharedKey, extECH:
 		default:
 			if h.unknownExtensions == nil {
 				h.unknownExtensions = make(map[uint16][]byte)
@@ -1142,6 +1148,12 @@ func parseClientHello(b []byte) (*clientHello, error) {
 		if err != nil {
 			return nil, err
 		}
+	}
+	if raw, ok := orderedExtensionValue(exts, extTicketRequest); ok {
+		if len(raw) != 2 {
+			return nil, alertError(alertDecodeError, &ProtocolError{"invalid ticket_request extension length"})
+		}
+		h.ticketRequest = SessionTicketRequest{Enabled: true, NewSessionCount: raw[0], ResumptionCount: raw[1]}
 	}
 	if raw, ok := orderedExtensionValue(exts, extCompressCertificate); ok {
 		h.certificateCompressionOffered = true

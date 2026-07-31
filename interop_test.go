@@ -352,6 +352,18 @@ func TestInteropWolfSSLServerSessionResumption(t *testing.T) {
 	})
 }
 
+func TestInteropWolfSSLServerTicketRequestFallback(t *testing.T) {
+	testInteropWolfSSLServerOptions(t, wolfSSLInteropOptions{
+		args:        []string{"-r"},
+		connections: 2,
+		configure: func(_ *testing.T, _ string, config *Config) {
+			config.ClientSessionCache = NewLRUClientSessionCache(2)
+			config.SessionTicketRequest = SessionTicketRequest{Enabled: true, NewSessionCount: 2, ResumptionCount: 1}
+		},
+		connected: requireResumptionOnSecondConnection,
+	})
+}
+
 func TestInteropWolfSSLServerMutualTLSSessionResumption(t *testing.T) {
 	testInteropWolfSSLServerOptions(t, wolfSSLInteropOptions{
 		args:                     []string{"-r"},

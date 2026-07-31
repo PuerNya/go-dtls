@@ -279,6 +279,8 @@ deadline、socket 关闭和底层 UDP 错误沿 Go `net` 错误模型返回；�
 | `MaxBufferedApplicationDatagrams` | 1024 条 |
 | `MaxPendingConnections` | 128 个 Listener session |
 | `MaxSessionQueueDatagrams` | 每个 Listener session 64 条 |
+| `SessionTicketRequest` | 默认关闭；客户端显式启用 RFC 9149，并分别请求完整/恢复握手后的 ticket 数量 |
+| `MaxSessionTickets` | 4；限制服务端响应 RFC 9149 请求时单次签发的 ticket 数量 |
 | `SessionTicketLifetime` | 24 小时，最大 7 天 |
 | `MaxEarlyData` | 0，即默认关闭 0-RTT |
 | `MaxConnectionIDs` | 每个方向 8 个 CID |
@@ -383,6 +385,23 @@ serverConfig := &dtls13.Config{
 
 续签 ticket 保留最初在线 `CertificateVerify` 的时间，`SessionTicketLifetime` 同时限制 ticket 寿命和这次客户端认证的总寿命。`VerifyPeerCertificate` 不在恢复时重跑；应用身份策略变化时应更换 `SessionTicketKey` 或禁用 session ticket。应用必须定期轮换显式 ticket key；本配置只有一个活动 key，更换后旧 ticket 立即失效。握手后的 PHA 不自动签发补充 ticket，需要 PHA 身份进入后续恢复时应重新建立完整 mTLS 连接。
 
+### 会话票据请求
+
+RFC 9149 允许客户端分别请求完整握手和恢复握手后需要的 ticket 数量。该扩展默认关闭；`Enabled: true` 时即使两个计数均为零也会发送扩展，从而明确请求本次连接不签发 ticket：
+
+```go
+clientConfig.SessionTicketRequest = dtls13.SessionTicketRequest{
+	Enabled:         true,
+	NewSessionCount: 4,
+	ResumptionCount: 1,
+}
+serverConfig.MaxSessionTickets = 4
+```
+
+服务端返回实际预计数量，并取请求值与 `MaxSessionTickets` 的较小者；该上限为零时默认使用 4，`SessionTicketsDisabled` 仍具有最高优先级。未启用扩展时保持原有的单 ticket 行为。多个 NewSessionTicket 使用同一个可靠 flight、独立 nonce/PSK/票据和连续 `message_seq`，继续由 DTLS ACK 与重传机制保证送达。
+
+内置 `NewLRUClientSessionCache` 会按 server key 有界保存最多 255 个请求到的 ticket，并为并发连接原子消费不同 identity。恢复被服务端拒绝且完成认证握手后，同一恢复族的其余 ticket 会失效。自定义 `ClientSessionCache` 保持原有单状态语义；若额外实现原子 `Take(string)`，库会继续使用它。
+
 支持的 cipher suite：
 
 | 常量 | ID | 状态 |
@@ -405,6 +424,7 @@ serverConfig := &dtls13.Config{
 | [RFC 9146](https://www.rfc-editor.org/rfc/rfc9146) | 完成 | CID 协商、方向性 CID、更新、Listener 路由、错误处理和地址保持完成；DTLS 1.2 专属细节不适用 |
 | [RFC 8449](https://www.rfc-editor.org/rfc/rfc8449) | 完成 | 默认 CH/EE 协商、方向独立限制、最小 64、超限 fatal `record_overflow`、HRR、恢复、0-RTT、KeyUpdate、ACK 与 PMTU 独立性完成 |
 | [RFC 8879](https://www.rfc-editor.org/rfc/rfc8879) | 完成 | 显式 opt-in zlib；CH/CertificateRequest 分方向协商，服务端证书及 mTLS/PHA 客户端证书、CompressedCertificate transcript、安全回退和解压上限完成 |
+| [RFC 9149](https://www.rfc-editor.org/rfc/rfc9149) | 完成 | 显式 opt-in `ticket_request(58)`、完整/恢复计数、HRR 不变量、服务端上限、可靠多个 NST、并发一次性 cache 消费和同族失效完成 |
 | [RFC 9257](https://www.rfc-editor.org/rfc/rfc9257) | 完成 | 外部 PSK 至少 128 bit、DHE-only、opaque identity、多身份、证书回退和身份隐私已实现，pairwise/角色部署约束已明确记录 |
 | [RFC 9258](https://www.rfc-editor.org/rfc/rfc9258) | 完成 | `ImportedIdentity`、DTLS `0xfefc`、SHA-256/384 target KDF、EPSK source hash、`dtls13derived psk` 和 `imp binder` 完成 |
 | [RFC 9848](https://www.rfc-editor.org/rfc/rfc9848) | 完成/应用集成 | 接收 DNS `ech` 参数解码后的完整 ECHConfigList；SVCB/HTTPS 查询和 Base64 解码由应用承担 |
@@ -458,6 +478,7 @@ serverConfig := &dtls13.Config{
 | [RFC 9846](https://www.rfc-editor.org/rfc/rfc9846) | TLS 1.3 的 KeyShare、PSK/HRR、NST、AEAD limit、KeyUpdate、alert 和 vector 边界 | 已启用范围完成；mTLS 恢复保留认证状态、策略/CA/有效期及总认证寿命；`user_canceled` 和 `general_error` 语义见总体状态 |
 | [RFC 8449](https://www.rfc-editor.org/rfc/rfc8449) | TLS/DTLS `record_size_limit` | 客户端默认主动提供，服务端仅响应收到的 offer；发送服从 peer limit、接收服从 local limit，未协商时保持协议最大值；PMTU 仍独立取更小约束 |
 | [RFC 8879](https://www.rfc-editor.org/rfc/rfc8879) | TLS/DTLS Certificate Compression | 显式 opt-in 标准 zlib；CH/CR 协商、服务端与客户端证书、HRR、mTLS、PHA、分片/重传、transcript 和有界解压完成；不更小时回退普通 Certificate |
+| [RFC 9149](https://www.rfc-editor.org/rfc/rfc9149) | TLS/DTLS 1.3 Ticket Requests | 客户端可分别请求完整/恢复连接的 ticket 数；服务端以有界 expected count 响应，多个 NST 可靠发送，扩展缺席时保持单 ticket |
 | [RFC 9257](https://www.rfc-editor.org/rfc/rfc9257) | TLS 1.3 external PSK 使用指导 | DHE-only、多身份、未知身份回退、明文 identity 风险、票据来源绑定及外部 PSK 0-RTT 禁用策略完成 |
 | [RFC 9258](https://www.rfc-editor.org/rfc/rfc9258) | TLS/DTLS 1.3 PSK Importer | SHA-256/384 目标派生、DTLS label、ImportedIdentity wire 和独立 binder label 完成 |
 | [RFC 9848](https://www.rfc-editor.org/rfc/rfc9848) | ECH DNS 配置引导 | 库解析完整 ECHConfigList；DNS SVCB/HTTPS 获取和 presentation-format Base64 解码属于应用集成 |
@@ -468,7 +489,7 @@ serverConfig := &dtls13.Config{
 | [RFC 9853](https://www.rfc-editor.org/rfc/rfc9853) | CID 地址变化的 Return Routability Check | 完成；默认 enhanced check，旧路径失效后执行 basic check，验证成功才 rebind；候选路径执行独立放大限制，并在可用时使用 spare CID 探测 |
 | [RFC 8701](https://www.rfc-editor.org/rfc/rfc8701) | GREASE 抗僵化 | 接收端容忍合法未知值并保持 HRR 不变量；发送端不主动生成 GREASE |
 
-未实现的可选扩展包括 RFC 9149 Ticket Requests。
+尚未实现的可选扩展包括 RFC 9261 Exported Authenticators 与 RFC 9345 Delegated Credentials。
 
 ### 范围边界
 
@@ -477,9 +498,9 @@ serverConfig := &dtls13.Config{
 - 本模块只实现 DTLS 1.3，不提供 DTLS 1.2 回退，因此不声称完整符合 RFC 9325 对通用实现支持 DTLS 1.2 的要求。
 - Heartbeat 的 record demux 已实现；完整 Heartbeat 协议由 RFC 6520 定义，不属于 RFC 9147 范围。
 - 发送端采用一条 record 一个 UDP datagram 的合法模式，未暴露可选的多 record 聚合 API。
-- 未暴露并行多个 NewSessionTicket 或 PHA 请求；RFC 允许但不要求这些并行能力。
+- 未暴露并行多个 PHA 请求；RFC 允许但不要求该能力。
 - RRC 自动 rebind 依赖 transport 能接收不同来源并定向发送；标准 Listener 支持，connected UDP 客户端受操作系统 peer 过滤约束。空 CID 不能跨五元组唯一路由。
-- wolfSSL master `f699037`（版本字符串 5.9.2）互通构建支持 CID、KeyUpdate、PHA、session ticket、0-RTT、`SESSION_CERTS`、direct external PSK 和三个 hybrid group，但不实现 RFC 8449、RFC 8879、RFC 9258 importer 或 RFC 9853 RRC。其 ECH/HPKE 构建无法完成 DTLS accepted-ECH 握手，因此只记录成功的 GREASE ECH 普通握手，不声称 accepted-ECH 互通。Hybrid 互通中，wolfSSL 客户端方向三组均通过，服务端方向通过 X25519/P-256 hybrid；其服务端不能完成分片 hybrid ClientHello，且 P-384 hybrid 即使未分片仍超时。对端其他限制为：服务端 HRR 拒绝本库客户端 0-RTT；客户端不能解析本库 1421 字节 mTLS ticket；客户端在最终 ACK 丢失后不重传 Finished。
+- wolfSSL master `c99dafc`（版本字符串 5.9.2）互通构建支持 CID、KeyUpdate、PHA、session ticket、0-RTT、`SESSION_CERTS`、direct external PSK 和三个 hybrid group，但不实现 RFC 8449、RFC 8879、RFC 9149、RFC 9258 importer 或 RFC 9853 RRC。其服务端会忽略本库客户端的 `ticket_request` 并保持普通恢复；这只证明兼容回退。其 ECH/HPKE 构建无法完成 DTLS accepted-ECH 握手，因此只记录成功的 GREASE ECH 普通握手，不声称 accepted-ECH 互通。Hybrid 互通中，wolfSSL 客户端方向三组均通过，服务端方向通过 X25519/P-256 hybrid；其服务端不能完成分片 hybrid ClientHello，且 P-384 hybrid 即使未分片仍超时。对端其他限制为：服务端 HRR 拒绝本库客户端 0-RTT；客户端不能解析本库 1421 字节 mTLS ticket；客户端在最终 ACK 丢失后不重传 Finished。
 
 ## Benchmark
 
@@ -509,6 +530,7 @@ go test -run '^$' -bench '^BenchmarkProtectedRecord(Seal|RoundTripInPlace)$' -be
 - RFC 9325 证书策略专项覆盖服务端配置、客户端接收、自签名、未发送信任锚、`InsecureSkipVerify`、普通恢复和 mTLS 恢复，并与 `crypto/x509` 对 1024 位 RSA/SHA-1 trust anchor 的行为做差分。
 - RFC 8449 测试覆盖 CH/EE、最小 64、方向独立限制、非法值与扩展组合、authenticated 超限、HRR、恢复、0-RTT、KeyUpdate、ACK、PMTU 独立性和未协商第三方兼容性。
 - RFC 8879 测试覆盖 CH/CertificateRequest 协商、zlib、CompressedCertificate、transcript、非法算法/压缩流/长度、解压上限、普通 Certificate 回退、HRR、恢复、mTLS/PHA、record limit、分片重传、弱网、资源生命周期和第三方不支持时的安全回退。
+- RFC 9149 测试覆盖 CH/EE wire、严格扩展位置和 alert、HRR 不变量、完整/恢复/零计数、服务端上限、多个可靠 NST、并发 cache 消费、同族失效、弱网、真实 UDP 和第三方忽略扩展时的恢复回退。
 - RFC 9257/9258 测试覆盖独立 importer 派生、SHA-256/384 KDF 隔离、`imp/ext` binder 隔离、直接与导入 PSK、多 identity、HRR 过滤、identity/key/context 错误、证书回退、连接状态、ticket 恢复与撤销、0-RTT 策略及弱网。
 - RFC 9848/9849 测试覆盖公开配置向量、ECHConfig/ECHConfigList、HPKE、Inner/Outer 与 padding、outer extension 重建、HRR accept confirmation 和降级拒绝、认证 retry configs、客户端证书抑制、GREASE、恢复、0-RTT、分片、弱网和真实 UDP。
 - 弱网测试覆盖双向丢包、延迟、乱序和重复，以及 CH/SH/Finished/ACK/HRR/mTLS 恢复组合。
@@ -516,7 +538,7 @@ go test -run '^$' -bench '^BenchmarkProtectedRecord(Seal|RoundTripInPlace)$' -be
 - RFC 9846 alert 测试覆盖握手、final ACK 等待、握手后乱序、`close_notify` 和本地加密失败。
 - RFC 9853 测试覆盖 RRC message/状态机、真实 UDP NAT rebind、CID 更新、弱网组合和连接资源生命周期。
 - parser/record fuzz 覆盖四套 AEAD 的复制与原地解密差分。
-- wolfSSL master `f699037` 双向真实 UDP 互通测试覆盖 HRR、RSA-PSS 证书握手、Finished ACK、应用数据、AES-GCM、AES-128-CCM、direct external PSK、CID、KeyUpdate、PHA、普通 session resumption 和受支持方向的三个 hybrid group；另覆盖本库客户端发起的 immediate CID 切换、mTLS 恢复、丢最终 ACK 后的 Finished 重传，以及 wolfSSL 客户端发起的 0-RTT。ECH 只验证 GREASE 回退；对端当前无法完成 DTLS accepted-ECH。
+- wolfSSL master `c99dafc` 双向真实 UDP 互通测试覆盖 HRR、RSA-PSS 证书握手、Finished ACK、应用数据、AES-GCM、AES-128-CCM、direct external PSK、CID、KeyUpdate、PHA、普通 session resumption 和受支持方向的三个 hybrid group；另覆盖本库客户端发起的 RFC 9149 未协商回退、immediate CID 切换、mTLS 恢复、丢最终 ACK 后的 Finished 重传，以及 wolfSSL 客户端发起的 0-RTT。ECH 只验证 GREASE 回退；对端当前无法完成 DTLS accepted-ECH。
 
 开发环境、必需检查、性能验证和提交规范见 [CONTRIBUTING.md](CONTRIBUTING.md)。
 

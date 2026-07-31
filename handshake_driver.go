@@ -3,6 +3,7 @@ package dtls13
 import (
 	"context"
 	"crypto"
+	"crypto/sha256"
 	"crypto/subtle"
 	"crypto/tls"
 	"crypto/x509"
@@ -615,6 +616,9 @@ func (c *Conn) clientHandshake() error {
 		keyShares = append(keyShares, keyShareEntry{group: group, data: public})
 	}
 	hello := &clientHello{cipherSuites: append([]uint16(nil), c.config.CipherSuites...), keyShares: keyShares, supportedGroups: c.config.CurvePreferences, signatureSchemes: defaultSignatureSchemes(), serverName: c.config.ServerName, alpn: c.config.NextProtos, postHandshakeAuth: c.config.PostHandshakeAuth, recordSizeLimit: c.config.RecordSizeLimit, hasRecordSizeLimit: true}
+	if c.config.SessionTicketRequest.Enabled {
+		hello.ticketRequest = c.config.SessionTicketRequest
+	}
 	if c.config.EnableCertificateCompression {
 		hello.certificateCompressionOffered = true
 	}
@@ -1102,6 +1106,13 @@ func (c *Conn) clientHandshake() error {
 				if parseErr != nil {
 					return parseErr
 				}
+				if ee.hasTicketRequest {
+					requested := hello.ticketRequest.NewSessionCount
+					if resumed {
+						requested = hello.ticketRequest.ResumptionCount
+					}
+					c.sessionTicketRequest = &sessionTicketRequestState{limit: min(ee.expectedTicketCount, requested)}
+				}
 				if retryConfigs != nil {
 					if ech != nil && echAccepted {
 						return alertError(alertUnsupportedExtension, &ProtocolError{"server sent ECH retry configurations after accepting ECH"})
@@ -1315,6 +1326,13 @@ func (c *Conn) clientHandshake() error {
 	}
 	c.resumptionSuite = suite
 	c.resumptionMasterSecret = append([]byte(nil), schedule.resumptionMasterSecret...)
+	if c.sessionTicketRequest != nil {
+		if resumed {
+			c.sessionTicketRequest.group = selectedOffer.session.ticketGroup
+		} else {
+			c.sessionTicketRequest.group = sha256.Sum256(c.resumptionMasterSecret)
+		}
+	}
 	c.postHandshakeTranscript = transcript.clone()
 	if err = c.receiveEpochs.install(receiveCipher); err != nil {
 		return err
@@ -1327,6 +1345,9 @@ func (c *Conn) clientHandshake() error {
 	c.mu.Lock()
 	c.state = ConnectionState{Version: VersionDTLS13, HandshakeComplete: true, DidResume: resumed, ECHAccepted: echAccepted, CipherSuite: suite.id, NegotiatedProtocol: negotiated, ServerName: c.config.ServerName, PeerCertificates: peerCerts, VerifiedChains: chains, LocalConnectionID: append([]byte(nil), c.receiveConnectionID...), PeerConnectionID: append([]byte(nil), c.sendConnectionID...), ReturnRoutabilityCheck: c.returnRoutabilityCheckNegotiated, RecordSizeLimitNegotiated: c.recordSizeLimitNegotiated, LocalRecordSizeLimit: c.localRecordSizeLimit, PeerRecordSizeLimit: c.peerRecordSizeLimit, exporter: exporter}
 	c.mu.Unlock()
+	if clientSession != nil && !resumed {
+		discardClientSessionGroup(c.config, c.conn, clientSession.ticketGroup)
+	}
 	return nil
 }
 
@@ -1365,6 +1386,7 @@ func equalClientHelloAfterHRR(initial, second *clientHello, requestedGroup tls.C
 		initial.hasConnectionID == second.hasConnectionID &&
 		initial.returnRoutability == second.returnRoutability &&
 		initial.postHandshakeAuth == second.postHandshakeAuth &&
+		initial.ticketRequest == second.ticketRequest &&
 		initial.certificateCompressionOffered == second.certificateCompressionOffered &&
 		initial.recordSizeLimit == second.recordSizeLimit &&
 		initial.hasRecordSizeLimit == second.hasRecordSizeLimit &&
@@ -1790,9 +1812,23 @@ func (c *Conn) serverHandshake() error {
 	if !hrrUsed {
 		serverFlightConn = preValidationConn
 	}
+	ticketCount := uint8(1)
+	if ch.ticketRequest.Enabled {
+		ticketCount = ch.ticketRequest.NewSessionCount
+		if resumed {
+			ticketCount = ch.ticketRequest.ResumptionCount
+		}
+		ticketCount = min(ticketCount, c.config.MaxSessionTickets)
+	}
+	if c.config.SessionTicketsDisabled {
+		ticketCount = 0
+	}
 	ee := &encryptedExtensions{recordSizeLimit: c.config.RecordSizeLimit, hasRecordSizeLimit: ch.hasRecordSizeLimit}
-	if negotiated != "" || c.earlyAccepted || echRejected {
-		ee.extensions = make(map[uint16][]byte, 3)
+	if negotiated != "" || c.earlyAccepted || echRejected || ch.ticketRequest.Enabled {
+		ee.extensions = make(map[uint16][]byte, 4)
+	}
+	if ch.ticketRequest.Enabled {
+		ee.extensions[extTicketRequest] = []byte{ticketCount}
 	}
 	if negotiated != "" {
 		ee.extensions[extALPN], err = marshalALPN([]string{negotiated})
@@ -2036,7 +2072,7 @@ func (c *Conn) serverHandshake() error {
 	if !usingPSK && len(clientCerts) > 0 {
 		clientAuthAt = c.config.Time().Unix()
 	}
-	if err = c.sendNewSessionTicket(schedule, suite, ch.serverName, negotiated, clientAuthAt, clientCerts, clientChains, externalPSK); err != nil {
+	if err = c.sendNewSessionTickets(schedule, suite, ticketCount, ch.serverName, negotiated, clientAuthAt, clientCerts, clientChains, externalPSK); err != nil {
 		return err
 	}
 	return nil

@@ -164,6 +164,7 @@ type Conn struct {
 	hasCompletedPeerFlight           bool
 	resumptionSuite                  *cipherSuite
 	resumptionMasterSecret           []byte
+	sessionTicketRequest             *sessionTicketRequestState
 	ticketFlight                     *flight
 	postHandshakeReassembly          *reassembler
 	protectedHandshakeRanges         []protectedHandshakeRecordRange
@@ -1017,7 +1018,7 @@ func (c *Conn) dispatchDatagramFrom(datagram []byte, from net.Addr) error {
 							if reassemblyErr = c.rememberProtectedHandshakeRange(firstRecord, lastRecord); reassemblyErr != nil {
 								return reassemblyErr
 							}
-							if err := c.processNewSessionTicket(body); err != nil {
+							if err := c.processNewSessionTicket(fragment.messageSequence, body); err != nil {
 								return err
 							}
 						}

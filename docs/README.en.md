@@ -274,6 +274,8 @@ Where TLS 1.3 semantics match, `Config` follows `crypto/tls.Config`. A configura
 | `MaxBufferedApplicationDatagrams` | 1024 datagrams |
 | `MaxPendingConnections` | 128 Listener sessions |
 | `MaxSessionQueueDatagrams` | 64 datagrams per Listener session |
+| `SessionTicketRequest` | Disabled by default; clients explicitly enable RFC 9149 and request separate ticket counts after full and resumed handshakes |
+| `MaxSessionTickets` | 4; bounds the number of tickets a server issues for one RFC 9149 request |
 | `SessionTicketLifetime` | 24 hours, maximum 7 days |
 | `MaxEarlyData` | 0, so 0-RTT is disabled by default |
 | `MaxConnectionIDs` | 8 CIDs per direction |
@@ -378,6 +380,23 @@ A ticket without client identity is used for resumption only when `ClientAuth ==
 
 A renewed ticket retains the time of the original online `CertificateVerify`. `SessionTicketLifetime` limits both the ticket lifetime and the total lifetime of that client authentication. `VerifyPeerCertificate` is not rerun on resumption; rotate `SessionTicketKey` or disable session tickets when application identity policy changes. Applications must periodically rotate explicit ticket keys. This configuration has one active key, so changing it immediately invalidates older tickets. Post-handshake PHA does not issue a supplemental ticket automatically; establish a new full mTLS connection if the PHA identity must be available to later resumptions.
 
+### Session Ticket Requests
+
+RFC 9149 lets a client request different ticket counts after full and resumed handshakes. The extension is disabled by default. With `Enabled: true`, even two zero counts send the extension and explicitly request no tickets for that connection:
+
+```go
+clientConfig.SessionTicketRequest = dtls13.SessionTicketRequest{
+	Enabled:         true,
+	NewSessionCount: 4,
+	ResumptionCount: 1,
+}
+serverConfig.MaxSessionTickets = 4
+```
+
+The server returns its expected count and uses the smaller of the request and `MaxSessionTickets`. A zero server limit defaults to 4, while `SessionTicketsDisabled` still takes precedence. Without the extension, the existing one-ticket behavior is preserved. Multiple NewSessionTicket messages use one reliable flight with distinct nonces, PSKs, tickets, and consecutive `message_seq` values, retaining DTLS ACK and retransmission reliability.
+
+The built-in `NewLRUClientSessionCache` retains up to 255 requested tickets per server key and atomically consumes distinct identities for concurrent connections. When resumption is rejected and the authenticated handshake completes, sibling tickets from the same resumption family are invalidated. Custom `ClientSessionCache` implementations retain their existing single-state semantics; an optional atomic `Take(string)` method continues to be honored.
+
 Supported cipher suites:
 
 | Constant | ID | Status |
@@ -400,6 +419,7 @@ Normative keywords are interpreted according to BCP 14. `MUST`, `MUST NOT`, `REQ
 | [RFC 9146](https://www.rfc-editor.org/rfc/rfc9146) | Complete | CID negotiation, directional CIDs, updates, Listener routing, error handling, and address retention; DTLS 1.2-only details do not apply |
 | [RFC 8449](https://www.rfc-editor.org/rfc/rfc8449) | Complete | Default CH/EE negotiation, directional limits, minimum 64, fatal `record_overflow`, HRR, resumption, 0-RTT, KeyUpdate, ACK, and PMTU independence |
 | [RFC 8879](https://www.rfc-editor.org/rfc/rfc8879) | Complete | Explicit opt-in zlib; directional ClientHello/CertificateRequest negotiation, server and mTLS/PHA client certificates, CompressedCertificate transcripts, safe fallback, and decompression bounds |
+| [RFC 9149](https://www.rfc-editor.org/rfc/rfc9149) | Complete | Explicit opt-in `ticket_request(58)`, full/resumed counts, HRR invariants, a server cap, reliable multiple NSTs, concurrent single-use cache consumption, and sibling invalidation |
 | [RFC 9257](https://www.rfc-editor.org/rfc/rfc9257) | Complete | At least 128-bit external PSKs, DHE-only handshakes, opaque identities, multiple identities, certificate fallback, privacy guidance, and pairwise/role deployment requirements are covered |
 | [RFC 9258](https://www.rfc-editor.org/rfc/rfc9258) | Complete | `ImportedIdentity`, DTLS `0xfefc`, SHA-256/384 target KDFs, the EPSK source hash, `dtls13derived psk`, and `imp binder` are implemented |
 | [RFC 9848](https://www.rfc-editor.org/rfc/rfc9848) | Complete/application integration | Accepts the complete ECHConfigList decoded from a DNS `ech` parameter; SVCB/HTTPS lookup and Base64 decoding belong to the application |
@@ -453,6 +473,7 @@ This table contains all 11 `Normative References` from the RFC Editor XML for RF
 | [RFC 9846](https://www.rfc-editor.org/rfc/rfc9846) | TLS 1.3 KeyShare, PSK/HRR, NST, AEAD limits, KeyUpdate, alerts, and vector bounds | Complete for enabled features; mTLS resumption preserves authentication state, policy/CA/validity, and total authentication lifetime; see Overall Status for `user_canceled` and `general_error` |
 | [RFC 8449](https://www.rfc-editor.org/rfc/rfc8449) | TLS/DTLS `record_size_limit` | Clients advertise it by default; servers respond only to an offer. Sending follows the peer limit, receiving follows the local limit, absence restores the protocol maximum, and PMTU remains an independent lower bound |
 | [RFC 8879](https://www.rfc-editor.org/rfc/rfc8879) | TLS/DTLS Certificate Compression | Explicit opt-in standard zlib; CH/CR negotiation, server and client certificates, HRR, mTLS, PHA, fragmentation/retransmission, transcripts, and bounded decompression are complete; plain Certificate is used when smaller |
+| [RFC 9149](https://www.rfc-editor.org/rfc/rfc9149) | TLS/DTLS 1.3 Ticket Requests | Clients can request separate ticket counts for full and resumed connections; servers return a bounded expected count, send multiple NSTs reliably, and preserve one-ticket behavior when absent |
 | [RFC 9257](https://www.rfc-editor.org/rfc/rfc9257) | TLS 1.3 external PSK guidance | DHE-only use, multiple identities, unknown-identity fallback, cleartext identity risks, ticket-origin binding, and the external-PSK 0-RTT policy are implemented |
 | [RFC 9258](https://www.rfc-editor.org/rfc/rfc9258) | TLS/DTLS 1.3 PSK Importer | SHA-256/384 target derivation, the DTLS label, ImportedIdentity wire encoding, and the distinct binder label are implemented |
 | [RFC 9848](https://www.rfc-editor.org/rfc/rfc9848) | ECH DNS configuration bootstrapping | The library parses a complete ECHConfigList; DNS SVCB/HTTPS retrieval and presentation-format Base64 decoding are application integration |
@@ -463,7 +484,7 @@ This table contains all 11 `Normative References` from the RFC Editor XML for RF
 | [RFC 9853](https://www.rfc-editor.org/rfc/rfc9853) | Return Routability Check for CID address changes | Complete; enhanced check by default, basic check after the old path fails, rebind only after validation, independent candidate-path amplification limit, and spare-CID probing when available |
 | [RFC 8701](https://www.rfc-editor.org/rfc/rfc8701) | GREASE anti-ossification | Receivers tolerate valid unknown values while preserving HRR invariants; senders do not actively generate GREASE |
 
-Unsupported optional extensions include RFC 9149 Ticket Requests.
+Optional extensions not implemented include RFC 9261 Exported Authenticators and RFC 9345 Delegated Credentials.
 
 ### Scope Boundaries
 
@@ -472,9 +493,9 @@ The following items do not reduce completion of mandatory RFC 9147 semantics, bu
 - This module implements only DTLS 1.3 and provides no DTLS 1.2 fallback; it therefore does not claim full RFC 9325 compliance with the BCP requirement that general-purpose implementations support DTLS 1.2.
 - Heartbeat record demultiplexing is implemented; the complete Heartbeat protocol is defined by RFC 6520 and is outside RFC 9147 scope.
 - The sender uses the valid one-record-per-UDP-datagram mode and exposes no optional multi-record aggregation API.
-- Concurrent multiple NewSessionTicket or PHA requests are not exposed; the RFC permits but does not require this capability.
+- Concurrent multiple PHA requests are not exposed; the RFC permits but does not require this capability.
 - Automatic RRC rebinding requires a transport that receives from different sources and can send to a selected destination. The standard Listener supports this; connected UDP clients are constrained by operating-system peer filtering. An empty CID cannot uniquely route across five-tuples.
-- The wolfSSL master `f699037` build (version string 5.9.2) supports CID, KeyUpdate, PHA, session tickets, 0-RTT, `SESSION_CERTS`, direct external PSKs, and all three hybrid groups, but not RFC 8449, RFC 8879, the RFC 9258 importer, or RFC 9853 RRC. Its ECH/HPKE build cannot complete a DTLS accepted-ECH handshake, so only the successful ordinary handshake with ECH GREASE is recorded; accepted-ECH interoperability is not claimed. For hybrid key exchange, all three groups pass with wolfSSL as the client, while its server passes the X25519 and P-256 hybrids; that server cannot complete a fragmented hybrid ClientHello, and the P-384 hybrid times out even without fragmentation. Other peer limits are explicit: the server's HRR rejects go-dtls client 0-RTT; the client cannot parse the 1421-byte go-dtls mTLS ticket; and the client does not retransmit Finished after losing the final ACK.
+- The wolfSSL master `c99dafc` build (version string 5.9.2) supports CID, KeyUpdate, PHA, session tickets, 0-RTT, `SESSION_CERTS`, direct external PSKs, and all three hybrid groups, but not RFC 8449, RFC 8879, RFC 9149, the RFC 9258 importer, or RFC 9853 RRC. Its server ignores the go-dtls client's `ticket_request` and preserves ordinary resumption; this proves fallback compatibility only. Its ECH/HPKE build cannot complete a DTLS accepted-ECH handshake, so only the successful ordinary handshake with ECH GREASE is recorded; accepted-ECH interoperability is not claimed. For hybrid key exchange, all three groups pass with wolfSSL as the client, while its server passes the X25519 and P-256 hybrids; that server cannot complete a fragmented hybrid ClientHello, and the P-384 hybrid times out even without fragmentation. Other peer limits are explicit: the server's HRR rejects go-dtls client 0-RTT; the client cannot parse the 1421-byte go-dtls mTLS ticket; and the client does not retransmit Finished after losing the final ACK.
 
 ## Benchmark
 
@@ -504,6 +525,7 @@ The repository also includes focused benchmarks for cipher suites, ACK, records/
 - RFC 9325 certificate-policy tests cover server configuration, client reception, self-signed certificates, unsent trust anchors, `InsecureSkipVerify`, ordinary resumption, and mTLS resumption, with differential behavior against `crypto/x509` for 1024-bit RSA/SHA-1 trust anchors.
 - RFC 8449 tests cover CH/EE, the minimum of 64, directional limits, invalid values and extension combinations, authenticated overflow, HRR, resumption, 0-RTT, KeyUpdate, ACK, PMTU independence, and compatibility with third parties that do not negotiate it.
 - RFC 8879 tests cover ClientHello/CertificateRequest negotiation, zlib, CompressedCertificate, transcripts, invalid algorithms/streams/lengths, decompression limits, plain-Certificate fallback, HRR, resumption, mTLS/PHA, record limits, fragmentation/retransmission, weak networks, resource lifecycles, and safe fallback with third parties that do not support it.
+- RFC 9149 tests cover CH/EE wire encoding, strict extension placement and alerts, HRR invariants, full/resumed/zero counts, server caps, reliable multiple NSTs, concurrent cache consumption, sibling invalidation, weak networks, real UDP, and resumption fallback when a third party ignores the extension.
 - RFC 9257/9258 tests cover independent importer derivation, SHA-256/384 KDF separation, `imp`/`ext` binder separation, direct and imported PSKs, multiple identities, HRR filtering, identity/key/context failures, certificate fallback, connection state, ticket resumption and revocation, the 0-RTT policy, and weak networks.
 - RFC 9848/9849 tests cover public configuration vectors, ECHConfig/ECHConfigList, HPKE, Inner/Outer and padding, outer-extension reconstruction, HRR acceptance confirmation and downgrade rejection, authenticated retry configurations, client-certificate suppression, GREASE, resumption, 0-RTT, fragmentation, weak networks, and real UDP.
 - Weak-network tests cover bidirectional loss, delay, reordering, and duplication, including CH/SH/Finished/ACK/HRR/mTLS-resumption combinations.
@@ -511,7 +533,7 @@ The repository also includes focused benchmarks for cipher suites, ACK, records/
 - RFC 9846 alert tests cover handshake processing, final-ACK waiting, post-handshake reordering, `close_notify`, and local cryptographic failure.
 - RFC 9853 tests cover RRC messages/state machines, real UDP NAT rebinding, CID updates, weak-network combinations, and connection resource lifecycles.
 - Parser/record fuzzing covers copy and in-place decryption differentials for all four AEADs.
-- Bidirectional real-UDP tests with wolfSSL master `f699037` cover HRR, RSA-PSS certificate handshakes, Finished ACK, application data, AES-GCM, AES-128-CCM, direct external PSKs, CID, KeyUpdate, PHA, ordinary session resumption, and all three hybrid groups in the directions supported by the peer. Additional supported directions cover go-dtls-initiated immediate CID switching, mTLS resumption, and Finished retransmission after final-ACK loss, plus wolfSSL-client-initiated 0-RTT. ECH coverage is limited to GREASE fallback because the peer cannot currently complete DTLS accepted-ECH.
+- Bidirectional real-UDP tests with wolfSSL master `c99dafc` cover HRR, RSA-PSS certificate handshakes, Finished ACK, application data, AES-GCM, AES-128-CCM, direct external PSKs, CID, KeyUpdate, PHA, ordinary session resumption, and all three hybrid groups in the directions supported by the peer. Additional supported directions cover go-dtls-initiated RFC 9149 non-negotiation fallback, immediate CID switching, mTLS resumption, and Finished retransmission after final-ACK loss, plus wolfSSL-client-initiated 0-RTT. ECH coverage is limited to GREASE fallback because the peer cannot currently complete DTLS accepted-ECH.
 
 See [CONTRIBUTING.en.md](CONTRIBUTING.en.md) for the development environment, required checks, performance validation, and commit rules.
 

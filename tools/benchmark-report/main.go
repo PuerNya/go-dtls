@@ -307,6 +307,11 @@ var benchmarkFeatureLabels = map[string][3]string{
 		"会话恢复握手",
 		"Рукопожатие с возобновлением сеанса",
 	},
+	"SessionTicketRequest": {
+		"Full handshake + 4 acknowledged session tickets",
+		"完整握手 + 4 个已确认会话票据",
+		"Полное рукопожатие + 4 подтвержденных билета сеанса",
+	},
 }
 
 var benchmarkPartTranslations = map[string][3]string{
@@ -391,6 +396,7 @@ var benchmarkDisplayOrders = map[string]int{
 	"ConnectionHandshakeLifecycle":                                     10,
 	"MutualTLSHandshakeLifecycle/Full":                                 20,
 	"MutualTLSHandshakeLifecycle/Resumed":                              30,
+	"SessionTicketRequestHandshakeLifecycle":                           35,
 	"ExternalPSKHandshakeLifecycle":                                    40,
 	"CertificateCompressionHandshakeLifecycle/ServerCertificate/Plain": 50,
 	"CertificateCompressionHandshakeLifecycle/ServerCertificate/Zlib":  60,
@@ -874,6 +880,8 @@ func benchmarkFeatureLabel(parts []string, language int) (string, bool) {
 		key = "Connection"
 	case "ExternalPSKHandshakeLifecycle":
 		key = "ExternalPSK"
+	case "SessionTicketRequestHandshakeLifecycle":
+		key = "SessionTicketRequest"
 	}
 	labels, ok := benchmarkFeatureLabels[key]
 	if !ok {

@@ -196,11 +196,11 @@ type weakNetworkConn struct {
 	held    []byte
 }
 
-func (c *weakNetworkConn) setEnabled(enabled bool) {
+func (c *weakNetworkConn) disable() {
 	c.mu.Lock()
 	held := c.held
 	c.held = nil
-	c.enabled = enabled
+	c.enabled = false
 	c.mu.Unlock()
 	if len(held) > 0 {
 		_, _ = c.Conn.Write(held)
@@ -906,8 +906,8 @@ func TestHandshakeStableUnderLossDelayReorderingAndDuplication(t *testing.T) {
 	if err := <-serverErr; err != nil {
 		t.Fatal(err)
 	}
-	clientWire.setEnabled(false)
-	serverWire.setEnabled(false)
+	clientWire.disable()
+	serverWire.disable()
 	payload := bytes.Repeat([]byte("weak-network"), 90)
 	writeErr := make(chan error, 1)
 	go func() { _, err := client.WriteDatagram(payload); writeErr <- err }()

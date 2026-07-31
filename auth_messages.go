@@ -14,12 +14,14 @@ const (
 )
 
 type encryptedExtensions struct {
-	extensions         map[uint16][]byte
-	recordSizeLimit    uint16
-	hasRecordSizeLimit bool
-	parsedStorage      [8]orderedExtension
-	parsedOverflow     []orderedExtension
-	parsedCount        int
+	extensions          map[uint16][]byte
+	recordSizeLimit     uint16
+	hasRecordSizeLimit  bool
+	parsedStorage       [8]orderedExtension
+	parsedOverflow      []orderedExtension
+	parsedCount         int
+	expectedTicketCount uint8
+	hasTicketRequest    bool
 }
 
 func (m *encryptedExtensions) marshal() ([]byte, error) {
@@ -141,6 +143,17 @@ func validateEncryptedExtensions(hello *clientHello, message *encryptedExtension
 		return "", false, nil, alertError(alertIllegalParameter, &ProtocolError{"record_size_limit and max_fragment_length cannot both be negotiated"})
 	}
 	validate := func(typ uint16, raw []byte) error {
+		if typ == extTicketRequest {
+			if !hello.ticketRequest.Enabled {
+				return alertError(alertUnsupportedExtension, &ProtocolError{"unsolicited ticket_request response"})
+			}
+			if len(raw) != 1 {
+				return alertError(alertDecodeError, &ProtocolError{"invalid ticket_request response length"})
+			}
+			message.expectedTicketCount = raw[0]
+			message.hasTicketRequest = true
+			return nil
+		}
 		if typ == extECH {
 			if _, _, validateErr := validateEncryptedExtension(hello, typ, raw); validateErr != nil {
 				return validateErr

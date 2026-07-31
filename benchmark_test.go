@@ -5,6 +5,7 @@ import (
 	"crypto/sha256"
 	"crypto/tls"
 	"fmt"
+	"runtime"
 	"testing"
 	"time"
 )
@@ -46,6 +47,59 @@ func BenchmarkConnectionHandshakeLifecycle(b *testing.B) {
 		_ = right.Close()
 		if clientErr != nil || serverErr != nil {
 			b.Fatalf("handshake failed: client=%v server=%v", clientErr, serverErr)
+		}
+	}
+}
+
+func BenchmarkSessionTicketRequestHandshakeLifecycle(b *testing.B) {
+	certificate, roots := testServerCertificate(b)
+	var ticketKey [32]byte
+	ticketKey[0] = 1
+	clientConfig := &Config{
+		RootCAs: roots, ServerName: "server.test", SessionTicketRequest: SessionTicketRequest{Enabled: true, NewSessionCount: 4, ResumptionCount: 1},
+		HandshakeTimeout: time.Second,
+	}
+	serverConfig := &Config{
+		Certificates: []tls.Certificate{certificate}, SessionTicketKey: ticketKey, MaxSessionTickets: 4,
+		HandshakeTimeout: time.Second,
+	}
+	b.ReportAllocs()
+	for b.Loop() {
+		cache := NewLRUClientSessionCache(1).(*lruSessionCache)
+		clientConfig.ClientSessionCache = cache
+		left, right := memoryDatagramPair()
+		client := Client(left, clientConfig)
+		server := Server(right, serverConfig)
+		serverDone := make(chan error, 1)
+		go func() { serverDone <- server.Handshake() }()
+		clientErr := client.Handshake()
+		serverErr := <-serverDone
+		if clientErr == nil && serverErr == nil {
+			deadline := time.Now().Add(time.Second)
+			for {
+				cache.mu.Lock()
+				element := cache.entries["server.test"]
+				count := 0
+				if element != nil {
+					count = len(element.Value.(*sessionCacheEntry).states)
+				}
+				cache.mu.Unlock()
+				server.writeMu.Lock()
+				acknowledged := server.ticketFlight == nil
+				server.writeMu.Unlock()
+				if count == 4 && acknowledged {
+					break
+				}
+				if time.Now().After(deadline) {
+					b.Fatalf("ticket lifecycle timed out: cached=%d acknowledged=%v", count, acknowledged)
+				}
+				runtime.Gosched()
+			}
+		}
+		_ = client.Close()
+		_ = server.Close()
+		if clientErr != nil || serverErr != nil {
+			b.Fatalf("ticket_request handshake failed: client=%v server=%v", clientErr, serverErr)
 		}
 	}
 }
