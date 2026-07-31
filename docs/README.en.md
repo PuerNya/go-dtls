@@ -4,6 +4,7 @@
 
 [![Go Reference](https://pkg.go.dev/badge/github.com/puernya/go-dtls.svg)](https://pkg.go.dev/github.com/puernya/go-dtls)
 [![CI](https://github.com/puernya/go-dtls/actions/workflows/ci.yml/badge.svg)](https://github.com/puernya/go-dtls/actions/workflows/ci.yml)
+[![Benchmarks](https://github.com/puernya/go-dtls/actions/workflows/benchmarks.yml/badge.svg?branch=master)](https://github.com/puernya/go-dtls/blob/benchmark-results/README.md)
 [![License: GPL v3](https://img.shields.io/badge/license-GPLv3-blue.svg)](../LICENSE)
 
 `go-dtls` is a DTLS 1.3 library implemented in Go. Its protocol behavior follows [RFC 9147](https://www.rfc-editor.org/rfc/rfc9147). The module path is `github.com/puernya/go-dtls`, and the package name is `dtls13`.
@@ -29,7 +30,7 @@ DTLS is an unreliable datagram protocol, not a TLS byte stream:
 
 | Item | Requirement |
 | --- | --- |
-| Go | Go 1.26 or later; performance data was measured with Go 1.26.3 on `windows/amd64` |
+| Go | Go 1.26 or later; the exact Go version, platform, and CPU used by automation are recorded in the latest report |
 | Transport | `udp`, `udp4`, or `udp6`; TCP is not accepted |
 | Windows race | The repository script requires Zig 0.17 and a working CGO toolchain |
 | wolfSSL interoperability tests | Optional; set `WOLFSSL_ROOT` to a compatible wolfSSL source/build directory |
@@ -477,32 +478,7 @@ The following items do not reduce completion of mandatory RFC 9147 semantics, bu
 
 ## Benchmark
 
-The following representative results were measured on an AMD Ryzen 7 7435H with Go 1.26.3 on Windows/amd64. They are not cross-machine performance guarantees.
-
-| Scenario | Representative result |
-| --- | --- |
-| Full certificate handshake and close, `BenchmarkConnectionHandshakeLifecycle` | About `619.4 us/op`, `99508 B/op`, `760 allocs/op` |
-| RFC 9257/9258 external-PSK handshake and close, `BenchmarkExternalPSKHandshakeLifecycle` | About `355.4 us/op`, `98287 B/op`, `727 allocs/op` |
-| Full mTLS, `BenchmarkMutualTLSHandshakeLifecycle/Full` | About `912.9 us/op`, `116237 B/op`, `974 allocs/op` |
-| Resumed mTLS, `BenchmarkMutualTLSHandshakeLifecycle/Resumed` | About `457.3 us/op`, `115336 B/op`, `799-800 allocs/op` |
-| RFC 9849 ECH full handshake, `BenchmarkECHHandshakeLifecycle/Direct` | About `1.53 ms/op`, `148615 B/op`, `1260 allocs/op` |
-| RFC 9849 ECH with HRR, `BenchmarkECHHandshakeLifecycle/HRR` | About `1.63 ms/op`, `151391 B/op`, `1281 allocs/op` |
-| RFC 8879 zlib server-certificate handshake, four-certificate chain | About `1.049 ms/op`, `123323 B/op`, `1022 allocs/op` |
-| RFC 8879 zlib full mTLS, four-certificate chains in both directions | About `1.746 ms/op`, `160719 B/op`, `1469 allocs/op` |
-| RFC 8879 zlib compression / decompression | About `7.2-7.7 us/op`, `4 allocs/op` / `6.3-6.9 us/op`, `4290-4300 B/op`, `6 allocs/op` |
-| AES-128-GCM 1200 B seal | About 1.86 GB/s, 1 alloc/op |
-| AES-128-GCM 1200 B in-place round trip | About 1.05 GB/s, 1 alloc/op |
-| Unauthenticated record error classification | About 12.4-13.7 ns/op, 0 allocs/op |
-| Extension marshal | About 316.5-358.0 ns/op, 128 B/op, 1 alloc/op |
-| Extension ordered-view parse | About 69.8-80.1 ns/op, 0 B/op, 0 allocs/op |
-| Single key_share caller-storage parse | About 33.5-35.0 ns/op, 0 B/op, 0 allocs/op |
-| ClientHello marshal | About 436-519 ns/op, 424 B/op, 7 allocs/op |
-| ServerHello marshal | About 72-91 ns/op, 112 B/op, 1 alloc/op |
-| 1200 B single-fragment handshake reassembly | About 0.47-0.60 us/op, 1280 B/op, 1 alloc/op |
-| 4 KiB / MTU 1200 protected-flight construction | About 2.89 us/op, 5616 B/op, 6 allocs/op |
-| 4 KiB / MTU 1200 plain-flight construction | About 2.15-2.58 us/op, 5040 B/op, 9 allocs/op |
-
-Full-connection results are medians from repeated `-cpu=1` runs.
+Every push to `master` resolves and locks the latest wolfSSL `master` commit for that run, runs all Go benchmarks and the real-UDP four-way benchmarks, then publishes the exact SHA and five-run medians to a separate results branch: [view the latest automated benchmark report](https://github.com/puernya/go-dtls/blob/benchmark-results/README.md). A scheduled check at 08:00, 16:00, and 00:00 Asia/Shanghai compares both go-dtls and wolfSSL `master` SHAs and reruns only when either changed and no benchmark for that go-dtls SHA is queued or running. wolfSSL sources and build outputs are cached by SHA. Pull requests use the same process and display their results directly on the PR without updating the master report.
 
 Run all benchmarks:
 

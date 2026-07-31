@@ -1,0 +1,51 @@
+name: Benchmark Update Check
+
+on:
+  schedule:
+    # 00:00, 08:00, and 16:00 UTC are 08:00, 16:00, and 00:00 in Asia/Shanghai.
+    - cron: '0 0,8,16 * * *'
+
+permissions:
+  actions: write
+  contents: read
+
+concurrency:
+  group: benchmark-update-check
+  cancel-in-progress: true
+
+jobs:
+  check:
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    env:
+      GH_TOKEN: ${{ github.token }}
+      GH_REPO: ${{ github.repository }}
+    steps:
+      - name: Check master commits
+        shell: bash
+        run: |
+          set -euo pipefail
+          wolfssl="$(git ls-remote https://github.com/wolfSSL/wolfssl.git refs/heads/master | cut -f1)"
+          master="$(gh api "repos/${GITHUB_REPOSITORY}/git/ref/heads/master" --jq .object.sha)"
+          [[ "$wolfssl" =~ ^[0-9a-f]{40}$ && "$master" =~ ^[0-9a-f]{40}$ ]]
+
+          report="$(gh api -H 'Accept: application/vnd.github.raw+json' \
+            "repos/${GITHUB_REPOSITORY}/contents/benchmark.txt?ref=benchmark-results" 2>/dev/null || true)"
+          tested_wolfssl="$(sed -n 's/^wolfssl: \([0-9a-f]\{40\}\).*/\1/p' <<< "$report" | head -n 1)"
+          tested_master="$(sed -n 's/^commit: \([0-9a-f]\{40\}\).*/\1/p' <<< "$report" | head -n 1)"
+
+          printf 'master:  tested=%s latest=%s\n' "${tested_master:-none}" "$master"
+          printf 'wolfSSL: tested=%s latest=%s\n' "${tested_wolfssl:-none}" "$wolfssl"
+          if [[ "$master" == "$tested_master" && "$wolfssl" == "$tested_wolfssl" ]]; then
+            exit 0
+          fi
+
+          pending="$(gh run list --workflow benchmarks.yml --branch master --limit 20 \
+            --json headSha,status \
+            --jq "[.[] | select(.headSha == \"$master\" and (.status == \"queued\" or .status == \"in_progress\"))][0].headSha // \"\"")"
+          if [[ -n "$pending" ]]; then
+            echo "A benchmark for master $master is already queued or running."
+            exit 0
+          fi
+
+          gh workflow run benchmarks.yml --ref master -f publish=true

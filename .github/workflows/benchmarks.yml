@@ -1,0 +1,182 @@
+name: Benchmarks
+
+on:
+  push:
+    branches: [master]
+  pull_request:
+    types: [opened, reopened, synchronize]
+  workflow_dispatch:
+    inputs:
+      publish:
+        description: Publish results to the benchmark-results branch
+        required: false
+        type: boolean
+        default: false
+
+permissions:
+  contents: read
+
+concurrency:
+  group: benchmarks-${{ github.event.pull_request.number || github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  benchmark:
+    name: all benchmarks
+    runs-on: ubuntu-latest
+    timeout-minutes: 90
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: ${{ github.event_name == 'pull_request' && github.event.pull_request.head.sha || github.sha }}
+      - uses: actions/setup-go@v5
+        with:
+          go-version-file: go.mod
+          cache: true
+      - name: Resolve latest wolfSSL commit
+        id: wolfssl
+        shell: bash
+        run: |
+          set -euo pipefail
+          commit="$(git ls-remote https://github.com/wolfSSL/wolfssl.git refs/heads/master | cut -f1)"
+          [[ "$commit" =~ ^[0-9a-f]{40}$ ]]
+          echo "commit=$commit" >> "$GITHUB_OUTPUT"
+      - name: Restore wolfSSL cache
+        id: cache-wolfssl
+        uses: actions/cache/restore@v4
+        with:
+          path: |
+            ${{ runner.temp }}/wolfssl
+            ${{ runner.temp }}/wolfssl-build
+          key: wolfssl-${{ runner.os }}-${{ runner.arch }}-release-static-v1-${{ steps.wolfssl.outputs.commit }}
+          restore-keys: |
+            wolfssl-${{ runner.os }}-${{ runner.arch }}-release-static-v1-
+      - name: Build wolfSSL
+        env:
+          WOLFSSL_COMMIT: ${{ steps.wolfssl.outputs.commit }}
+          WOLFSSL_CACHE_HIT: ${{ steps.cache-wolfssl.outputs.cache-hit }}
+          WOLFSSL_SOURCE: ${{ runner.temp }}/wolfssl
+          WOLFSSL_BUILD: ${{ runner.temp }}/wolfssl-build
+        shell: bash
+        run: |
+          set -euo pipefail
+          if [[ "$WOLFSSL_CACHE_HIT" == true ]] &&
+             [[ "$(git -C "$WOLFSSL_SOURCE" rev-parse HEAD)" == "$WOLFSSL_COMMIT" ]] &&
+             [[ -x "$WOLFSSL_BUILD/examples/server/server" ]] &&
+             [[ -x "$WOLFSSL_BUILD/examples/client/client" ]]; then
+            exit 0
+          fi
+          if [[ ! -d "$WOLFSSL_SOURCE/.git" ]]; then
+            rm -rf "$WOLFSSL_SOURCE" "$WOLFSSL_BUILD"
+            git init "$WOLFSSL_SOURCE"
+            git -C "$WOLFSSL_SOURCE" remote add origin https://github.com/wolfSSL/wolfssl.git
+          fi
+          git -C "$WOLFSSL_SOURCE" fetch --depth 1 origin "$WOLFSSL_COMMIT"
+          git -C "$WOLFSSL_SOURCE" checkout --detach FETCH_HEAD
+          cmake -S "$WOLFSSL_SOURCE" -B "$WOLFSSL_BUILD" \
+            -DCMAKE_BUILD_TYPE=Release \
+            -DBUILD_SHARED_LIBS=OFF \
+            -DWOLFSSL_AESCCM=yes \
+            -DWOLFSSL_CURVE25519=yes \
+            -DWOLFSSL_DTLS=yes \
+            -DWOLFSSL_DTLS13=yes \
+            -DWOLFSSL_DTLS_CH_FRAG=yes \
+            -DWOLFSSL_DTLS_CID=yes \
+            -DWOLFSSL_EARLYDATA=yes \
+            -DWOLFSSL_EXAMPLES=yes \
+            -DWOLFSSL_MLKEM=yes \
+            -DWOLFSSL_POSTAUTH=yes \
+            -DWOLFSSL_PSK=yes \
+            -DWOLFSSL_SESSIONCERTS=yes \
+            -DWOLFSSL_SESSION_TICKET=yes \
+            -DWOLFSSL_TLS13=yes
+          cmake --build "$WOLFSSL_BUILD" --parallel 2
+          test -x "$WOLFSSL_BUILD/examples/server/server"
+          test -x "$WOLFSSL_BUILD/examples/client/client"
+      - name: Save wolfSSL cache
+        if: steps.cache-wolfssl.outputs.cache-hit != 'true'
+        uses: actions/cache/save@v4
+        with:
+          path: |
+            ${{ runner.temp }}/wolfssl
+            ${{ runner.temp }}/wolfssl-build
+          key: ${{ steps.cache-wolfssl.outputs.cache-primary-key }}
+      - name: Run all benchmarks
+        env:
+          WOLFSSL_COMMIT: ${{ steps.wolfssl.outputs.commit }}
+          WOLFSSL_SOURCE: ${{ runner.temp }}/wolfssl
+          WOLFSSL_BUILD: ${{ runner.temp }}/wolfssl-build
+        shell: bash
+        run: |
+          set -euo pipefail
+          printf 'commit: %s\nwolfssl: %s (Linux Release static)\n' \
+            "$(git rev-parse HEAD)" "$WOLFSSL_COMMIT" > benchmark.txt
+          go version >> benchmark.txt
+          go test . -run '^$' -bench . -benchmem -count=5 -cpu=1 -timeout=45m | tee -a benchmark.txt
+          WOLFSSL_ROOT="$WOLFSSL_SOURCE" \
+          WOLFSSL_SERVER="$WOLFSSL_BUILD/examples/server/server" \
+          WOLFSSL_CLIENT="$WOLFSSL_BUILD/examples/client/client" \
+            go test . -run '^$' \
+              -bench '^(BenchmarkWolfSSLFeatureRealUDP|BenchmarkHybridKeyExchangeRealUDP)$' \
+              -benchmem -benchtime=1x -count=5 -cpu=1 -timeout=45m | tee -a benchmark.txt
+      - name: Generate report
+        env:
+          WOLFSSL_COMMIT: ${{ steps.wolfssl.outputs.commit }}
+        shell: bash
+        run: |
+          set -euo pipefail
+          go run ./tools/benchmark-report \
+            -input benchmark.txt \
+            -output benchmark.md \
+            -commit "$(git rev-parse HEAD)" \
+            -generated "$(date -u +%Y-%m-%dT%H:%M:%SZ)" \
+            -wolfssl "$WOLFSSL_COMMIT (Linux Release static)"
+          cat benchmark.md >> "$GITHUB_STEP_SUMMARY"
+      - uses: actions/upload-artifact@v4
+        with:
+          name: benchmark-output
+          path: |
+            benchmark.md
+            benchmark.txt
+          retention-days: 30
+          if-no-files-found: error
+
+  publish:
+    name: publish master results
+    if: >-
+      github.event_name == 'push' ||
+      (github.event_name == 'workflow_dispatch' && inputs.publish && github.ref == 'refs/heads/master')
+    needs: benchmark
+    runs-on: ubuntu-latest
+    permissions:
+      actions: read
+      contents: write
+    steps:
+      - uses: actions/download-artifact@v4
+        with:
+          name: benchmark-output
+          path: report
+      - name: Update benchmark-results branch
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        shell: bash
+        run: |
+          set -euo pipefail
+          target="$RUNNER_TEMP/benchmark-results"
+          remote="https://x-access-token:${GITHUB_TOKEN}@github.com/${GITHUB_REPOSITORY}.git"
+          if ! git clone --depth 1 --branch benchmark-results "$remote" "$target"; then
+            rm -rf "$target"
+            git init -b benchmark-results "$target"
+            git -C "$target" remote add origin "$remote"
+          fi
+          cp report/benchmark.md "$target/README.md"
+          cp report/benchmark.txt "$target/benchmark.txt"
+          printf '\n[Raw Go benchmark output](benchmark.txt)\n' >> "$target/README.md"
+          git -C "$target" config user.name github-actions[bot]
+          git -C "$target" config user.email 41898282+github-actions[bot]@users.noreply.github.com
+          git -C "$target" add README.md benchmark.txt
+          if git -C "$target" diff --cached --quiet; then
+            exit 0
+          fi
+          git -C "$target" commit -m "bench(results): update for ${GITHUB_SHA}"
+          git -C "$target" push origin HEAD:benchmark-results

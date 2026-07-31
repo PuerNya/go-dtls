@@ -208,8 +208,14 @@ func wolfSSLPaths(t testing.TB) (root, server, client string) {
 	if root == "" {
 		t.Skip("set WOLFSSL_ROOT to run wolfSSL DTLS 1.3 interoperability tests")
 	}
-	server = filepath.Join(root, "build-zig", "examples", "server", "server.exe")
-	client = filepath.Join(root, "build-zig", "examples", "client", "client.exe")
+	server, client = os.Getenv("WOLFSSL_SERVER"), os.Getenv("WOLFSSL_CLIENT")
+	if (server == "") != (client == "") {
+		t.Fatal("WOLFSSL_SERVER and WOLFSSL_CLIENT must be set together")
+	}
+	if server == "" {
+		server = filepath.Join(root, "build-zig", "examples", "server", "server.exe")
+		client = filepath.Join(root, "build-zig", "examples", "client", "client.exe")
+	}
 	for _, path := range []string{server, client} {
 		if _, err := os.Stat(path); err != nil { // #nosec G703 -- path comes from local WOLFSSL_ROOT in this opt-in test.
 			t.Fatalf("wolfSSL executable %q: %v", path, err)
@@ -512,6 +518,10 @@ func testInteropWolfSSLServerOptions(t *testing.T, options wolfSSLInteropOptions
 			options.exchanged(t, conn, index)
 		}
 		_ = conn.Close()
+		if index+1 < connections {
+			// Match wolfSSL's DTLS TEST_DELAY before its resumed connection.
+			time.Sleep(time.Second)
+		}
 	}
 	requireWolfSSLOutput(t, &output, options.outputContains)
 }
@@ -1049,7 +1059,7 @@ func benchmarkWolfSSLFeatureDirections(b *testing.B, root, serverPath, clientPat
 		clientConfig, serverConfig := feature.configs()
 		listener, done := startGoBenchmarkServer(b, serverConfig, feature, connections, false)
 		defer listener.Close()
-		benchmarkGoClient(b, listener.Addr().String(), clientConfig, feature, connections, false)
+		benchmarkGoClient(b, listener.Addr().String(), clientConfig, feature, connections, false, nil, nil)
 		waitForGoBenchmarkServer(b, done)
 	})
 	b.Run("GoClient/WolfSSLServer", func(b *testing.B) {
@@ -1059,10 +1069,22 @@ func benchmarkWolfSSLFeatureDirections(b *testing.B, root, serverPath, clientPat
 		connections := b.N * batch
 		clientConfig, _ := feature.configs()
 		port := unusedUDPPort(b)
-		server, output, done := startWolfSSLBenchmarkServer(b, root, serverPath, port, connections, feature)
-		defer func() { _ = server.Process.Kill() }()
-		benchmarkGoClient(b, fmt.Sprintf("127.0.0.1:%d", port), clientConfig, feature, connections, true)
-		waitForWolfSSLBenchmarkServer(b, done, output, feature.wolfServerOutput)
+		var server *exec.Cmd
+		var output *lockedBuffer
+		var done <-chan error
+		defer func() {
+			if server != nil {
+				_ = server.Process.Kill()
+			}
+		}()
+		startServer := func() {
+			server, output, done = startWolfSSLBenchmarkServer(b, root, serverPath, port, 1, feature)
+		}
+		waitServer := func() {
+			waitForWolfSSLBenchmarkServer(b, done, output, feature.wolfServerOutput)
+			server = nil
+		}
+		benchmarkGoClient(b, fmt.Sprintf("127.0.0.1:%d", port), clientConfig, feature, connections, true, startServer, waitServer)
 	})
 	b.Run("WolfSSLClient/GoServer", func(b *testing.B) {
 		if feature.wolfClientGoServerUnsupported != "" {
@@ -1234,13 +1256,18 @@ func waitForBenchmarkClose(conn *Conn) error {
 	return err
 }
 
-func benchmarkGoClient(b *testing.B, address string, config *Config, feature wolfSSLBenchmarkFeature, connections int, wolfServer bool) {
+func benchmarkGoClient(b *testing.B, address string, config *Config, feature wolfSSLBenchmarkFeature, connections int, wolfServer bool, startServer, waitServer func()) {
 	b.Helper()
 	dialer := &net.Dialer{Timeout: 5 * time.Second}
 	skip := connections / 10
 	var elapsed time.Duration
 	b.ResetTimer()
 	for index := range connections {
+		if startServer != nil {
+			b.StopTimer()
+			startServer()
+			b.StartTimer()
+		}
 		clientConfig := config
 		if feature.resume {
 			clientConfig = config.Clone()
@@ -1260,6 +1287,12 @@ func benchmarkGoClient(b *testing.B, address string, config *Config, feature wol
 			}
 			if closeErr := full.Close(); err == nil {
 				err = closeErr
+			}
+			if err == nil && wolfServer {
+				b.StopTimer()
+				// Match wolfSSL's DTLS TEST_DELAY while it rebinds its UDP socket.
+				time.Sleep(time.Second)
+				b.StartTimer()
 			}
 			if err != nil {
 				b.Fatalf("prepare resumed connection: %v", err)
@@ -1306,6 +1339,11 @@ func benchmarkGoClient(b *testing.B, address string, config *Config, feature wol
 		}
 		if index >= skip {
 			elapsed += duration
+		}
+		if waitServer != nil {
+			b.StopTimer()
+			waitServer()
+			b.StartTimer()
 		}
 	}
 	b.StopTimer()

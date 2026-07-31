@@ -91,6 +91,8 @@ go test -run TestInteropWolfSSL -v -count=10
 
 When wolfSSL supports the target feature, also add and run a focused real-UDP benchmark covering go-dtls -> go-dtls, go-dtls -> wolfSSL, wolfSSL -> go-dtls, and wolfSSL -> wolfSSL. Include the peer commit/build configuration, workload, timing boundaries, five-run median, and capability limits in the pull request validation evidence; do not put cross-implementation benchmark data in README files.
 
+The benchmark workflow updates the separate `benchmark-results` branch after a push to `master`. The scheduled check triggers and publishes only when the go-dtls or wolfSSL `master` SHA changed and no benchmark for that go-dtls SHA is queued or running. A pull request only updates its benchmark comment and never writes to `master` or the results branch. Do not maintain performance numbers manually in README files.
+
 When a third-party implementation does not enable or support the target extension, state the interoperability boundary explicitly. Do not report a skipped test as passing.
 
 ## Documentation

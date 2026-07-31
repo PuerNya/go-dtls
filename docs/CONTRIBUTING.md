@@ -91,6 +91,8 @@ go test -run TestInteropWolfSSL -v -count=10
 
 wolfSSL 支持目标功能时，还必须增加并运行真实 UDP 专项 benchmark，覆盖 go-dtls -> go-dtls、go-dtls -> wolfSSL、wolfSSL -> go-dtls 和 wolfSSL -> wolfSSL。将对端 commit/构建配置、workload、计时边界、五轮中位数及能力限制作为 pull request 验证证据；跨实现 benchmark 数据不写入 README。
 
+benchmark workflow 在 `master` push 后更新独立的 `benchmark-results` 分支；定时检查仅在 go-dtls 或 wolfSSL 的 `master` SHA 变化，且该 go-dtls SHA 没有 benchmark 正在排队或运行时触发并发布。pull request 只更新对应 PR 页面上的结果评论，不写入 `master` 或结果分支。不要手工维护 README 中的性能数字。
+
 第三方实现未启用或不支持目标扩展时，应明确互通边界，不得把跳过测试表述为通过。
 
 ## 文档

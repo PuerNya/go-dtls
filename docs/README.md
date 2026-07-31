@@ -4,6 +4,7 @@
 
 [![Go Reference](https://pkg.go.dev/badge/github.com/puernya/go-dtls.svg)](https://pkg.go.dev/github.com/puernya/go-dtls)
 [![CI](https://github.com/puernya/go-dtls/actions/workflows/ci.yml/badge.svg)](https://github.com/puernya/go-dtls/actions/workflows/ci.yml)
+[![Benchmarks](https://github.com/puernya/go-dtls/actions/workflows/benchmarks.yml/badge.svg?branch=master)](https://github.com/puernya/go-dtls/blob/benchmark-results/README.md)
 [![License: GPL v3](https://img.shields.io/badge/license-GPLv3-blue.svg)](../LICENSE)
 
 `go-dtls` 是一个使用 Go 实现的 DTLS 1.3 库，协议行为以 [RFC 9147](https://www.rfc-editor.org/rfc/rfc9147) 为准。模块导入路径为 `github.com/puernya/go-dtls`，包名为 `dtls13`。
@@ -29,7 +30,7 @@ DTLS 是不可靠报文协议，不是 TLS 字节流：
 
 | 项目 | 要求 |
 | --- | --- |
-| Go | 最低 Go 1.26；性能数据使用 Go 1.26.3 `windows/amd64` 测得 |
+| Go | 最低 Go 1.26；自动 benchmark 使用的具体 Go、平台和 CPU 记录在最新报告中 |
 | Transport | `udp`、`udp4` 或 `udp6`；不接受 TCP |
 | Windows race | 仓库脚本需要 Zig 0.17 和可用的 CGO 工具链 |
 | wolfSSL 互通测试 | 可选；需要设置 `WOLFSSL_ROOT` 指向兼容的 wolfSSL 源码/构建目录 |
@@ -482,32 +483,7 @@ serverConfig := &dtls13.Config{
 
 ## Benchmark
 
-以下代表值测自 AMD Ryzen 7 7435H、Go 1.26.3、Windows/amd64，不作为跨机器性能保证。
-
-| 场景 | 代表结果 |
-| --- | --- |
-| 普通完整证书握手和关闭 `BenchmarkConnectionHandshakeLifecycle` | 约 `619.4 us/op`、`99508 B/op`、`760 allocs/op` |
-| RFC 9257/9258 外部 PSK 握手和关闭 `BenchmarkExternalPSKHandshakeLifecycle` | 约 `355.4 us/op`、`98287 B/op`、`727 allocs/op` |
-| 完整 mTLS `BenchmarkMutualTLSHandshakeLifecycle/Full` | 约 `912.9 us/op`、`116237 B/op`、`974 allocs/op` |
-| mTLS 恢复 `BenchmarkMutualTLSHandshakeLifecycle/Resumed` | 约 `457.3 us/op`、`115336 B/op`、`799-800 allocs/op` |
-| RFC 9849 ECH 完整握手 `BenchmarkECHHandshakeLifecycle/Direct` | 约 `1.53 ms/op`、`148615 B/op`、`1260 allocs/op` |
-| RFC 9849 ECH + HRR `BenchmarkECHHandshakeLifecycle/HRR` | 约 `1.63 ms/op`、`151391 B/op`、`1281 allocs/op` |
-| RFC 8879 zlib 服务端证书握手（四段证书链） | 约 `1.049 ms/op`、`123323 B/op`、`1022 allocs/op` |
-| RFC 8879 zlib 完整 mTLS（双向四段证书链） | 约 `1.746 ms/op`、`160719 B/op`、`1469 allocs/op` |
-| RFC 8879 zlib 压缩 / 解压 | 约 `7.2-7.7 us/op`、`4 allocs/op` / `6.3-6.9 us/op`、`4290-4300 B/op`、`6 allocs/op` |
-| AES-128-GCM 1200 B seal | 约 1.86 GB/s，1 alloc/op |
-| AES-128-GCM 1200 B in-place round trip | 约 1.05 GB/s，1 alloc/op |
-| 未认证 record 错误分类 | 约 12.4-13.7 ns/op，0 allocs/op |
-| Extension marshal | 约 316.5-358.0 ns/op，128 B/op，1 alloc/op |
-| Extension ordered-view parse | 约 69.8-80.1 ns/op，0 B/op，0 allocs/op |
-| 单 key_share caller-storage parse | 约 33.5-35.0 ns/op，0 B/op，0 allocs/op |
-| ClientHello marshal | 约 436-519 ns/op，424 B/op，7 allocs/op |
-| ServerHello marshal | 约 72-91 ns/op，112 B/op，1 alloc/op |
-| 1200 B 单分片握手重组 | 约 0.47-0.60 us/op，1280 B/op，1 alloc/op |
-| 4 KiB / MTU 1200 protected flight 构造 | 约 2.89 us/op，5616 B/op，6 allocs/op |
-| 4 KiB / MTU 1200 plain flight 构造 | 约 2.15-2.58 us/op，5040 B/op，9 allocs/op |
-
-完整连接数据使用 `-cpu=1` 的多轮中位数。
+`master` 每次 push 后都会解析并固定本次运行所用的最新 wolfSSL `master` commit，运行全部 Go benchmark 和真实 UDP 四向 benchmark，并把精确 SHA 与五轮中位数发布到独立结果分支：[查看最新自动 benchmark 报告](https://github.com/puernya/go-dtls/blob/benchmark-results/README.md)。每天北京时间 08:00、16:00 和 00:00 还会检查 go-dtls 与 wolfSSL 的 `master` SHA，仅在任一方变化且该 go-dtls SHA 没有 benchmark 正在排队或运行时重新执行。wolfSSL 源码和构建产物按 SHA 缓存。Pull request 使用相同流程，结果直接显示在对应 PR 页面，不会更新 master 的报告。
 
 运行全部 benchmark：
 

@@ -4,6 +4,7 @@
 
 [![Go Reference](https://pkg.go.dev/badge/github.com/puernya/go-dtls.svg)](https://pkg.go.dev/github.com/puernya/go-dtls)
 [![CI](https://github.com/puernya/go-dtls/actions/workflows/ci.yml/badge.svg)](https://github.com/puernya/go-dtls/actions/workflows/ci.yml)
+[![Benchmarks](https://github.com/puernya/go-dtls/actions/workflows/benchmarks.yml/badge.svg?branch=master)](https://github.com/puernya/go-dtls/blob/benchmark-results/README.md)
 [![License: GPL v3](https://img.shields.io/badge/license-GPLv3-blue.svg)](../LICENSE)
 
 `go-dtls` — библиотека DTLS 1.3, реализованная на Go. Поведение протокола соответствует [RFC 9147](https://www.rfc-editor.org/rfc/rfc9147). Путь модуля — `github.com/puernya/go-dtls`, имя пакета — `dtls13`.
@@ -29,7 +30,7 @@ DTLS — протокол ненадежных дейтаграмм, а не б�
 
 | Компонент | Требование |
 | --- | --- |
-| Go | Go 1.26 или новее; данные производительности получены с Go 1.26.3 на `windows/amd64` |
+| Go | Go 1.26 или новее; точные версии Go, платформа и CPU автоматического запуска указаны в последнем отчете |
 | Транспорт | `udp`, `udp4` или `udp6`; TCP не поддерживается |
 | Race-тесты Windows | Скрипту репозитория нужны Zig 0.17 и рабочая цепочка CGO |
 | Тесты совместимости с wolfSSL | Необязательно; переменная `WOLFSSL_ROOT` должна указывать на совместимый каталог исходников/сборки wolfSSL |
@@ -477,32 +478,7 @@ Ticket без идентичности клиента используется �
 
 ## Тесты производительности
 
-Следующие репрезентативные результаты получены на AMD Ryzen 7 7435H с Go 1.26.3 на Windows/amd64. Они не гарантируют такую же производительность на других машинах.
-
-| Сценарий | Репрезентативный результат |
-| --- | --- |
-| Полное сертификатное рукопожатие и закрытие, `BenchmarkConnectionHandshakeLifecycle` | Около `619.4 us/op`, `99508 B/op`, `760 allocs/op` |
-| Рукопожатие RFC 9257/9258 с внешним PSK и закрытие, `BenchmarkExternalPSKHandshakeLifecycle` | Около `355.4 us/op`, `98287 B/op`, `727 allocs/op` |
-| Полный mTLS, `BenchmarkMutualTLSHandshakeLifecycle/Full` | Около `912.9 us/op`, `116237 B/op`, `974 allocs/op` |
-| Возобновленный mTLS, `BenchmarkMutualTLSHandshakeLifecycle/Resumed` | Около `457.3 us/op`, `115336 B/op`, `799-800 allocs/op` |
-| Полное рукопожатие ECH RFC 9849, `BenchmarkECHHandshakeLifecycle/Direct` | Около `1.53 ms/op`, `148615 B/op`, `1260 allocs/op` |
-| ECH RFC 9849 с HRR, `BenchmarkECHHandshakeLifecycle/HRR` | Около `1.63 ms/op`, `151391 B/op`, `1281 allocs/op` |
-| Рукопожатие RFC 8879 zlib с сертификатом сервера, цепочка из четырех сертификатов | Около `1.049 ms/op`, `123323 B/op`, `1022 allocs/op` |
-| Полный mTLS RFC 8879 zlib, цепочки из четырех сертификатов в обоих направлениях | Около `1.746 ms/op`, `160719 B/op`, `1469 allocs/op` |
-| Сжатие / распаковка RFC 8879 zlib | Около `7.2-7.7 us/op`, `4 allocs/op` / `6.3-6.9 us/op`, `4290-4300 B/op`, `6 allocs/op` |
-| Seal AES-128-GCM для 1200 B | Около 1.86 GB/s, 1 alloc/op |
-| In-place round trip AES-128-GCM для 1200 B | Около 1.05 GB/s, 1 alloc/op |
-| Классификация ошибки неаутентифицированной записи | Около 12.4-13.7 ns/op, 0 allocs/op |
-| Marshal расширения | Около 316.5-358.0 ns/op, 128 B/op, 1 alloc/op |
-| Parse ordered-view расширения | Около 69.8-80.1 ns/op, 0 B/op, 0 allocs/op |
-| Parse одного key_share в памяти вызывающего кода | Около 33.5-35.0 ns/op, 0 B/op, 0 allocs/op |
-| Marshal ClientHello | Около 436-519 ns/op, 424 B/op, 7 allocs/op |
-| Marshal ServerHello | Около 72-91 ns/op, 112 B/op, 1 alloc/op |
-| Сборка однофрагментного рукопожатия 1200 B | Около 0.47-0.60 us/op, 1280 B/op, 1 alloc/op |
-| Создание защищенного flight 4 KiB / MTU 1200 | Около 2.89 us/op, 5616 B/op, 6 allocs/op |
-| Создание открытого flight 4 KiB / MTU 1200 | Около 2.15-2.58 us/op, 5040 B/op, 9 allocs/op |
-
-Результаты полного соединения — медианы повторных запусков с `-cpu=1`.
+После каждого push в `master` определяется и фиксируется последний commit ветки wolfSSL `master` для данного запуска, затем выполняются все Go benchmark и четырехсторонние benchmark через настоящий UDP. Точный SHA и медианы пяти запусков публикуются в отдельной ветке результатов: [посмотреть последний автоматический отчет](https://github.com/puernya/go-dtls/blob/benchmark-results/README.md). Плановая проверка в 08:00, 16:00 и 00:00 по времени Asia/Shanghai сравнивает SHA веток `master` go-dtls и wolfSSL и запускает тесты повторно, только если один из них изменился и для этого SHA go-dtls нет benchmark в очереди или в процессе выполнения. Исходники и результаты сборки wolfSSL кешируются по SHA. Pull request использует тот же процесс и показывает результаты непосредственно на странице PR, не обновляя отчет master.
 
 Запуск всех тестов производительности:
 
