@@ -1,0 +1,855 @@
+commit: 857762cdec131c22fefbeb378f26a930c83b9160
+wolfssl: 41b7a0209abbddc579d3d861f36c0f574ae7e907 (Linux Release static)
+go version go1.26.5 linux/amd64
+goos: linux
+goarch: amd64
+pkg: github.com/puernya/go-dtls
+cpu: AMD EPYC 7763 64-Core Processor                
+BenchmarkConnectionHandshakeLifecycle                	    1989	    579949 ns/op	   99391 B/op	     759 allocs/op
+BenchmarkConnectionHandshakeLifecycle                	    2049	    575329 ns/op	   99289 B/op	     759 allocs/op
+BenchmarkConnectionHandshakeLifecycle                	    2060	    576886 ns/op	   99289 B/op	     759 allocs/op
+BenchmarkConnectionHandshakeLifecycle                	    2058	    572523 ns/op	   99289 B/op	     759 allocs/op
+BenchmarkConnectionHandshakeLifecycle                	    2026	    572086 ns/op	   99289 B/op	     759 allocs/op
+BenchmarkECHHandshakeLifecycle/Direct                	    1255	    943062 ns/op	  148651 B/op	    1259 allocs/op
+BenchmarkECHHandshakeLifecycle/Direct                	    1260	    940262 ns/op	  148650 B/op	    1259 allocs/op
+BenchmarkECHHandshakeLifecycle/Direct                	    1249	    943261 ns/op	  148598 B/op	    1259 allocs/op
+BenchmarkECHHandshakeLifecycle/Direct                	    1262	    941291 ns/op	  148598 B/op	    1259 allocs/op
+BenchmarkECHHandshakeLifecycle/Direct                	    1251	    943666 ns/op	  148597 B/op	    1259 allocs/op
+BenchmarkECHHandshakeLifecycle/HRR                   	    1248	    952424 ns/op	  151374 B/op	    1280 allocs/op
+BenchmarkECHHandshakeLifecycle/HRR                   	    1255	    948659 ns/op	  151374 B/op	    1280 allocs/op
+BenchmarkECHHandshakeLifecycle/HRR                   	    1244	    948300 ns/op	  151374 B/op	    1280 allocs/op
+BenchmarkECHHandshakeLifecycle/HRR                   	    1250	    951108 ns/op	  151374 B/op	    1280 allocs/op
+BenchmarkECHHandshakeLifecycle/HRR                   	    1260	    948651 ns/op	  151374 B/op	    1280 allocs/op
+BenchmarkExternalPSKHandshakeLifecycle               	    3400	    337587 ns/op	   98265 B/op	     724 allocs/op
+BenchmarkExternalPSKHandshakeLifecycle               	    3460	    337831 ns/op	   98265 B/op	     724 allocs/op
+BenchmarkExternalPSKHandshakeLifecycle               	    3517	    337480 ns/op	   98265 B/op	     724 allocs/op
+BenchmarkExternalPSKHandshakeLifecycle               	    3448	    338192 ns/op	   98265 B/op	     724 allocs/op
+BenchmarkExternalPSKHandshakeLifecycle               	    3448	    338536 ns/op	   98265 B/op	     724 allocs/op
+BenchmarkMutualTLSHandshakeLifecycle/Full            	    1420	    833345 ns/op	  115950 B/op	     973 allocs/op
+BenchmarkMutualTLSHandshakeLifecycle/Full            	    1435	    830411 ns/op	  115949 B/op	     973 allocs/op
+BenchmarkMutualTLSHandshakeLifecycle/Full            	    1382	    832869 ns/op	  115948 B/op	     973 allocs/op
+BenchmarkMutualTLSHandshakeLifecycle/Full            	    1423	    831169 ns/op	  115950 B/op	     973 allocs/op
+BenchmarkMutualTLSHandshakeLifecycle/Full            	    1435	    829951 ns/op	  115952 B/op	     973 allocs/op
+BenchmarkMutualTLSHandshakeLifecycle/Resumed         	    2985	    405284 ns/op	  115359 B/op	     799 allocs/op
+BenchmarkMutualTLSHandshakeLifecycle/Resumed         	    3216	    410722 ns/op	  115913 B/op	     802 allocs/op
+BenchmarkMutualTLSHandshakeLifecycle/Resumed         	    3218	    412221 ns/op	  116100 B/op	     804 allocs/op
+BenchmarkMutualTLSHandshakeLifecycle/Resumed         	    3088	    429478 ns/op	  116212 B/op	     804 allocs/op
+BenchmarkMutualTLSHandshakeLifecycle/Resumed         	    3139	    435077 ns/op	  116284 B/op	     805 allocs/op
+BenchmarkProtectedRecordSeal                         	 1000000	      1038 ns/op	1156.33 MB/s	    1283 B/op	       1 allocs/op
+BenchmarkProtectedRecordSeal                         	 1000000	      1084 ns/op	1107.09 MB/s	    1282 B/op	       1 allocs/op
+BenchmarkProtectedRecordSeal                         	 1000000	      1103 ns/op	1088.40 MB/s	    1281 B/op	       1 allocs/op
+BenchmarkProtectedRecordSeal                         	 1000000	      1104 ns/op	1086.63 MB/s	    1280 B/op	       1 allocs/op
+BenchmarkProtectedRecordSeal                         	 1000000	      1112 ns/op	1079.56 MB/s	    1280 B/op	       1 allocs/op
+BenchmarkProtectedRecordRoundTrip                    	  887989	      3041 ns/op	 394.58 MB/s	    3840 B/op	       3 allocs/op
+BenchmarkProtectedRecordRoundTrip                    	  860868	      3116 ns/op	 385.11 MB/s	    3840 B/op	       3 allocs/op
+BenchmarkProtectedRecordRoundTrip                    	  457934	      3301 ns/op	 363.53 MB/s	    3841 B/op	       3 allocs/op
+BenchmarkProtectedRecordRoundTrip                    	  353048	      3140 ns/op	 382.12 MB/s	    3840 B/op	       3 allocs/op
+BenchmarkProtectedRecordRoundTrip                    	  409534	      3109 ns/op	 386.01 MB/s	    3840 B/op	       3 allocs/op
+BenchmarkProtectedRecordRoundTripInPlace             	 1000000	      1675 ns/op	 716.25 MB/s	    1280 B/op	       1 allocs/op
+BenchmarkProtectedRecordRoundTripInPlace             	 1000000	      1629 ns/op	 736.82 MB/s	    1280 B/op	       1 allocs/op
+BenchmarkProtectedRecordRoundTripInPlace             	 1000000	      1635 ns/op	 733.94 MB/s	    1280 B/op	       1 allocs/op
+BenchmarkProtectedRecordRoundTripInPlace             	 1000000	      1649 ns/op	 727.72 MB/s	    1280 B/op	       1 allocs/op
+BenchmarkProtectedRecordRoundTripInPlace             	 1000000	      1644 ns/op	 729.73 MB/s	    1280 B/op	       1 allocs/op
+BenchmarkProtectedRecordReceiveErrorUnauthenticated  	100000000	        10.95 ns/op	       0 B/op	       0 allocs/op
+BenchmarkProtectedRecordReceiveErrorUnauthenticated  	100000000	        10.97 ns/op	       0 B/op	       0 allocs/op
+BenchmarkProtectedRecordReceiveErrorUnauthenticated  	100000000	        10.96 ns/op	       0 B/op	       0 allocs/op
+BenchmarkProtectedRecordReceiveErrorUnauthenticated  	100000000	        10.95 ns/op	       0 B/op	       0 allocs/op
+BenchmarkProtectedRecordReceiveErrorUnauthenticated  	100000000	        10.95 ns/op	       0 B/op	       0 allocs/op
+BenchmarkProtectedRecordSealSuites/AES128GCM         	 1000000	      1158 ns/op	1035.82 MB/s	    1280 B/op	       1 allocs/op
+BenchmarkProtectedRecordSealSuites/AES128GCM         	 1000000	      1150 ns/op	1043.20 MB/s	    1280 B/op	       1 allocs/op
+BenchmarkProtectedRecordSealSuites/AES128GCM         	 1000000	      1172 ns/op	1023.55 MB/s	    1280 B/op	       1 allocs/op
+BenchmarkProtectedRecordSealSuites/AES128GCM         	 1000000	      1154 ns/op	1040.25 MB/s	    1280 B/op	       1 allocs/op
+BenchmarkProtectedRecordSealSuites/AES128GCM         	 1000000	      1140 ns/op	1052.69 MB/s	    1280 B/op	       1 allocs/op
+BenchmarkProtectedRecordSealSuites/AES256GCM         	 1000000	      1216 ns/op	 986.78 MB/s	    1280 B/op	       1 allocs/op
+BenchmarkProtectedRecordSealSuites/AES256GCM         	 1000000	      1256 ns/op	 955.41 MB/s	    1280 B/op	       1 allocs/op
+BenchmarkProtectedRecordSealSuites/AES256GCM         	 1000000	      1238 ns/op	 969.21 MB/s	    1280 B/op	       1 allocs/op
+BenchmarkProtectedRecordSealSuites/AES256GCM         	 1000000	      1229 ns/op	 976.80 MB/s	    1280 B/op	       1 allocs/op
+BenchmarkProtectedRecordSealSuites/AES256GCM         	 1000000	      1219 ns/op	 984.79 MB/s	    1280 B/op	       1 allocs/op
+BenchmarkProtectedRecordSealSuites/ChaCha20Poly1305  	 1000000	      1572 ns/op	 763.44 MB/s	    1280 B/op	       1 allocs/op
+BenchmarkProtectedRecordSealSuites/ChaCha20Poly1305  	 1000000	      1579 ns/op	 760.07 MB/s	    1280 B/op	       1 allocs/op
+BenchmarkProtectedRecordSealSuites/ChaCha20Poly1305  	 1000000	      1578 ns/op	 760.65 MB/s	    1280 B/op	       1 allocs/op
+BenchmarkProtectedRecordSealSuites/ChaCha20Poly1305  	 1000000	      1557 ns/op	 770.53 MB/s	    1280 B/op	       1 allocs/op
+BenchmarkProtectedRecordSealSuites/ChaCha20Poly1305  	 1000000	      1552 ns/op	 772.98 MB/s	    1280 B/op	       1 allocs/op
+BenchmarkProtectedRecordSealSuites/AES128CCM         	  347252	      3556 ns/op	 337.43 MB/s	    1840 B/op	       5 allocs/op
+BenchmarkProtectedRecordSealSuites/AES128CCM         	  344030	      3607 ns/op	 332.65 MB/s	    1840 B/op	       5 allocs/op
+BenchmarkProtectedRecordSealSuites/AES128CCM         	  340292	      3668 ns/op	 327.15 MB/s	    1840 B/op	       5 allocs/op
+BenchmarkProtectedRecordSealSuites/AES128CCM         	  351825	      3620 ns/op	 331.53 MB/s	    1840 B/op	       5 allocs/op
+BenchmarkProtectedRecordSealSuites/AES128CCM         	  344196	      3705 ns/op	 323.85 MB/s	    1840 B/op	       5 allocs/op
+BenchmarkProtectedRecordRoundTripSuites/AES128GCM    	  342346	      3159 ns/op	 379.89 MB/s	    3840 B/op	       3 allocs/op
+BenchmarkProtectedRecordRoundTripSuites/AES128GCM    	  371782	      3061 ns/op	 392.08 MB/s	    3840 B/op	       3 allocs/op
+BenchmarkProtectedRecordRoundTripSuites/AES128GCM    	  374287	      3037 ns/op	 395.17 MB/s	    3840 B/op	       3 allocs/op
+BenchmarkProtectedRecordRoundTripSuites/AES128GCM    	  433869	      2912 ns/op	 412.04 MB/s	    3840 B/op	       3 allocs/op
+BenchmarkProtectedRecordRoundTripSuites/AES128GCM    	  445090	      2816 ns/op	 426.06 MB/s	    3840 B/op	       3 allocs/op
+BenchmarkProtectedRecordRoundTripSuites/AES256GCM    	  366853	      2969 ns/op	 404.20 MB/s	    3840 B/op	       3 allocs/op
+BenchmarkProtectedRecordRoundTripSuites/AES256GCM    	  378918	      2968 ns/op	 404.37 MB/s	    3840 B/op	       3 allocs/op
+BenchmarkProtectedRecordRoundTripSuites/AES256GCM    	  399183	      2976 ns/op	 403.17 MB/s	    3840 B/op	       3 allocs/op
+BenchmarkProtectedRecordRoundTripSuites/AES256GCM    	  375072	      3023 ns/op	 396.97 MB/s	    3840 B/op	       3 allocs/op
+BenchmarkProtectedRecordRoundTripSuites/AES256GCM    	  381264	      2974 ns/op	 403.48 MB/s	    3840 B/op	       3 allocs/op
+BenchmarkProtectedRecordRoundTripSuites/ChaCha20Poly1305         	  335108	      3630 ns/op	 330.61 MB/s	    3840 B/op	       3 allocs/op
+BenchmarkProtectedRecordRoundTripSuites/ChaCha20Poly1305         	  295434	      3699 ns/op	 324.42 MB/s	    3840 B/op	       3 allocs/op
+BenchmarkProtectedRecordRoundTripSuites/ChaCha20Poly1305         	  280144	      3667 ns/op	 327.20 MB/s	    3840 B/op	       3 allocs/op
+BenchmarkProtectedRecordRoundTripSuites/ChaCha20Poly1305         	  297138	      3763 ns/op	 318.92 MB/s	    3840 B/op	       3 allocs/op
+BenchmarkProtectedRecordRoundTripSuites/ChaCha20Poly1305         	  326724	      3723 ns/op	 322.30 MB/s	    3840 B/op	       3 allocs/op
+BenchmarkProtectedRecordRoundTripSuites/AES128CCM                	  155154	      8113 ns/op	 147.91 MB/s	    6240 B/op	      12 allocs/op
+BenchmarkProtectedRecordRoundTripSuites/AES128CCM                	  145399	      8200 ns/op	 146.34 MB/s	    6240 B/op	      12 allocs/op
+BenchmarkProtectedRecordRoundTripSuites/AES128CCM                	  144589	      8121 ns/op	 147.76 MB/s	    6240 B/op	      12 allocs/op
+BenchmarkProtectedRecordRoundTripSuites/AES128CCM                	  146068	      8132 ns/op	 147.57 MB/s	    6240 B/op	      12 allocs/op
+BenchmarkProtectedRecordRoundTripSuites/AES128CCM                	  140090	      8060 ns/op	 148.88 MB/s	    6240 B/op	      12 allocs/op
+BenchmarkProtectedRecordCID/Seal                                 	  986990	      1050 ns/op	1143.28 MB/s	    1280 B/op	       1 allocs/op
+BenchmarkProtectedRecordCID/Seal                                 	 1000000	      1059 ns/op	1132.91 MB/s	    1280 B/op	       1 allocs/op
+BenchmarkProtectedRecordCID/Seal                                 	 1000000	      1074 ns/op	1116.89 MB/s	    1280 B/op	       1 allocs/op
+BenchmarkProtectedRecordCID/Seal                                 	 1000000	      1074 ns/op	1116.97 MB/s	    1280 B/op	       1 allocs/op
+BenchmarkProtectedRecordCID/Seal                                 	 1000000	      1078 ns/op	1113.25 MB/s	    1280 B/op	       1 allocs/op
+BenchmarkProtectedRecordCID/RoundTrip                            	  408487	      2924 ns/op	 410.43 MB/s	    3840 B/op	       3 allocs/op
+BenchmarkProtectedRecordCID/RoundTrip                            	  381829	      2864 ns/op	 419.04 MB/s	    3840 B/op	       3 allocs/op
+BenchmarkProtectedRecordCID/RoundTrip                            	  420298	      2849 ns/op	 421.24 MB/s	    3840 B/op	       3 allocs/op
+BenchmarkProtectedRecordCID/RoundTrip                            	  379380	      2889 ns/op	 415.41 MB/s	    3840 B/op	       3 allocs/op
+BenchmarkProtectedRecordCID/RoundTrip                            	  411823	      2851 ns/op	 420.85 MB/s	    3840 B/op	       3 allocs/op
+BenchmarkTranscriptClone/1301                                    	 3601621	       333.5 ns/op	     288 B/op	       4 allocs/op
+BenchmarkTranscriptClone/1301                                    	 3562257	       329.8 ns/op	     288 B/op	       4 allocs/op
+BenchmarkTranscriptClone/1301                                    	 3613315	       333.6 ns/op	     288 B/op	       4 allocs/op
+BenchmarkTranscriptClone/1301                                    	 3598407	       336.1 ns/op	     288 B/op	       4 allocs/op
+BenchmarkTranscriptClone/1301                                    	 3615595	       327.8 ns/op	     288 B/op	       4 allocs/op
+BenchmarkTranscriptClone/1302                                    	 1948965	       619.9 ns/op	     496 B/op	       4 allocs/op
+BenchmarkTranscriptClone/1302                                    	 1949012	       619.3 ns/op	     496 B/op	       4 allocs/op
+BenchmarkTranscriptClone/1302                                    	 1928996	       619.5 ns/op	     496 B/op	       4 allocs/op
+BenchmarkTranscriptClone/1302                                    	 1926222	       617.8 ns/op	     496 B/op	       4 allocs/op
+BenchmarkTranscriptClone/1302                                    	 1875942	       621.1 ns/op	     496 B/op	       4 allocs/op
+BenchmarkTranscriptSum/1301/Owned                                	10547440	       113.3 ns/op	      32 B/op	       1 allocs/op
+BenchmarkTranscriptSum/1301/Owned                                	10436774	       113.1 ns/op	      32 B/op	       1 allocs/op
+BenchmarkTranscriptSum/1301/Owned                                	10399147	       115.3 ns/op	      32 B/op	       1 allocs/op
+BenchmarkTranscriptSum/1301/Owned                                	10521505	       114.6 ns/op	      32 B/op	       1 allocs/op
+BenchmarkTranscriptSum/1301/Owned                                	10345057	       114.1 ns/op	      32 B/op	       1 allocs/op
+BenchmarkTranscriptSum/1301/Reuse                                	15102919	        79.38 ns/op	       0 B/op	       0 allocs/op
+BenchmarkTranscriptSum/1301/Reuse                                	15114516	        79.33 ns/op	       0 B/op	       0 allocs/op
+BenchmarkTranscriptSum/1301/Reuse                                	15094393	        88.80 ns/op	       0 B/op	       0 allocs/op
+BenchmarkTranscriptSum/1301/Reuse                                	15028528	        79.48 ns/op	       0 B/op	       0 allocs/op
+BenchmarkTranscriptSum/1301/Reuse                                	15107812	        79.43 ns/op	       0 B/op	       0 allocs/op
+BenchmarkTranscriptSum/1302/Owned                                	 4186268	       283.6 ns/op	      48 B/op	       1 allocs/op
+BenchmarkTranscriptSum/1302/Owned                                	 4186672	       281.5 ns/op	      48 B/op	       1 allocs/op
+BenchmarkTranscriptSum/1302/Owned                                	 4189833	       283.0 ns/op	      48 B/op	       1 allocs/op
+BenchmarkTranscriptSum/1302/Owned                                	 4242235	       283.3 ns/op	      48 B/op	       1 allocs/op
+BenchmarkTranscriptSum/1302/Owned                                	 4236823	       282.2 ns/op	      48 B/op	       1 allocs/op
+BenchmarkTranscriptSum/1302/Reuse                                	 5022478	       239.0 ns/op	       0 B/op	       0 allocs/op
+BenchmarkTranscriptSum/1302/Reuse                                	 5015004	       239.1 ns/op	       0 B/op	       0 allocs/op
+BenchmarkTranscriptSum/1302/Reuse                                	 5021754	       239.0 ns/op	       0 B/op	       0 allocs/op
+BenchmarkTranscriptSum/1302/Reuse                                	 5022384	       239.5 ns/op	       0 B/op	       0 allocs/op
+BenchmarkTranscriptSum/1302/Reuse                                	 5009806	       239.3 ns/op	       0 B/op	       0 allocs/op
+BenchmarkBuildProtectedACKRecords/Single                         	 5350142	       228.4 ns/op	      72 B/op	       2 allocs/op
+BenchmarkBuildProtectedACKRecords/Single                         	 5300334	       226.5 ns/op	      72 B/op	       2 allocs/op
+BenchmarkBuildProtectedACKRecords/Single                         	 5329771	       228.4 ns/op	      72 B/op	       2 allocs/op
+BenchmarkBuildProtectedACKRecords/Single                         	 5335394	       232.4 ns/op	      72 B/op	       2 allocs/op
+BenchmarkBuildProtectedACKRecords/Single                         	 5264355	       226.4 ns/op	      72 B/op	       2 allocs/op
+BenchmarkBuildProtectedACKRecords/Sorted64                       	 1000000	      1036 ns/op	    1176 B/op	       2 allocs/op
+BenchmarkBuildProtectedACKRecords/Sorted64                       	 1000000	      1042 ns/op	    1176 B/op	       2 allocs/op
+BenchmarkBuildProtectedACKRecords/Sorted64                       	 1000000	      1043 ns/op	    1176 B/op	       2 allocs/op
+BenchmarkBuildProtectedACKRecords/Sorted64                       	 1000000	      1027 ns/op	    1176 B/op	       2 allocs/op
+BenchmarkBuildProtectedACKRecords/Sorted64                       	 1000000	      1028 ns/op	    1176 B/op	       2 allocs/op
+BenchmarkBuildProtectedACKRecords/Reversed64                     	  569649	      1823 ns/op	    2200 B/op	       3 allocs/op
+BenchmarkBuildProtectedACKRecords/Reversed64                     	  567355	      1820 ns/op	    2200 B/op	       3 allocs/op
+BenchmarkBuildProtectedACKRecords/Reversed64                     	  589346	      1821 ns/op	    2200 B/op	       3 allocs/op
+BenchmarkBuildProtectedACKRecords/Reversed64                     	  551881	      1823 ns/op	    2200 B/op	       3 allocs/op
+BenchmarkBuildProtectedACKRecords/Reversed64                     	  658305	      1863 ns/op	    2200 B/op	       3 allocs/op
+BenchmarkBuildProtectedACKRecords/SingleReuse                    	 6621163	       181.3 ns/op	      48 B/op	       1 allocs/op
+BenchmarkBuildProtectedACKRecords/SingleReuse                    	 6559160	       180.7 ns/op	      48 B/op	       1 allocs/op
+BenchmarkBuildProtectedACKRecords/SingleReuse                    	 6665062	       180.4 ns/op	      48 B/op	       1 allocs/op
+BenchmarkBuildProtectedACKRecords/SingleReuse                    	 6603228	       179.8 ns/op	      48 B/op	       1 allocs/op
+BenchmarkBuildProtectedACKRecords/SingleReuse                    	 6558819	       180.0 ns/op	      48 B/op	       1 allocs/op
+BenchmarkBuildPlainACKRecords/Empty                              	29430112	        39.39 ns/op	      16 B/op	       1 allocs/op
+BenchmarkBuildPlainACKRecords/Empty                              	29422948	        40.12 ns/op	      16 B/op	       1 allocs/op
+BenchmarkBuildPlainACKRecords/Empty                              	30539791	        39.13 ns/op	      16 B/op	       1 allocs/op
+BenchmarkBuildPlainACKRecords/Empty                              	30453795	        40.32 ns/op	      16 B/op	       1 allocs/op
+BenchmarkBuildPlainACKRecords/Empty                              	30365964	        39.70 ns/op	      16 B/op	       1 allocs/op
+BenchmarkBuildPlainACKRecords/Single                             	22285069	        51.20 ns/op	      32 B/op	       1 allocs/op
+BenchmarkBuildPlainACKRecords/Single                             	22135892	        52.26 ns/op	      32 B/op	       1 allocs/op
+BenchmarkBuildPlainACKRecords/Single                             	21866293	        52.00 ns/op	      32 B/op	       1 allocs/op
+BenchmarkBuildPlainACKRecords/Single                             	22580320	        51.63 ns/op	      32 B/op	       1 allocs/op
+BenchmarkBuildPlainACKRecords/Single                             	21627147	        51.59 ns/op	      32 B/op	       1 allocs/op
+BenchmarkBuildPlainACKRecords/Sorted64                           	 2069817	       569.1 ns/op	    1152 B/op	       1 allocs/op
+BenchmarkBuildPlainACKRecords/Sorted64                           	 2123854	       563.9 ns/op	    1152 B/op	       1 allocs/op
+BenchmarkBuildPlainACKRecords/Sorted64                           	 2153151	       551.5 ns/op	    1152 B/op	       1 allocs/op
+BenchmarkBuildPlainACKRecords/Sorted64                           	 2138082	       566.7 ns/op	    1152 B/op	       1 allocs/op
+BenchmarkBuildPlainACKRecords/Sorted64                           	 2172382	       572.4 ns/op	    1152 B/op	       1 allocs/op
+BenchmarkParseACK/Owned                                          	39235137	        29.66 ns/op	      16 B/op	       1 allocs/op
+BenchmarkParseACK/Owned                                          	39209940	        28.85 ns/op	      16 B/op	       1 allocs/op
+BenchmarkParseACK/Owned                                          	36168748	        29.75 ns/op	      16 B/op	       1 allocs/op
+BenchmarkParseACK/Owned                                          	38908844	        28.94 ns/op	      16 B/op	       1 allocs/op
+BenchmarkParseACK/Owned                                          	40278754	        29.18 ns/op	      16 B/op	       1 allocs/op
+BenchmarkParseACK/ReuseSingle                                    	274778590	         4.368 ns/op	       0 B/op	       0 allocs/op
+BenchmarkParseACK/ReuseSingle                                    	273845564	         4.379 ns/op	       0 B/op	       0 allocs/op
+BenchmarkParseACK/ReuseSingle                                    	274772797	         4.377 ns/op	       0 B/op	       0 allocs/op
+BenchmarkParseACK/ReuseSingle                                    	274324648	         4.372 ns/op	       0 B/op	       0 allocs/op
+BenchmarkParseACK/ReuseSingle                                    	274579663	         4.369 ns/op	       0 B/op	       0 allocs/op
+BenchmarkParseHandshakeFragment/View                             	17181650	        63.56 ns/op	      48 B/op	       1 allocs/op
+BenchmarkParseHandshakeFragment/View                             	18241561	        63.39 ns/op	      48 B/op	       1 allocs/op
+BenchmarkParseHandshakeFragment/View                             	17820721	        63.14 ns/op	      48 B/op	       1 allocs/op
+BenchmarkParseHandshakeFragment/View                             	17595889	        63.62 ns/op	      48 B/op	       1 allocs/op
+BenchmarkParseHandshakeFragment/View                             	17547794	        63.56 ns/op	      48 B/op	       1 allocs/op
+BenchmarkParseHandshakeFragment/ReuseSingle                      	89535367	        13.42 ns/op	       0 B/op	       0 allocs/op
+BenchmarkParseHandshakeFragment/ReuseSingle                      	89192400	        13.40 ns/op	       0 B/op	       0 allocs/op
+BenchmarkParseHandshakeFragment/ReuseSingle                      	89663722	        13.40 ns/op	       0 B/op	       0 allocs/op
+BenchmarkParseHandshakeFragment/ReuseSingle                      	89659093	        13.52 ns/op	       0 B/op	       0 allocs/op
+BenchmarkParseHandshakeFragment/ReuseSingle                      	89593699	        13.39 ns/op	       0 B/op	       0 allocs/op
+BenchmarkParsePlainRecord/View                                   	17653260	        62.87 ns/op	      48 B/op	       1 allocs/op
+BenchmarkParsePlainRecord/View                                   	17678760	        63.03 ns/op	      48 B/op	       1 allocs/op
+BenchmarkParsePlainRecord/View                                   	17342128	        62.57 ns/op	      48 B/op	       1 allocs/op
+BenchmarkParsePlainRecord/View                                   	18349484	        63.29 ns/op	      48 B/op	       1 allocs/op
+BenchmarkParsePlainRecord/View                                   	18090452	        63.74 ns/op	      48 B/op	       1 allocs/op
+BenchmarkParsePlainRecord/ReuseSingle                            	93717535	        12.80 ns/op	       0 B/op	       0 allocs/op
+BenchmarkParsePlainRecord/ReuseSingle                            	93927140	        12.79 ns/op	       0 B/op	       0 allocs/op
+BenchmarkParsePlainRecord/ReuseSingle                            	93917790	        12.78 ns/op	       0 B/op	       0 allocs/op
+BenchmarkParsePlainRecord/ReuseSingle                            	94001961	        12.79 ns/op	       0 B/op	       0 allocs/op
+BenchmarkParsePlainRecord/ReuseSingle                            	93900997	        12.80 ns/op	       0 B/op	       0 allocs/op
+BenchmarkFlightPendingIndices/Allocated                          	14409639	        81.81 ns/op	      80 B/op	       1 allocs/op
+BenchmarkFlightPendingIndices/Allocated                          	13731591	        81.66 ns/op	      80 B/op	       1 allocs/op
+BenchmarkFlightPendingIndices/Allocated                          	14540704	        83.74 ns/op	      80 B/op	       1 allocs/op
+BenchmarkFlightPendingIndices/Allocated                          	14407221	        81.37 ns/op	      80 B/op	       1 allocs/op
+BenchmarkFlightPendingIndices/Allocated                          	14119664	        80.90 ns/op	      80 B/op	       1 allocs/op
+BenchmarkFlightPendingIndices/ReuseWindow                        	28482240	        42.22 ns/op	       0 B/op	       0 allocs/op
+BenchmarkFlightPendingIndices/ReuseWindow                        	28452376	        42.33 ns/op	       0 B/op	       0 allocs/op
+BenchmarkFlightPendingIndices/ReuseWindow                        	28306576	        42.23 ns/op	       0 B/op	       0 allocs/op
+BenchmarkFlightPendingIndices/ReuseWindow                        	28433874	        42.16 ns/op	       0 B/op	       0 allocs/op
+BenchmarkFlightPendingIndices/ReuseWindow                        	27933127	        42.17 ns/op	       0 B/op	       0 allocs/op
+BenchmarkFlightWireWindow/Pending                                	25881762	        46.33 ns/op	       0 B/op	       0 allocs/op
+BenchmarkFlightWireWindow/Pending                                	25825215	        46.38 ns/op	       0 B/op	       0 allocs/op
+BenchmarkFlightWireWindow/Pending                                	25833537	        46.38 ns/op	       0 B/op	       0 allocs/op
+BenchmarkFlightWireWindow/Pending                                	25929728	        46.38 ns/op	       0 B/op	       0 allocs/op
+BenchmarkFlightWireWindow/Pending                                	25767400	        46.38 ns/op	       0 B/op	       0 allocs/op
+BenchmarkFlightWireWindow/Retransmit                             	29717420	        40.48 ns/op	       0 B/op	       0 allocs/op
+BenchmarkFlightWireWindow/Retransmit                             	29665390	        40.49 ns/op	       0 B/op	       0 allocs/op
+BenchmarkFlightWireWindow/Retransmit                             	29651481	        40.55 ns/op	       0 B/op	       0 allocs/op
+BenchmarkFlightWireWindow/Retransmit                             	29651012	        40.42 ns/op	       0 B/op	       0 allocs/op
+BenchmarkFlightWireWindow/Retransmit                             	29622405	        40.40 ns/op	       0 B/op	       0 allocs/op
+BenchmarkFlightFirstRefresh                                      	 8764633	       136.9 ns/op	       0 B/op	       0 allocs/op
+BenchmarkFlightFirstRefresh                                      	10654857	       112.7 ns/op	       0 B/op	       0 allocs/op
+BenchmarkFlightFirstRefresh                                      	10888962	       110.1 ns/op	       0 B/op	       0 allocs/op
+BenchmarkFlightFirstRefresh                                      	11274376	       106.6 ns/op	       0 B/op	       0 allocs/op
+BenchmarkFlightFirstRefresh                                      	 7842787	       153.0 ns/op	       0 B/op	       0 allocs/op
+BenchmarkFlightInitialHistoryBatch                               	 3184524	       365.4 ns/op	     480 B/op	       1 allocs/op
+BenchmarkFlightInitialHistoryBatch                               	 3331746	       359.2 ns/op	     480 B/op	       1 allocs/op
+BenchmarkFlightInitialHistoryBatch                               	 3320858	       361.2 ns/op	     480 B/op	       1 allocs/op
+BenchmarkFlightInitialHistoryBatch                               	 3319345	       358.9 ns/op	     480 B/op	       1 allocs/op
+BenchmarkFlightInitialHistoryBatch                               	 3289381	       365.3 ns/op	     480 B/op	       1 allocs/op
+BenchmarkBuildProtectedFlight                                    	  314974	      3740 ns/op	1095.16 MB/s	    5616 B/op	       6 allocs/op
+BenchmarkBuildProtectedFlight                                    	  303058	      3753 ns/op	1091.43 MB/s	    5616 B/op	       6 allocs/op
+BenchmarkBuildProtectedFlight                                    	  282067	      3791 ns/op	1080.45 MB/s	    5616 B/op	       6 allocs/op
+BenchmarkBuildProtectedFlight                                    	  302050	      3758 ns/op	1090.02 MB/s	    5616 B/op	       6 allocs/op
+BenchmarkBuildProtectedFlight                                    	  307593	      3769 ns/op	1086.68 MB/s	    5616 B/op	       6 allocs/op
+BenchmarkBuildPlainFlight                                        	  530007	      2170 ns/op	1887.15 MB/s	    5040 B/op	       9 allocs/op
+BenchmarkBuildPlainFlight                                        	  580936	      2158 ns/op	1898.17 MB/s	    5040 B/op	       9 allocs/op
+BenchmarkBuildPlainFlight                                        	  573506	      2199 ns/op	1862.65 MB/s	    5040 B/op	       9 allocs/op
+BenchmarkBuildPlainFlight                                        	  567027	      2355 ns/op	1738.97 MB/s	    5040 B/op	       9 allocs/op
+BenchmarkBuildPlainFlight                                        	  539517	      2321 ns/op	1764.58 MB/s	    5040 B/op	       9 allocs/op
+BenchmarkCombineFlights                                          	 3226231	       373.4 ns/op	     624 B/op	       4 allocs/op
+BenchmarkCombineFlights                                          	 3264580	       372.6 ns/op	     624 B/op	       4 allocs/op
+BenchmarkCombineFlights                                          	 3253209	       382.4 ns/op	     624 B/op	       4 allocs/op
+BenchmarkCombineFlights                                          	 3192680	       372.9 ns/op	     624 B/op	       4 allocs/op
+BenchmarkCombineFlights                                          	 3264218	       373.4 ns/op	     624 B/op	       4 allocs/op
+BenchmarkParseExtensions/Owned                                   	 1804003	       667.2 ns/op	     472 B/op	       8 allocs/op
+BenchmarkParseExtensions/Owned                                   	 1766143	       664.4 ns/op	     472 B/op	       8 allocs/op
+BenchmarkParseExtensions/Owned                                   	 1802306	       669.7 ns/op	     472 B/op	       8 allocs/op
+BenchmarkParseExtensions/Owned                                   	 1769818	       674.4 ns/op	     472 B/op	       8 allocs/op
+BenchmarkParseExtensions/Owned                                   	 1801116	       664.4 ns/op	     472 B/op	       8 allocs/op
+BenchmarkParseExtensions/View                                    	 2825184	       418.9 ns/op	     336 B/op	       2 allocs/op
+BenchmarkParseExtensions/View                                    	 2850157	       418.0 ns/op	     336 B/op	       2 allocs/op
+BenchmarkParseExtensions/View                                    	 2864253	       421.7 ns/op	     336 B/op	       2 allocs/op
+BenchmarkParseExtensions/View                                    	 2840000	       421.0 ns/op	     336 B/op	       2 allocs/op
+BenchmarkParseExtensions/View                                    	 2823600	       420.1 ns/op	     336 B/op	       2 allocs/op
+BenchmarkParseExtensions/OrderedView                             	18861051	        63.55 ns/op	       0 B/op	       0 allocs/op
+BenchmarkParseExtensions/OrderedView                             	18850506	        63.59 ns/op	       0 B/op	       0 allocs/op
+BenchmarkParseExtensions/OrderedView                             	18941175	        63.53 ns/op	       0 B/op	       0 allocs/op
+BenchmarkParseExtensions/OrderedView                             	18963475	        63.63 ns/op	       0 B/op	       0 allocs/op
+BenchmarkParseExtensions/OrderedView                             	18836220	        63.62 ns/op	       0 B/op	       0 allocs/op
+BenchmarkParseKeyShares/Client1/Owned                            	11289973	       104.8 ns/op	      64 B/op	       2 allocs/op
+BenchmarkParseKeyShares/Client1/Owned                            	11738389	       100.2 ns/op	      64 B/op	       2 allocs/op
+BenchmarkParseKeyShares/Client1/Owned                            	11598063	       101.7 ns/op	      64 B/op	       2 allocs/op
+BenchmarkParseKeyShares/Client1/Owned                            	11361642	       104.2 ns/op	      64 B/op	       2 allocs/op
+BenchmarkParseKeyShares/Client1/Owned                            	11667373	       101.6 ns/op	      64 B/op	       2 allocs/op
+BenchmarkParseKeyShares/Client1/View                             	17621748	        66.71 ns/op	      32 B/op	       1 allocs/op
+BenchmarkParseKeyShares/Client1/View                             	16950241	        67.96 ns/op	      32 B/op	       1 allocs/op
+BenchmarkParseKeyShares/Client1/View                             	17896929	        67.25 ns/op	      32 B/op	       1 allocs/op
+BenchmarkParseKeyShares/Client1/View                             	16905928	        70.72 ns/op	      32 B/op	       1 allocs/op
+BenchmarkParseKeyShares/Client1/View                             	17646729	        66.72 ns/op	      32 B/op	       1 allocs/op
+BenchmarkParseKeyShares/Client1/ViewInto                         	42034785	        28.65 ns/op	       0 B/op	       0 allocs/op
+BenchmarkParseKeyShares/Client1/ViewInto                         	41957202	        28.63 ns/op	       0 B/op	       0 allocs/op
+BenchmarkParseKeyShares/Client1/ViewInto                         	42000412	        29.02 ns/op	       0 B/op	       0 allocs/op
+BenchmarkParseKeyShares/Client1/ViewInto                         	41988177	        28.60 ns/op	       0 B/op	       0 allocs/op
+BenchmarkParseKeyShares/Client1/ViewInto                         	41997984	        28.66 ns/op	       0 B/op	       0 allocs/op
+BenchmarkParseKeyShares/Client4/Owned                            	 3794571	       301.3 ns/op	     256 B/op	       5 allocs/op
+BenchmarkParseKeyShares/Client4/Owned                            	 3915882	       304.3 ns/op	     256 B/op	       5 allocs/op
+BenchmarkParseKeyShares/Client4/Owned                            	 3966189	       305.3 ns/op	     256 B/op	       5 allocs/op
+BenchmarkParseKeyShares/Client4/Owned                            	 3943903	       299.8 ns/op	     256 B/op	       5 allocs/op
+BenchmarkParseKeyShares/Client4/Owned                            	 3924151	       299.7 ns/op	     256 B/op	       5 allocs/op
+BenchmarkParseKeyShares/Client4/View                             	 7685185	       153.0 ns/op	     128 B/op	       1 allocs/op
+BenchmarkParseKeyShares/Client4/View                             	 7710861	       152.8 ns/op	     128 B/op	       1 allocs/op
+BenchmarkParseKeyShares/Client4/View                             	 7705864	       153.3 ns/op	     128 B/op	       1 allocs/op
+BenchmarkParseKeyShares/Client4/View                             	 7561167	       155.0 ns/op	     128 B/op	       1 allocs/op
+BenchmarkParseKeyShares/Client4/View                             	 7798054	       153.6 ns/op	     128 B/op	       1 allocs/op
+BenchmarkParseKeyShares/Client4/ViewInto                         	15959394	        75.23 ns/op	       0 B/op	       0 allocs/op
+BenchmarkParseKeyShares/Client4/ViewInto                         	15952908	        75.37 ns/op	       0 B/op	       0 allocs/op
+BenchmarkParseKeyShares/Client4/ViewInto                         	15919339	        76.57 ns/op	       0 B/op	       0 allocs/op
+BenchmarkParseKeyShares/Client4/ViewInto                         	15928966	        75.33 ns/op	       0 B/op	       0 allocs/op
+BenchmarkParseKeyShares/Client4/ViewInto                         	15924561	        75.38 ns/op	       0 B/op	       0 allocs/op
+BenchmarkParseKeyShares/Client9/Owned                            	  987069	      1176 ns/op	     824 B/op	      14 allocs/op
+BenchmarkParseKeyShares/Client9/Owned                            	 1000000	      1163 ns/op	     824 B/op	      14 allocs/op
+BenchmarkParseKeyShares/Client9/Owned                            	 1000000	      1166 ns/op	     824 B/op	      14 allocs/op
+BenchmarkParseKeyShares/Client9/Owned                            	 1000000	      1160 ns/op	     824 B/op	      14 allocs/op
+BenchmarkParseKeyShares/Client9/Owned                            	 1000000	      1161 ns/op	     824 B/op	      14 allocs/op
+BenchmarkParseKeyShares/Client9/View                             	 1453272	       823.3 ns/op	     536 B/op	       5 allocs/op
+BenchmarkParseKeyShares/Client9/View                             	 1459003	       816.0 ns/op	     536 B/op	       5 allocs/op
+BenchmarkParseKeyShares/Client9/View                             	 1467122	       822.0 ns/op	     536 B/op	       5 allocs/op
+BenchmarkParseKeyShares/Client9/View                             	 1466620	       819.3 ns/op	     536 B/op	       5 allocs/op
+BenchmarkParseKeyShares/Client9/View                             	 1460503	       816.1 ns/op	     536 B/op	       5 allocs/op
+BenchmarkParseKeyShares/Client9/ViewInto                         	 1486168	       807.5 ns/op	     536 B/op	       5 allocs/op
+BenchmarkParseKeyShares/Client9/ViewInto                         	 1486244	       809.9 ns/op	     536 B/op	       5 allocs/op
+BenchmarkParseKeyShares/Client9/ViewInto                         	 1479940	       805.4 ns/op	     536 B/op	       5 allocs/op
+BenchmarkParseKeyShares/Client9/ViewInto                         	 1472776	       822.2 ns/op	     536 B/op	       5 allocs/op
+BenchmarkParseKeyShares/Client9/ViewInto                         	 1482836	       809.2 ns/op	     536 B/op	       5 allocs/op
+BenchmarkDeriveTrafficKeys/1301                                  	  673806	      1512 ns/op	     976 B/op	       9 allocs/op
+BenchmarkDeriveTrafficKeys/1301                                  	  680701	      1501 ns/op	     976 B/op	       9 allocs/op
+BenchmarkDeriveTrafficKeys/1301                                  	  697706	      1504 ns/op	     976 B/op	       9 allocs/op
+BenchmarkDeriveTrafficKeys/1301                                  	  669514	      1506 ns/op	     976 B/op	       9 allocs/op
+BenchmarkDeriveTrafficKeys/1301                                  	  795355	      1513 ns/op	     976 B/op	       9 allocs/op
+BenchmarkDeriveTrafficKeys/1302                                  	  325638	      3413 ns/op	    1520 B/op	       9 allocs/op
+BenchmarkDeriveTrafficKeys/1302                                  	  324334	      3400 ns/op	    1520 B/op	       9 allocs/op
+BenchmarkDeriveTrafficKeys/1302                                  	  331414	      3406 ns/op	    1520 B/op	       9 allocs/op
+BenchmarkDeriveTrafficKeys/1302                                  	  330226	      3403 ns/op	    1520 B/op	       9 allocs/op
+BenchmarkDeriveTrafficKeys/1302                                  	  329524	      3402 ns/op	    1520 B/op	       9 allocs/op
+BenchmarkDeriveTrafficKeysInto/1301                              	  694906	      1465 ns/op	     928 B/op	       8 allocs/op
+BenchmarkDeriveTrafficKeysInto/1301                              	  717796	      1463 ns/op	     928 B/op	       8 allocs/op
+BenchmarkDeriveTrafficKeysInto/1301                              	  702256	      1462 ns/op	     928 B/op	       8 allocs/op
+BenchmarkDeriveTrafficKeysInto/1301                              	  824866	      1460 ns/op	     928 B/op	       8 allocs/op
+BenchmarkDeriveTrafficKeysInto/1301                              	  701709	      1459 ns/op	     928 B/op	       8 allocs/op
+BenchmarkDeriveTrafficKeysInto/1302                              	  333322	      3315 ns/op	    1440 B/op	       8 allocs/op
+BenchmarkDeriveTrafficKeysInto/1302                              	  339547	      3325 ns/op	    1440 B/op	       8 allocs/op
+BenchmarkDeriveTrafficKeysInto/1302                              	  340927	      3327 ns/op	    1440 B/op	       8 allocs/op
+BenchmarkDeriveTrafficKeysInto/1302                              	  340962	      3325 ns/op	    1440 B/op	       8 allocs/op
+BenchmarkDeriveTrafficKeysInto/1302                              	  338850	      3323 ns/op	    1440 B/op	       8 allocs/op
+BenchmarkNewRecordCipher/AES128GCM                               	  429306	      2531 ns/op	    3264 B/op	      13 allocs/op
+BenchmarkNewRecordCipher/AES128GCM                               	  427614	      2523 ns/op	    3264 B/op	      13 allocs/op
+BenchmarkNewRecordCipher/AES128GCM                               	  425512	      2532 ns/op	    3264 B/op	      13 allocs/op
+BenchmarkNewRecordCipher/AES128GCM                               	  417093	      2600 ns/op	    3264 B/op	      13 allocs/op
+BenchmarkNewRecordCipher/AES128GCM                               	  422032	      2616 ns/op	    3264 B/op	      13 allocs/op
+BenchmarkNewRecordCipher/AES256GCM                               	  254872	      4454 ns/op	    3776 B/op	      13 allocs/op
+BenchmarkNewRecordCipher/AES256GCM                               	  246009	      4445 ns/op	    3776 B/op	      13 allocs/op
+BenchmarkNewRecordCipher/AES256GCM                               	  256749	      4445 ns/op	    3776 B/op	      13 allocs/op
+BenchmarkNewRecordCipher/AES256GCM                               	  255939	      4453 ns/op	    3776 B/op	      13 allocs/op
+BenchmarkNewRecordCipher/AES256GCM                               	  251569	      4459 ns/op	    3776 B/op	      13 allocs/op
+BenchmarkNewRecordCipher/ChaCha20Poly1305                        	  566733	      1823 ns/op	    1528 B/op	      12 allocs/op
+BenchmarkNewRecordCipher/ChaCha20Poly1305                        	  571600	      1808 ns/op	    1528 B/op	      12 allocs/op
+BenchmarkNewRecordCipher/ChaCha20Poly1305                        	  665360	      1837 ns/op	    1528 B/op	      12 allocs/op
+BenchmarkNewRecordCipher/ChaCha20Poly1305                        	  584552	      1810 ns/op	    1528 B/op	      12 allocs/op
+BenchmarkNewRecordCipher/ChaCha20Poly1305                        	  561182	      1808 ns/op	    1528 B/op	      12 allocs/op
+BenchmarkNewRecordCipher/AES128CCM                               	  484070	      2230 ns/op	    2520 B/op	      13 allocs/op
+BenchmarkNewRecordCipher/AES128CCM                               	  481458	      2229 ns/op	    2520 B/op	      13 allocs/op
+BenchmarkNewRecordCipher/AES128CCM                               	  486585	      2246 ns/op	    2520 B/op	      13 allocs/op
+BenchmarkNewRecordCipher/AES128CCM                               	  482986	      2236 ns/op	    2520 B/op	      13 allocs/op
+BenchmarkNewRecordCipher/AES128CCM                               	  473557	      2236 ns/op	    2520 B/op	      13 allocs/op
+BenchmarkKeyScheduleDerivation/1301                              	  160498	      7058 ns/op	    5184 B/op	      48 allocs/op
+BenchmarkKeyScheduleDerivation/1301                              	  164528	      7027 ns/op	    5184 B/op	      48 allocs/op
+BenchmarkKeyScheduleDerivation/1301                              	  163592	      7072 ns/op	    5184 B/op	      48 allocs/op
+BenchmarkKeyScheduleDerivation/1301                              	  161988	      7037 ns/op	    5184 B/op	      48 allocs/op
+BenchmarkKeyScheduleDerivation/1301                              	  164682	      7009 ns/op	    5184 B/op	      48 allocs/op
+BenchmarkKeyScheduleDerivation/1302                              	   74904	     15683 ns/op	    8224 B/op	      48 allocs/op
+BenchmarkKeyScheduleDerivation/1302                              	   75102	     15663 ns/op	    8224 B/op	      48 allocs/op
+BenchmarkKeyScheduleDerivation/1302                              	   75570	     15776 ns/op	    8224 B/op	      48 allocs/op
+BenchmarkKeyScheduleDerivation/1302                              	   74548	     15679 ns/op	    8224 B/op	      48 allocs/op
+BenchmarkKeyScheduleDerivation/1302                              	   75199	     15809 ns/op	    8224 B/op	      48 allocs/op
+BenchmarkEmptyTranscriptHash/1301                                	960618792	         1.249 ns/op	       0 B/op	       0 allocs/op
+BenchmarkEmptyTranscriptHash/1301                                	958570824	         1.249 ns/op	       0 B/op	       0 allocs/op
+BenchmarkEmptyTranscriptHash/1301                                	960803415	         1.266 ns/op	       0 B/op	       0 allocs/op
+BenchmarkEmptyTranscriptHash/1301                                	962698365	         1.247 ns/op	       0 B/op	       0 allocs/op
+BenchmarkEmptyTranscriptHash/1301                                	957899823	         1.261 ns/op	       0 B/op	       0 allocs/op
+BenchmarkEmptyTranscriptHash/1302                                	962728000	         1.247 ns/op	       0 B/op	       0 allocs/op
+BenchmarkEmptyTranscriptHash/1302                                	963825438	         1.246 ns/op	       0 B/op	       0 allocs/op
+BenchmarkEmptyTranscriptHash/1302                                	963774255	         1.249 ns/op	       0 B/op	       0 allocs/op
+BenchmarkEmptyTranscriptHash/1302                                	960902948	         1.247 ns/op	       0 B/op	       0 allocs/op
+BenchmarkEmptyTranscriptHash/1302                                	962945828	         1.249 ns/op	       0 B/op	       0 allocs/op
+BenchmarkFinishedVerifyData/1301                                 	  866539	      1386 ns/op	     992 B/op	      11 allocs/op
+BenchmarkFinishedVerifyData/1301                                 	  865608	      1391 ns/op	     992 B/op	      11 allocs/op
+BenchmarkFinishedVerifyData/1301                                 	  866361	      1384 ns/op	     992 B/op	      11 allocs/op
+BenchmarkFinishedVerifyData/1301                                 	  865804	      1388 ns/op	     992 B/op	      11 allocs/op
+BenchmarkFinishedVerifyData/1301                                 	  865737	      1378 ns/op	     992 B/op	      11 allocs/op
+BenchmarkFinishedVerifyData/1302                                 	  357625	      3110 ns/op	    1648 B/op	      11 allocs/op
+BenchmarkFinishedVerifyData/1302                                 	  361197	      3131 ns/op	    1648 B/op	      11 allocs/op
+BenchmarkFinishedVerifyData/1302                                 	  357984	      3119 ns/op	    1648 B/op	      11 allocs/op
+BenchmarkFinishedVerifyData/1302                                 	  354210	      3150 ns/op	    1648 B/op	      11 allocs/op
+BenchmarkFinishedVerifyData/1302                                 	  360674	      3128 ns/op	    1648 B/op	      11 allocs/op
+BenchmarkCalculatePSKBinder/1301                                 	  384889	      2773 ns/op	    1952 B/op	      21 allocs/op
+BenchmarkCalculatePSKBinder/1301                                 	  370983	      2762 ns/op	    1952 B/op	      21 allocs/op
+BenchmarkCalculatePSKBinder/1301                                 	  382608	      2763 ns/op	    1952 B/op	      21 allocs/op
+BenchmarkCalculatePSKBinder/1301                                 	  382492	      2765 ns/op	    1952 B/op	      21 allocs/op
+BenchmarkCalculatePSKBinder/1301                                 	  380270	      2768 ns/op	    1952 B/op	      21 allocs/op
+BenchmarkCalculatePSKBinder/1302                                 	  184960	      6243 ns/op	    3248 B/op	      21 allocs/op
+BenchmarkCalculatePSKBinder/1302                                 	  182908	      6230 ns/op	    3248 B/op	      21 allocs/op
+BenchmarkCalculatePSKBinder/1302                                 	  182914	      6252 ns/op	    3248 B/op	      21 allocs/op
+BenchmarkCalculatePSKBinder/1302                                 	  183609	      6257 ns/op	    3248 B/op	      21 allocs/op
+BenchmarkCalculatePSKBinder/1302                                 	  184850	      6232 ns/op	    3248 B/op	      21 allocs/op
+BenchmarkKeyScheduleSideDerivations/1301/EarlyTraffic            	 1710172	       697.0 ns/op	     480 B/op	       5 allocs/op
+BenchmarkKeyScheduleSideDerivations/1301/EarlyTraffic            	 1716884	       696.3 ns/op	     480 B/op	       5 allocs/op
+BenchmarkKeyScheduleSideDerivations/1301/EarlyTraffic            	 1729816	       689.6 ns/op	     480 B/op	       5 allocs/op
+BenchmarkKeyScheduleSideDerivations/1301/EarlyTraffic            	 1721203	       691.5 ns/op	     480 B/op	       5 allocs/op
+BenchmarkKeyScheduleSideDerivations/1301/EarlyTraffic            	 1729969	       695.7 ns/op	     480 B/op	       5 allocs/op
+BenchmarkKeyScheduleSideDerivations/1301/TrafficUpdate           	 1668176	       722.8 ns/op	     512 B/op	       6 allocs/op
+BenchmarkKeyScheduleSideDerivations/1301/TrafficUpdate           	 1654972	       722.5 ns/op	     512 B/op	       6 allocs/op
+BenchmarkKeyScheduleSideDerivations/1301/TrafficUpdate           	 1662800	       722.1 ns/op	     512 B/op	       6 allocs/op
+BenchmarkKeyScheduleSideDerivations/1301/TrafficUpdate           	 1652630	       723.8 ns/op	     512 B/op	       6 allocs/op
+BenchmarkKeyScheduleSideDerivations/1301/TrafficUpdate           	 1660581	       725.0 ns/op	     512 B/op	       6 allocs/op
+BenchmarkKeyScheduleSideDerivations/1301/ResumptionPSK           	 1653945	       722.0 ns/op	     512 B/op	       6 allocs/op
+BenchmarkKeyScheduleSideDerivations/1301/ResumptionPSK           	 1653859	       720.4 ns/op	     512 B/op	       6 allocs/op
+BenchmarkKeyScheduleSideDerivations/1301/ResumptionPSK           	 1654785	       726.7 ns/op	     512 B/op	       6 allocs/op
+BenchmarkKeyScheduleSideDerivations/1301/ResumptionPSK           	 1657470	       718.8 ns/op	     512 B/op	       6 allocs/op
+BenchmarkKeyScheduleSideDerivations/1301/ResumptionPSK           	 1651675	       718.2 ns/op	     512 B/op	       6 allocs/op
+BenchmarkKeyScheduleSideDerivations/1301/Exporter                	  561651	      1789 ns/op	    1408 B/op	      15 allocs/op
+BenchmarkKeyScheduleSideDerivations/1301/Exporter                	  565810	      1791 ns/op	    1408 B/op	      15 allocs/op
+BenchmarkKeyScheduleSideDerivations/1301/Exporter                	  566839	      1787 ns/op	    1408 B/op	      15 allocs/op
+BenchmarkKeyScheduleSideDerivations/1301/Exporter                	  565152	      1792 ns/op	    1408 B/op	      15 allocs/op
+BenchmarkKeyScheduleSideDerivations/1301/Exporter                	  672910	      1788 ns/op	    1408 B/op	      15 allocs/op
+BenchmarkKeyScheduleSideDerivations/1301/ExporterZero            	133884856	         8.951 ns/op	       0 B/op	       0 allocs/op
+BenchmarkKeyScheduleSideDerivations/1301/ExporterZero            	134054979	         8.948 ns/op	       0 B/op	       0 allocs/op
+BenchmarkKeyScheduleSideDerivations/1301/ExporterZero            	134118837	         8.958 ns/op	       0 B/op	       0 allocs/op
+BenchmarkKeyScheduleSideDerivations/1301/ExporterZero            	134056984	         8.956 ns/op	       0 B/op	       0 allocs/op
+BenchmarkKeyScheduleSideDerivations/1301/ExporterZero            	133662348	         8.971 ns/op	       0 B/op	       0 allocs/op
+BenchmarkKeyScheduleSideDerivations/1302/EarlyTraffic            	  690854	      1552 ns/op	     800 B/op	       5 allocs/op
+BenchmarkKeyScheduleSideDerivations/1302/EarlyTraffic            	  666412	      1558 ns/op	     800 B/op	       5 allocs/op
+BenchmarkKeyScheduleSideDerivations/1302/EarlyTraffic            	  698697	      1561 ns/op	     800 B/op	       5 allocs/op
+BenchmarkKeyScheduleSideDerivations/1302/EarlyTraffic            	  701395	      1555 ns/op	     800 B/op	       5 allocs/op
+BenchmarkKeyScheduleSideDerivations/1302/EarlyTraffic            	  686262	      1561 ns/op	     800 B/op	       5 allocs/op
+BenchmarkKeyScheduleSideDerivations/1302/TrafficUpdate           	  682418	      1598 ns/op	     848 B/op	       6 allocs/op
+BenchmarkKeyScheduleSideDerivations/1302/TrafficUpdate           	  664237	      1593 ns/op	     848 B/op	       6 allocs/op
+BenchmarkKeyScheduleSideDerivations/1302/TrafficUpdate           	  667590	      1593 ns/op	     848 B/op	       6 allocs/op
+BenchmarkKeyScheduleSideDerivations/1302/TrafficUpdate           	  669417	      1596 ns/op	     848 B/op	       6 allocs/op
+BenchmarkKeyScheduleSideDerivations/1302/TrafficUpdate           	  673232	      1599 ns/op	     848 B/op	       6 allocs/op
+BenchmarkKeyScheduleSideDerivations/1302/ResumptionPSK           	  674991	      1601 ns/op	     848 B/op	       6 allocs/op
+BenchmarkKeyScheduleSideDerivations/1302/ResumptionPSK           	  666930	      1601 ns/op	     848 B/op	       6 allocs/op
+BenchmarkKeyScheduleSideDerivations/1302/ResumptionPSK           	  667087	      1595 ns/op	     848 B/op	       6 allocs/op
+BenchmarkKeyScheduleSideDerivations/1302/ResumptionPSK           	  666337	      1599 ns/op	     848 B/op	       6 allocs/op
+BenchmarkKeyScheduleSideDerivations/1302/ResumptionPSK           	  673618	      1623 ns/op	     848 B/op	       6 allocs/op
+BenchmarkKeyScheduleSideDerivations/1302/Exporter                	  276805	      4075 ns/op	    2384 B/op	      15 allocs/op
+BenchmarkKeyScheduleSideDerivations/1302/Exporter                	  280678	      4071 ns/op	    2384 B/op	      15 allocs/op
+BenchmarkKeyScheduleSideDerivations/1302/Exporter                	  278749	      4094 ns/op	    2384 B/op	      15 allocs/op
+BenchmarkKeyScheduleSideDerivations/1302/Exporter                	  280534	      4068 ns/op	    2384 B/op	      15 allocs/op
+BenchmarkKeyScheduleSideDerivations/1302/Exporter                	  280074	      4101 ns/op	    2384 B/op	      15 allocs/op
+BenchmarkKeyScheduleSideDerivations/1302/ExporterZero            	133968109	         8.981 ns/op	       0 B/op	       0 allocs/op
+BenchmarkKeyScheduleSideDerivations/1302/ExporterZero            	133503226	         8.969 ns/op	       0 B/op	       0 allocs/op
+BenchmarkKeyScheduleSideDerivations/1302/ExporterZero            	133654695	         8.973 ns/op	       0 B/op	       0 allocs/op
+BenchmarkKeyScheduleSideDerivations/1302/ExporterZero            	132880927	         8.970 ns/op	       0 B/op	       0 allocs/op
+BenchmarkKeyScheduleSideDerivations/1302/ExporterZero            	133682560	         8.958 ns/op	       0 B/op	       0 allocs/op
+BenchmarkReceivingTrafficKeyUpdate/1301                          	  299072	      3692 ns/op	    3776 B/op	      19 allocs/op
+BenchmarkReceivingTrafficKeyUpdate/1301                          	  307124	      3671 ns/op	    3776 B/op	      19 allocs/op
+BenchmarkReceivingTrafficKeyUpdate/1301                          	  299834	      3666 ns/op	    3776 B/op	      19 allocs/op
+BenchmarkReceivingTrafficKeyUpdate/1301                          	  301818	      3680 ns/op	    3776 B/op	      19 allocs/op
+BenchmarkReceivingTrafficKeyUpdate/1301                          	  306504	      3672 ns/op	    3776 B/op	      19 allocs/op
+BenchmarkReceivingTrafficKeyUpdate/1302                          	  179896	      6527 ns/op	    4624 B/op	      19 allocs/op
+BenchmarkReceivingTrafficKeyUpdate/1302                          	  178605	      6558 ns/op	    4624 B/op	      19 allocs/op
+BenchmarkReceivingTrafficKeyUpdate/1302                          	  173496	      6543 ns/op	    4624 B/op	      19 allocs/op
+BenchmarkReceivingTrafficKeyUpdate/1302                          	  178827	      6519 ns/op	    4624 B/op	      19 allocs/op
+BenchmarkReceivingTrafficKeyUpdate/1302                          	  179731	      6492 ns/op	    4624 B/op	      19 allocs/op
+BenchmarkSendingTrafficKeyUpdate/1301                            	  313831	      3504 ns/op	    3792 B/op	      19 allocs/op
+BenchmarkSendingTrafficKeyUpdate/1301                            	  305439	      3517 ns/op	    3792 B/op	      19 allocs/op
+BenchmarkSendingTrafficKeyUpdate/1301                            	  317313	      3551 ns/op	    3792 B/op	      19 allocs/op
+BenchmarkSendingTrafficKeyUpdate/1301                            	  319858	      3538 ns/op	    3792 B/op	      19 allocs/op
+BenchmarkSendingTrafficKeyUpdate/1301                            	  312926	      3509 ns/op	    3792 B/op	      19 allocs/op
+BenchmarkSendingTrafficKeyUpdate/1302                            	  184034	      6344 ns/op	    4624 B/op	      19 allocs/op
+BenchmarkSendingTrafficKeyUpdate/1302                            	  182787	      6336 ns/op	    4624 B/op	      19 allocs/op
+BenchmarkSendingTrafficKeyUpdate/1302                            	  181936	      6360 ns/op	    4624 B/op	      19 allocs/op
+BenchmarkSendingTrafficKeyUpdate/1302                            	  183040	      6371 ns/op	    4624 B/op	      19 allocs/op
+BenchmarkSendingTrafficKeyUpdate/1302                            	  182311	      6373 ns/op	    4624 B/op	      19 allocs/op
+BenchmarkInstallApplicationKeys/1301                             	  190408	      6036 ns/op	    7488 B/op	      34 allocs/op
+BenchmarkInstallApplicationKeys/1301                             	  190938	      6048 ns/op	    7488 B/op	      34 allocs/op
+BenchmarkInstallApplicationKeys/1301                             	  189478	      6040 ns/op	    7488 B/op	      34 allocs/op
+BenchmarkInstallApplicationKeys/1301                             	  187590	      6034 ns/op	    7488 B/op	      34 allocs/op
+BenchmarkInstallApplicationKeys/1301                             	  183531	      6045 ns/op	    7488 B/op	      34 allocs/op
+BenchmarkInstallApplicationKeys/1302                             	  119197	      9932 ns/op	    8544 B/op	      34 allocs/op
+BenchmarkInstallApplicationKeys/1302                             	  117992	      9901 ns/op	    8544 B/op	      34 allocs/op
+BenchmarkInstallApplicationKeys/1302                             	  118416	      9940 ns/op	    8544 B/op	      34 allocs/op
+BenchmarkInstallApplicationKeys/1302                             	  117166	      9981 ns/op	    8544 B/op	      34 allocs/op
+BenchmarkInstallApplicationKeys/1302                             	  118981	      9900 ns/op	    8544 B/op	      34 allocs/op
+BenchmarkMarshalExtensions                                       	 3619594	       332.0 ns/op	     128 B/op	       1 allocs/op
+BenchmarkMarshalExtensions                                       	 3623956	       332.2 ns/op	     128 B/op	       1 allocs/op
+BenchmarkMarshalExtensions                                       	 3604010	       332.4 ns/op	     128 B/op	       1 allocs/op
+BenchmarkMarshalExtensions                                       	 3635696	       332.0 ns/op	     128 B/op	       1 allocs/op
+BenchmarkMarshalExtensions                                       	 3599533	       333.3 ns/op	     128 B/op	       1 allocs/op
+BenchmarkMarshalHandshakeMessages/ClientHello                    	 2312340	       520.7 ns/op	     424 B/op	       8 allocs/op
+BenchmarkMarshalHandshakeMessages/ClientHello                    	 2296304	       521.2 ns/op	     424 B/op	       8 allocs/op
+BenchmarkMarshalHandshakeMessages/ClientHello                    	 2279922	       525.6 ns/op	     424 B/op	       8 allocs/op
+BenchmarkMarshalHandshakeMessages/ClientHello                    	 2267430	       524.3 ns/op	     424 B/op	       8 allocs/op
+BenchmarkMarshalHandshakeMessages/ClientHello                    	 2279396	       524.5 ns/op	     424 B/op	       8 allocs/op
+BenchmarkMarshalHandshakeMessages/ResumptionClientHello          	 1629205	       734.9 ns/op	     744 B/op	       9 allocs/op
+BenchmarkMarshalHandshakeMessages/ResumptionClientHello          	 1635129	       733.4 ns/op	     744 B/op	       9 allocs/op
+BenchmarkMarshalHandshakeMessages/ResumptionClientHello          	 1623151	       739.4 ns/op	     744 B/op	       9 allocs/op
+BenchmarkMarshalHandshakeMessages/ResumptionClientHello          	 1634031	       735.0 ns/op	     744 B/op	       9 allocs/op
+BenchmarkMarshalHandshakeMessages/ResumptionClientHello          	 1632980	       734.6 ns/op	     744 B/op	       9 allocs/op
+BenchmarkMarshalHandshakeMessages/ServerHello                    	13312471	        87.67 ns/op	     112 B/op	       1 allocs/op
+BenchmarkMarshalHandshakeMessages/ServerHello                    	13322448	        88.79 ns/op	     112 B/op	       1 allocs/op
+BenchmarkMarshalHandshakeMessages/ServerHello                    	13302181	        88.19 ns/op	     112 B/op	       1 allocs/op
+BenchmarkMarshalHandshakeMessages/ServerHello                    	13317462	        88.24 ns/op	     112 B/op	       1 allocs/op
+BenchmarkMarshalHandshakeMessages/ServerHello                    	13053811	        88.46 ns/op	     112 B/op	       1 allocs/op
+BenchmarkMarshalHandshakeMessages/HelloRetryRequest              	13759838	        84.94 ns/op	     128 B/op	       1 allocs/op
+BenchmarkMarshalHandshakeMessages/HelloRetryRequest              	13682256	        84.75 ns/op	     128 B/op	       1 allocs/op
+BenchmarkMarshalHandshakeMessages/HelloRetryRequest              	13740432	        85.43 ns/op	     128 B/op	       1 allocs/op
+BenchmarkMarshalHandshakeMessages/HelloRetryRequest              	13819033	        84.85 ns/op	     128 B/op	       1 allocs/op
+BenchmarkMarshalHandshakeMessages/HelloRetryRequest              	13870614	        84.97 ns/op	     128 B/op	       1 allocs/op
+BenchmarkMarshalHandshakeMessages/CertificateVerify              	22125758	        52.29 ns/op	      80 B/op	       1 allocs/op
+BenchmarkMarshalHandshakeMessages/CertificateVerify              	22102812	        52.07 ns/op	      80 B/op	       1 allocs/op
+BenchmarkMarshalHandshakeMessages/CertificateVerify              	22026394	        52.46 ns/op	      80 B/op	       1 allocs/op
+BenchmarkMarshalHandshakeMessages/CertificateVerify              	22233039	        52.20 ns/op	      80 B/op	       1 allocs/op
+BenchmarkMarshalHandshakeMessages/CertificateVerify              	22017903	        52.25 ns/op	      80 B/op	       1 allocs/op
+BenchmarkMarshalHandshakeMessages/Certificate                    	 2157156	       557.5 ns/op	    1152 B/op	       1 allocs/op
+BenchmarkMarshalHandshakeMessages/Certificate                    	 2150170	       560.6 ns/op	    1152 B/op	       1 allocs/op
+BenchmarkMarshalHandshakeMessages/Certificate                    	 2149387	       558.7 ns/op	    1152 B/op	       1 allocs/op
+BenchmarkMarshalHandshakeMessages/Certificate                    	 2143712	       561.1 ns/op	    1152 B/op	       1 allocs/op
+BenchmarkMarshalHandshakeMessages/Certificate                    	 2157892	       559.2 ns/op	    1152 B/op	       1 allocs/op
+BenchmarkMarshalHandshakeMessages/NewSessionTicket               	16751769	        69.55 ns/op	      96 B/op	       1 allocs/op
+BenchmarkMarshalHandshakeMessages/NewSessionTicket               	16695926	        69.45 ns/op	      96 B/op	       1 allocs/op
+BenchmarkMarshalHandshakeMessages/NewSessionTicket               	16768224	        69.54 ns/op	      96 B/op	       1 allocs/op
+BenchmarkMarshalHandshakeMessages/NewSessionTicket               	16876077	        69.91 ns/op	      96 B/op	       1 allocs/op
+BenchmarkMarshalHandshakeMessages/NewSessionTicket               	16762588	        69.88 ns/op	      96 B/op	       1 allocs/op
+BenchmarkMarshalHandshakeMessages/SessionTicketState             	16415028	        71.50 ns/op	      80 B/op	       1 allocs/op
+BenchmarkMarshalHandshakeMessages/SessionTicketState             	15524586	        71.12 ns/op	      80 B/op	       1 allocs/op
+BenchmarkMarshalHandshakeMessages/SessionTicketState             	16415272	        71.57 ns/op	      80 B/op	       1 allocs/op
+BenchmarkMarshalHandshakeMessages/SessionTicketState             	16340814	        71.35 ns/op	      80 B/op	       1 allocs/op
+BenchmarkMarshalHandshakeMessages/SessionTicketState             	16293420	        71.38 ns/op	      80 B/op	       1 allocs/op
+BenchmarkMarshalHandshakeMessages/NewConnectionID                	24968475	        46.38 ns/op	      32 B/op	       1 allocs/op
+BenchmarkMarshalHandshakeMessages/NewConnectionID                	24855758	        46.46 ns/op	      32 B/op	       1 allocs/op
+BenchmarkMarshalHandshakeMessages/NewConnectionID                	24647240	        45.71 ns/op	      32 B/op	       1 allocs/op
+BenchmarkMarshalHandshakeMessages/NewConnectionID                	25099938	        45.74 ns/op	      32 B/op	       1 allocs/op
+BenchmarkMarshalHandshakeMessages/NewConnectionID                	24885085	        46.39 ns/op	      32 B/op	       1 allocs/op
+BenchmarkHandshakeReassembly                                     	   46326	     25993 ns/op	2521.28 MB/s	   73856 B/op	       3 allocs/op
+BenchmarkHandshakeReassembly                                     	   46407	     25706 ns/op	2549.48 MB/s	   73856 B/op	       3 allocs/op
+BenchmarkHandshakeReassembly                                     	   46036	     26021 ns/op	2518.57 MB/s	   73856 B/op	       3 allocs/op
+BenchmarkHandshakeReassembly                                     	   46720	     25995 ns/op	2521.07 MB/s	   73856 B/op	       3 allocs/op
+BenchmarkHandshakeReassembly                                     	   46772	     25933 ns/op	2527.14 MB/s	   73856 B/op	       3 allocs/op
+BenchmarkHandshakeReassemblySingleFragment                       	 2669803	       444.4 ns/op	2700.35 MB/s	    1280 B/op	       1 allocs/op
+BenchmarkHandshakeReassemblySingleFragment                       	 2621256	       450.9 ns/op	2661.36 MB/s	    1280 B/op	       1 allocs/op
+BenchmarkHandshakeReassemblySingleFragment                       	 2775576	       450.3 ns/op	2664.76 MB/s	    1280 B/op	       1 allocs/op
+BenchmarkHandshakeReassemblySingleFragment                       	 2668729	       456.8 ns/op	2627.14 MB/s	    1280 B/op	       1 allocs/op
+BenchmarkHandshakeReassemblySingleFragment                       	 2705227	       455.8 ns/op	2632.69 MB/s	    1280 B/op	       1 allocs/op
+BenchmarkHandshakeInboxSequentialSingleFragment                  	 2240074	       541.2 ns/op	2217.23 MB/s	    1312 B/op	       2 allocs/op
+BenchmarkHandshakeInboxSequentialSingleFragment                  	 2185872	       551.4 ns/op	2176.17 MB/s	    1312 B/op	       2 allocs/op
+BenchmarkHandshakeInboxSequentialSingleFragment                  	 2165242	       557.6 ns/op	2151.94 MB/s	    1312 B/op	       2 allocs/op
+BenchmarkHandshakeInboxSequentialSingleFragment                  	 2232739	       546.6 ns/op	2195.53 MB/s	    1312 B/op	       2 allocs/op
+BenchmarkHandshakeInboxSequentialSingleFragment                  	 2191687	       548.6 ns/op	2187.22 MB/s	    1312 B/op	       2 allocs/op
+BenchmarkHandshakeInboxSequentialSingleFragmentReuse             	 2323438	       508.0 ns/op	2362.19 MB/s	    1280 B/op	       1 allocs/op
+BenchmarkHandshakeInboxSequentialSingleFragmentReuse             	 2309660	       506.7 ns/op	2368.28 MB/s	    1280 B/op	       1 allocs/op
+BenchmarkHandshakeInboxSequentialSingleFragmentReuse             	 2418992	       498.2 ns/op	2408.87 MB/s	    1280 B/op	       1 allocs/op
+BenchmarkHandshakeInboxSequentialSingleFragmentReuse             	 2373319	       497.8 ns/op	2410.82 MB/s	    1280 B/op	       1 allocs/op
+BenchmarkHandshakeInboxSequentialSingleFragmentReuse             	 2520985	       486.3 ns/op	2467.77 MB/s	    1280 B/op	       1 allocs/op
+BenchmarkHandshakeInboxSequentialSingleFragmentBatch             	 2429505	       484.7 ns/op	2475.54 MB/s	    1280 B/op	       1 allocs/op
+BenchmarkHandshakeInboxSequentialSingleFragmentBatch             	 2391559	       495.1 ns/op	2423.99 MB/s	    1280 B/op	       1 allocs/op
+BenchmarkHandshakeInboxSequentialSingleFragmentBatch             	 2452279	       487.9 ns/op	2459.55 MB/s	    1280 B/op	       1 allocs/op
+BenchmarkHandshakeInboxSequentialSingleFragmentBatch             	 2512587	       478.7 ns/op	2506.68 MB/s	    1280 B/op	       1 allocs/op
+BenchmarkHandshakeInboxSequentialSingleFragmentBatch             	 2562271	       482.8 ns/op	2485.58 MB/s	    1280 B/op	       1 allocs/op
+BenchmarkCertificateCompression/Compress                         	  179955	      6819 ns/op	     336 B/op	       4 allocs/op
+BenchmarkCertificateCompression/Compress                         	  179746	      6762 ns/op	     336 B/op	       4 allocs/op
+BenchmarkCertificateCompression/Compress                         	  176944	      6753 ns/op	     336 B/op	       4 allocs/op
+BenchmarkCertificateCompression/Compress                         	  181642	      6828 ns/op	     336 B/op	       4 allocs/op
+BenchmarkCertificateCompression/Compress                         	  177446	      6756 ns/op	     336 B/op	       4 allocs/op
+BenchmarkCertificateCompression/Decompress                       	  180145	      6524 ns/op	    4248 B/op	       6 allocs/op
+BenchmarkCertificateCompression/Decompress                       	  184130	      6512 ns/op	    4248 B/op	       6 allocs/op
+BenchmarkCertificateCompression/Decompress                       	  183565	      6539 ns/op	    4248 B/op	       6 allocs/op
+BenchmarkCertificateCompression/Decompress                       	  184838	      6478 ns/op	    4248 B/op	       6 allocs/op
+BenchmarkCertificateCompression/Decompress                       	  186613	      6461 ns/op	    4248 B/op	       6 allocs/op
+BenchmarkCertificateCompressionHandshakeLifecycle/ServerCertificate/Plain         	    1125	   1038555 ns/op	  131114 B/op	    1041 allocs/op
+BenchmarkCertificateCompressionHandshakeLifecycle/ServerCertificate/Plain         	    1153	   1030855 ns/op	  130938 B/op	    1041 allocs/op
+BenchmarkCertificateCompressionHandshakeLifecycle/ServerCertificate/Plain         	    1143	   1029923 ns/op	  130938 B/op	    1041 allocs/op
+BenchmarkCertificateCompressionHandshakeLifecycle/ServerCertificate/Plain         	    1170	   1029312 ns/op	  130938 B/op	    1041 allocs/op
+BenchmarkCertificateCompressionHandshakeLifecycle/ServerCertificate/Plain         	    1160	   1031100 ns/op	  130938 B/op	    1041 allocs/op
+BenchmarkCertificateCompressionHandshakeLifecycle/ServerCertificate/Zlib          	    1140	   1033078 ns/op	  124453 B/op	    1020 allocs/op
+BenchmarkCertificateCompressionHandshakeLifecycle/ServerCertificate/Zlib          	    1158	   1027341 ns/op	  123299 B/op	    1020 allocs/op
+BenchmarkCertificateCompressionHandshakeLifecycle/ServerCertificate/Zlib          	    1161	   1028351 ns/op	  123299 B/op	    1020 allocs/op
+BenchmarkCertificateCompressionHandshakeLifecycle/ServerCertificate/Zlib          	    1142	   1030414 ns/op	  123300 B/op	    1020 allocs/op
+BenchmarkCertificateCompressionHandshakeLifecycle/ServerCertificate/Zlib          	    1147	   1031063 ns/op	  123300 B/op	    1020 allocs/op
+BenchmarkCertificateCompressionHandshakeLifecycle/MutualTLS/Plain                 	     696	   1705936 ns/op	  172667 B/op	    1505 allocs/op
+BenchmarkCertificateCompressionHandshakeLifecycle/MutualTLS/Plain                 	     697	   1713091 ns/op	  172673 B/op	    1505 allocs/op
+BenchmarkCertificateCompressionHandshakeLifecycle/MutualTLS/Plain                 	     696	   1709262 ns/op	  172674 B/op	    1505 allocs/op
+BenchmarkCertificateCompressionHandshakeLifecycle/MutualTLS/Plain                 	     693	   1714045 ns/op	  172670 B/op	    1505 allocs/op
+BenchmarkCertificateCompressionHandshakeLifecycle/MutualTLS/Plain                 	     704	   1703000 ns/op	  172671 B/op	    1505 allocs/op
+BenchmarkCertificateCompressionHandshakeLifecycle/MutualTLS/Zlib                  	     694	   1712765 ns/op	  162468 B/op	    1466 allocs/op
+BenchmarkCertificateCompressionHandshakeLifecycle/MutualTLS/Zlib                  	     697	   1710568 ns/op	  160569 B/op	    1466 allocs/op
+BenchmarkCertificateCompressionHandshakeLifecycle/MutualTLS/Zlib                  	     692	   1720560 ns/op	  160572 B/op	    1466 allocs/op
+BenchmarkCertificateCompressionHandshakeLifecycle/MutualTLS/Zlib                  	     687	   1712637 ns/op	  160572 B/op	    1466 allocs/op
+BenchmarkCertificateCompressionHandshakeLifecycle/MutualTLS/Zlib                  	     703	   1707673 ns/op	  160567 B/op	    1466 allocs/op
+BenchmarkHybridKeyExchangeHandshakeLifecycle/X25519MLKEM768                       	    1351	    879036 ns/op	  147221 B/op	     791 allocs/op
+BenchmarkHybridKeyExchangeHandshakeLifecycle/X25519MLKEM768                       	    1359	    878183 ns/op	  147124 B/op	     791 allocs/op
+BenchmarkHybridKeyExchangeHandshakeLifecycle/X25519MLKEM768                       	    1345	    884512 ns/op	  147124 B/op	     791 allocs/op
+BenchmarkHybridKeyExchangeHandshakeLifecycle/X25519MLKEM768                       	    1338	    881603 ns/op	  147124 B/op	     791 allocs/op
+BenchmarkHybridKeyExchangeHandshakeLifecycle/X25519MLKEM768                       	    1338	    878634 ns/op	  147124 B/op	     791 allocs/op
+BenchmarkHybridKeyExchangeHandshakeLifecycle/SecP256r1MLKEM768                    	    1434	    832463 ns/op	  150324 B/op	     821 allocs/op
+BenchmarkHybridKeyExchangeHandshakeLifecycle/SecP256r1MLKEM768                    	    1419	    832041 ns/op	  150324 B/op	     821 allocs/op
+BenchmarkHybridKeyExchangeHandshakeLifecycle/SecP256r1MLKEM768                    	    1437	    833737 ns/op	  150324 B/op	     821 allocs/op
+BenchmarkHybridKeyExchangeHandshakeLifecycle/SecP256r1MLKEM768                    	    1410	    834604 ns/op	  150371 B/op	     821 allocs/op
+BenchmarkHybridKeyExchangeHandshakeLifecycle/SecP256r1MLKEM768                    	    1419	    833576 ns/op	  150324 B/op	     821 allocs/op
+BenchmarkHybridKeyExchangeHandshakeLifecycle/SecP384r1MLKEM1024                   	     570	   2086529 ns/op	  176212 B/op	     849 allocs/op
+BenchmarkHybridKeyExchangeHandshakeLifecycle/SecP384r1MLKEM1024                   	     562	   2087969 ns/op	  175766 B/op	     839 allocs/op
+BenchmarkHybridKeyExchangeHandshakeLifecycle/SecP384r1MLKEM1024                   	     574	   2072814 ns/op	  175766 B/op	     839 allocs/op
+BenchmarkHybridKeyExchangeHandshakeLifecycle/SecP384r1MLKEM1024                   	     570	   2081330 ns/op	  175766 B/op	     839 allocs/op
+BenchmarkHybridKeyExchangeHandshakeLifecycle/SecP384r1MLKEM1024                   	     573	   2077051 ns/op	  175766 B/op	     839 allocs/op
+PASS
+ok  	github.com/puernya/go-dtls	779.069s
+goos: linux
+goarch: amd64
+pkg: github.com/puernya/go-dtls
+cpu: AMD EPYC 7763 64-Core Processor                
+BenchmarkWolfSSLFeatureRealUDP/CertificateAES128GCM/GoClient/GoServer         	       1	  40367059 ns/op	         1.982 go_ms/conn	 2822040 B/op	   24367 allocs/op
+BenchmarkWolfSSLFeatureRealUDP/CertificateAES128GCM/GoClient/GoServer         	       1	  39516402 ns/op	         1.968 go_ms/conn	 2621360 B/op	   24334 allocs/op
+BenchmarkWolfSSLFeatureRealUDP/CertificateAES128GCM/GoClient/GoServer         	       1	  38808162 ns/op	         1.936 go_ms/conn	 2621456 B/op	   24336 allocs/op
+BenchmarkWolfSSLFeatureRealUDP/CertificateAES128GCM/GoClient/GoServer         	       1	  39082924 ns/op	         1.945 go_ms/conn	 2621504 B/op	   24337 allocs/op
+BenchmarkWolfSSLFeatureRealUDP/CertificateAES128GCM/GoClient/GoServer         	       1	  38839721 ns/op	         1.937 go_ms/conn	 2621408 B/op	   24335 allocs/op
+BenchmarkWolfSSLFeatureRealUDP/CertificateAES128GCM/GoClient/WolfSSLServer    	       1	  92734525 ns/op	         4.634 go_ms/conn	 1157808 B/op	   10561 allocs/op
+BenchmarkWolfSSLFeatureRealUDP/CertificateAES128GCM/GoClient/WolfSSLServer    	       1	  94094385 ns/op	         4.718 go_ms/conn	 1157904 B/op	   10562 allocs/op
+BenchmarkWolfSSLFeatureRealUDP/CertificateAES128GCM/GoClient/WolfSSLServer    	       1	  92604694 ns/op	         4.650 go_ms/conn	 1157904 B/op	   10562 allocs/op
+BenchmarkWolfSSLFeatureRealUDP/CertificateAES128GCM/GoClient/WolfSSLServer    	       1	  92994838 ns/op	         4.651 go_ms/conn	 1157904 B/op	   10562 allocs/op
+BenchmarkWolfSSLFeatureRealUDP/CertificateAES128GCM/GoClient/WolfSSLServer    	       1	  92425691 ns/op	         4.630 go_ms/conn	 1157904 B/op	   10562 allocs/op
+BenchmarkWolfSSLFeatureRealUDP/CertificateAES128GCM/WolfSSLClient/GoServer    	       1	  46700247 ns/op	         2.263 wolfssl_ms/conn	 1440048 B/op	   12515 allocs/op
+BenchmarkWolfSSLFeatureRealUDP/CertificateAES128GCM/WolfSSLClient/GoServer    	       1	  45303276 ns/op	         2.205 wolfssl_ms/conn	 1440048 B/op	   12515 allocs/op
+BenchmarkWolfSSLFeatureRealUDP/CertificateAES128GCM/WolfSSLClient/GoServer    	       1	  46947927 ns/op	         2.291 wolfssl_ms/conn	 1440096 B/op	   12516 allocs/op
+BenchmarkWolfSSLFeatureRealUDP/CertificateAES128GCM/WolfSSLClient/GoServer    	       1	  44369785 ns/op	         2.156 wolfssl_ms/conn	 1440048 B/op	   12515 allocs/op
+BenchmarkWolfSSLFeatureRealUDP/CertificateAES128GCM/WolfSSLClient/GoServer    	       1	  45364911 ns/op	         2.212 wolfssl_ms/conn	 1440048 B/op	   12515 allocs/op
+BenchmarkWolfSSLFeatureRealUDP/CertificateAES128GCM/WolfSSLClient/WolfSSLServer         	       1	  86841402 ns/op	         4.270 wolfssl_ms/conn	   34904 B/op	      53 allocs/op
+BenchmarkWolfSSLFeatureRealUDP/CertificateAES128GCM/WolfSSLClient/WolfSSLServer         	       1	  92408305 ns/op	         4.543 wolfssl_ms/conn	   34904 B/op	      53 allocs/op
+BenchmarkWolfSSLFeatureRealUDP/CertificateAES128GCM/WolfSSLClient/WolfSSLServer         	       1	  88214931 ns/op	         4.337 wolfssl_ms/conn	   34904 B/op	      53 allocs/op
+BenchmarkWolfSSLFeatureRealUDP/CertificateAES128GCM/WolfSSLClient/WolfSSLServer         	       1	  92258966 ns/op	         4.536 wolfssl_ms/conn	   34904 B/op	      53 allocs/op
+BenchmarkWolfSSLFeatureRealUDP/CertificateAES128GCM/WolfSSLClient/WolfSSLServer         	       1	  92540522 ns/op	         4.554 wolfssl_ms/conn	   34904 B/op	      53 allocs/op
+BenchmarkWolfSSLFeatureRealUDP/ApplicationDataRoundTrip/GoClient/GoServer               	       1	  41916070 ns/op	         2.082 go_ms/conn	 2826824 B/op	   24660 allocs/op
+BenchmarkWolfSSLFeatureRealUDP/ApplicationDataRoundTrip/GoClient/GoServer               	       1	  40150194 ns/op	         1.992 go_ms/conn	 2630128 B/op	   24656 allocs/op
+BenchmarkWolfSSLFeatureRealUDP/ApplicationDataRoundTrip/GoClient/GoServer               	       1	  39605619 ns/op	         1.977 go_ms/conn	 2630080 B/op	   24655 allocs/op
+BenchmarkWolfSSLFeatureRealUDP/ApplicationDataRoundTrip/GoClient/GoServer               	       1	  39763252 ns/op	         1.985 go_ms/conn	 2630080 B/op	   24655 allocs/op
+BenchmarkWolfSSLFeatureRealUDP/ApplicationDataRoundTrip/GoClient/GoServer               	       1	  39663256 ns/op	         1.979 go_ms/conn	 2630080 B/op	   24655 allocs/op
+BenchmarkWolfSSLFeatureRealUDP/ApplicationDataRoundTrip/GoClient/WolfSSLServer          	       1	  95213285 ns/op	         4.756 go_ms/conn	 1176480 B/op	   10820 allocs/op
+BenchmarkWolfSSLFeatureRealUDP/ApplicationDataRoundTrip/GoClient/WolfSSLServer          	       1	  93349496 ns/op	         4.660 go_ms/conn	 1176624 B/op	   10822 allocs/op
+BenchmarkWolfSSLFeatureRealUDP/ApplicationDataRoundTrip/GoClient/WolfSSLServer          	       1	  95354860 ns/op	         4.761 go_ms/conn	 1176624 B/op	   10822 allocs/op
+BenchmarkWolfSSLFeatureRealUDP/ApplicationDataRoundTrip/GoClient/WolfSSLServer          	       1	  95921489 ns/op	         4.796 go_ms/conn	 1176624 B/op	   10822 allocs/op
+BenchmarkWolfSSLFeatureRealUDP/ApplicationDataRoundTrip/GoClient/WolfSSLServer          	       1	  95282136 ns/op	         4.761 go_ms/conn	 1176624 B/op	   10822 allocs/op
+BenchmarkWolfSSLFeatureRealUDP/ApplicationDataRoundTrip/WolfSSLClient/GoServer          	       1	  96474160 ns/op	         4.799 wolf_process_ms/conn	 1944232 B/op	   14006 allocs/op
+BenchmarkWolfSSLFeatureRealUDP/ApplicationDataRoundTrip/WolfSSLClient/GoServer          	       1	  95934687 ns/op	         4.788 wolf_process_ms/conn	 1944184 B/op	   14005 allocs/op
+BenchmarkWolfSSLFeatureRealUDP/ApplicationDataRoundTrip/WolfSSLClient/GoServer          	       1	  95935623 ns/op	         4.788 wolf_process_ms/conn	 1944232 B/op	   14006 allocs/op
+BenchmarkWolfSSLFeatureRealUDP/ApplicationDataRoundTrip/WolfSSLClient/GoServer          	       1	  95521270 ns/op	         4.762 wolf_process_ms/conn	 1944232 B/op	   14006 allocs/op
+BenchmarkWolfSSLFeatureRealUDP/ApplicationDataRoundTrip/WolfSSLClient/GoServer          	       1	  96029236 ns/op	         4.797 wolf_process_ms/conn	 1944184 B/op	   14005 allocs/op
+BenchmarkWolfSSLFeatureRealUDP/ApplicationDataRoundTrip/WolfSSLClient/WolfSSLServer     	       1	 151095496 ns/op	         7.530 wolf_process_ms/conn	  543488 B/op	    1183 allocs/op
+BenchmarkWolfSSLFeatureRealUDP/ApplicationDataRoundTrip/WolfSSLClient/WolfSSLServer     	       1	 148890720 ns/op	         7.367 wolf_process_ms/conn	  543488 B/op	    1183 allocs/op
+BenchmarkWolfSSLFeatureRealUDP/ApplicationDataRoundTrip/WolfSSLClient/WolfSSLServer     	       1	 148745654 ns/op	         7.400 wolf_process_ms/conn	  543488 B/op	    1183 allocs/op
+BenchmarkWolfSSLFeatureRealUDP/ApplicationDataRoundTrip/WolfSSLClient/WolfSSLServer     	       1	 151793150 ns/op	         7.515 wolf_process_ms/conn	  543560 B/op	    1185 allocs/op
+BenchmarkWolfSSLFeatureRealUDP/ApplicationDataRoundTrip/WolfSSLClient/WolfSSLServer     	       1	 151514643 ns/op	         7.515 wolf_process_ms/conn	  543488 B/op	    1183 allocs/op
+BenchmarkWolfSSLFeatureRealUDP/MutualTLS/GoClient/GoServer                              	       1	  71630276 ns/op	         3.573 go_ms/conn	 3603288 B/op	   33634 allocs/op
+BenchmarkWolfSSLFeatureRealUDP/MutualTLS/GoClient/GoServer                              	       1	  71416047 ns/op	         3.560 go_ms/conn	 3407352 B/op	   33644 allocs/op
+BenchmarkWolfSSLFeatureRealUDP/MutualTLS/GoClient/GoServer                              	       1	  71264992 ns/op	         3.545 go_ms/conn	 3407352 B/op	   33644 allocs/op
+BenchmarkWolfSSLFeatureRealUDP/MutualTLS/GoClient/GoServer                              	       1	  71423942 ns/op	         3.562 go_ms/conn	 3470832 B/op	   33619 allocs/op
+BenchmarkWolfSSLFeatureRealUDP/MutualTLS/GoClient/GoServer                              	       1	  72020647 ns/op	         3.578 go_ms/conn	 3406824 B/op	   33637 allocs/op
+BenchmarkWolfSSLFeatureRealUDP/MutualTLS/GoClient/WolfSSLServer                         	       1	 126383650 ns/op	         6.325 go_ms/conn	 1522400 B/op	   14880 allocs/op
+BenchmarkWolfSSLFeatureRealUDP/MutualTLS/GoClient/WolfSSLServer                         	       1	 125098485 ns/op	         6.245 go_ms/conn	 1522544 B/op	   14882 allocs/op
+BenchmarkWolfSSLFeatureRealUDP/MutualTLS/GoClient/WolfSSLServer                         	       1	 122464983 ns/op	         6.114 go_ms/conn	 1522544 B/op	   14882 allocs/op
+BenchmarkWolfSSLFeatureRealUDP/MutualTLS/GoClient/WolfSSLServer                         	       1	 123466264 ns/op	         6.166 go_ms/conn	 1522544 B/op	   14882 allocs/op
+BenchmarkWolfSSLFeatureRealUDP/MutualTLS/GoClient/WolfSSLServer                         	       1	 125432256 ns/op	         6.260 go_ms/conn	 1522544 B/op	   14882 allocs/op
+BenchmarkWolfSSLFeatureRealUDP/MutualTLS/WolfSSLClient/GoServer                         	       1	 119169276 ns/op	         5.886 wolfssl_ms/conn	 1817552 B/op	   16819 allocs/op
+BenchmarkWolfSSLFeatureRealUDP/MutualTLS/WolfSSLClient/GoServer                         	       1	 119024263 ns/op	         5.890 wolfssl_ms/conn	 1819024 B/op	   16837 allocs/op
+BenchmarkWolfSSLFeatureRealUDP/MutualTLS/WolfSSLClient/GoServer                         	       1	 119114651 ns/op	         5.893 wolfssl_ms/conn	 1818032 B/op	   16825 allocs/op
+BenchmarkWolfSSLFeatureRealUDP/MutualTLS/WolfSSLClient/GoServer                         	       1	 120125156 ns/op	         5.936 wolfssl_ms/conn	 1817784 B/op	   16822 allocs/op
+BenchmarkWolfSSLFeatureRealUDP/MutualTLS/WolfSSLClient/GoServer                         	       1	 120813551 ns/op	         5.982 wolfssl_ms/conn	 1817784 B/op	   16822 allocs/op
+BenchmarkWolfSSLFeatureRealUDP/MutualTLS/WolfSSLClient/WolfSSLServer                    	       1	 161373679 ns/op	         8.002 wolfssl_ms/conn	   34896 B/op	      54 allocs/op
+BenchmarkWolfSSLFeatureRealUDP/MutualTLS/WolfSSLClient/WolfSSLServer                    	       1	 164525940 ns/op	         8.136 wolfssl_ms/conn	   34944 B/op	      55 allocs/op
+BenchmarkWolfSSLFeatureRealUDP/MutualTLS/WolfSSLClient/WolfSSLServer                    	       1	 166384139 ns/op	         8.235 wolfssl_ms/conn	   34872 B/op	      53 allocs/op
+BenchmarkWolfSSLFeatureRealUDP/MutualTLS/WolfSSLClient/WolfSSLServer                    	       1	 159746745 ns/op	         7.905 wolfssl_ms/conn	   34944 B/op	      55 allocs/op
+BenchmarkWolfSSLFeatureRealUDP/MutualTLS/WolfSSLClient/WolfSSLServer                    	       1	 158983034 ns/op	         7.877 wolfssl_ms/conn	   34872 B/op	      53 allocs/op
+BenchmarkWolfSSLFeatureRealUDP/AES128CCM/GoClient/GoServer                              	       1	  42476646 ns/op	         2.083 go_ms/conn	 3307224 B/op	   28270 allocs/op
+BenchmarkWolfSSLFeatureRealUDP/AES128CCM/GoClient/GoServer                              	       1	  39871476 ns/op	         1.984 go_ms/conn	 3110480 B/op	   28265 allocs/op
+BenchmarkWolfSSLFeatureRealUDP/AES128CCM/GoClient/GoServer                              	       1	  40459012 ns/op	         2.018 go_ms/conn	 3110480 B/op	   28265 allocs/op
+BenchmarkWolfSSLFeatureRealUDP/AES128CCM/GoClient/GoServer                              	       1	  39965641 ns/op	         1.993 go_ms/conn	 3110480 B/op	   28265 allocs/op
+BenchmarkWolfSSLFeatureRealUDP/AES128CCM/GoClient/GoServer                              	       1	  40014042 ns/op	         1.994 go_ms/conn	 3110480 B/op	   28265 allocs/op
+BenchmarkWolfSSLFeatureRealUDP/AES128CCM/GoClient/WolfSSLServer                         	       1	  92671171 ns/op	         4.621 go_ms/conn	 1396160 B/op	   12120 allocs/op
+BenchmarkWolfSSLFeatureRealUDP/AES128CCM/GoClient/WolfSSLServer                         	       1	  91666538 ns/op	         4.581 go_ms/conn	 1396304 B/op	   12122 allocs/op
+BenchmarkWolfSSLFeatureRealUDP/AES128CCM/GoClient/WolfSSLServer                         	       1	  92561727 ns/op	         4.632 go_ms/conn	 1396304 B/op	   12122 allocs/op
+BenchmarkWolfSSLFeatureRealUDP/AES128CCM/GoClient/WolfSSLServer                         	       1	  92480602 ns/op	         4.622 go_ms/conn	 1396304 B/op	   12122 allocs/op
+BenchmarkWolfSSLFeatureRealUDP/AES128CCM/GoClient/WolfSSLServer                         	       1	  91974350 ns/op	         4.612 go_ms/conn	 1396304 B/op	   12122 allocs/op
+BenchmarkWolfSSLFeatureRealUDP/AES128CCM/WolfSSLClient/GoServer                         	       1	  45398258 ns/op	         2.203 wolfssl_ms/conn	 1504704 B/op	   13435 allocs/op
+BenchmarkWolfSSLFeatureRealUDP/AES128CCM/WolfSSLClient/GoServer                         	       1	  46954208 ns/op	         2.283 wolfssl_ms/conn	 1504704 B/op	   13435 allocs/op
+BenchmarkWolfSSLFeatureRealUDP/AES128CCM/WolfSSLClient/GoServer                         	       1	  45684845 ns/op	         2.235 wolfssl_ms/conn	 1504704 B/op	   13435 allocs/op
+BenchmarkWolfSSLFeatureRealUDP/AES128CCM/WolfSSLClient/GoServer                         	       1	  45377216 ns/op	         2.215 wolfssl_ms/conn	 1504704 B/op	   13435 allocs/op
+BenchmarkWolfSSLFeatureRealUDP/AES128CCM/WolfSSLClient/GoServer                         	       1	  45607956 ns/op	         2.207 wolfssl_ms/conn	 1504704 B/op	   13435 allocs/op
+BenchmarkWolfSSLFeatureRealUDP/AES128CCM/WolfSSLClient/WolfSSLServer                    	       1	  92215173 ns/op	         4.528 wolfssl_ms/conn	   34904 B/op	      53 allocs/op
+BenchmarkWolfSSLFeatureRealUDP/AES128CCM/WolfSSLClient/WolfSSLServer                    	       1	  91283935 ns/op	         4.477 wolfssl_ms/conn	   34928 B/op	      54 allocs/op
+BenchmarkWolfSSLFeatureRealUDP/AES128CCM/WolfSSLClient/WolfSSLServer                    	       1	  86955379 ns/op	         4.269 wolfssl_ms/conn	   34904 B/op	      53 allocs/op
+BenchmarkWolfSSLFeatureRealUDP/AES128CCM/WolfSSLClient/WolfSSLServer                    	       1	  87390261 ns/op	         4.295 wolfssl_ms/conn	   34904 B/op	      53 allocs/op
+BenchmarkWolfSSLFeatureRealUDP/AES128CCM/WolfSSLClient/WolfSSLServer                    	       1	  91968050 ns/op	         4.524 wolfssl_ms/conn	   34904 B/op	      53 allocs/op
+BenchmarkWolfSSLFeatureRealUDP/ExternalPSK/GoClient/GoServer                            	       1	  11989566 ns/op	         0.5908 go_ms/conn	 1855848 B/op	   14238 allocs/op
+BenchmarkWolfSSLFeatureRealUDP/ExternalPSK/GoClient/GoServer                            	       1	  10635319 ns/op	         0.5241 go_ms/conn	 1659104 B/op	   14233 allocs/op
+BenchmarkWolfSSLFeatureRealUDP/ExternalPSK/GoClient/GoServer                            	       1	  10306866 ns/op	         0.5125 go_ms/conn	 1659104 B/op	   14233 allocs/op
+BenchmarkWolfSSLFeatureRealUDP/ExternalPSK/GoClient/GoServer                            	       1	  10292590 ns/op	         0.5110 go_ms/conn	 1659104 B/op	   14233 allocs/op
+BenchmarkWolfSSLFeatureRealUDP/ExternalPSK/GoClient/GoServer                            	       1	  10400341 ns/op	         0.5146 go_ms/conn	 1659104 B/op	   14233 allocs/op
+BenchmarkWolfSSLFeatureRealUDP/ExternalPSK/GoClient/WolfSSLServer                       	       1	  18347591 ns/op	         0.9172 go_ms/conn	  784800 B/op	    6700 allocs/op
+BenchmarkWolfSSLFeatureRealUDP/ExternalPSK/GoClient/WolfSSLServer                       	       1	  18878596 ns/op	         0.9418 go_ms/conn	  784944 B/op	    6702 allocs/op
+BenchmarkWolfSSLFeatureRealUDP/ExternalPSK/GoClient/WolfSSLServer                       	       1	  19052163 ns/op	         0.9456 go_ms/conn	  784944 B/op	    6702 allocs/op
+BenchmarkWolfSSLFeatureRealUDP/ExternalPSK/GoClient/WolfSSLServer                       	       1	  18338440 ns/op	         0.9224 go_ms/conn	  784944 B/op	    6702 allocs/op
+BenchmarkWolfSSLFeatureRealUDP/ExternalPSK/GoClient/WolfSSLServer                       	       1	  19000288 ns/op	         0.9452 go_ms/conn	  784944 B/op	    6702 allocs/op
+BenchmarkWolfSSLFeatureRealUDP/ExternalPSK/WolfSSLClient/GoServer                       	       1	  17287300 ns/op	         0.8050 wolfssl_ms/conn	  900752 B/op	    7195 allocs/op
+BenchmarkWolfSSLFeatureRealUDP/ExternalPSK/WolfSSLClient/GoServer                       	       1	  16365065 ns/op	         0.7620 wolfssl_ms/conn	  900752 B/op	    7195 allocs/op
+BenchmarkWolfSSLFeatureRealUDP/ExternalPSK/WolfSSLClient/GoServer                       	       1	  16847420 ns/op	         0.7890 wolfssl_ms/conn	  900752 B/op	    7195 allocs/op
+BenchmarkWolfSSLFeatureRealUDP/ExternalPSK/WolfSSLClient/GoServer                       	       1	  16002134 ns/op	         0.7510 wolfssl_ms/conn	  900752 B/op	    7195 allocs/op
+BenchmarkWolfSSLFeatureRealUDP/ExternalPSK/WolfSSLClient/GoServer                       	       1	  17714866 ns/op	         0.8340 wolfssl_ms/conn	  900752 B/op	    7195 allocs/op
+BenchmarkWolfSSLFeatureRealUDP/ExternalPSK/WolfSSLClient/WolfSSLServer                  	       1	  19751326 ns/op	         0.9240 wolfssl_ms/conn	   34952 B/op	      53 allocs/op
+BenchmarkWolfSSLFeatureRealUDP/ExternalPSK/WolfSSLClient/WolfSSLServer                  	       1	  21910543 ns/op	         1.019 wolfssl_ms/conn	   34952 B/op	      53 allocs/op
+BenchmarkWolfSSLFeatureRealUDP/ExternalPSK/WolfSSLClient/WolfSSLServer                  	       1	  22071103 ns/op	         1.028 wolfssl_ms/conn	   34952 B/op	      53 allocs/op
+BenchmarkWolfSSLFeatureRealUDP/ExternalPSK/WolfSSLClient/WolfSSLServer                  	       1	  20315564 ns/op	         0.9380 wolfssl_ms/conn	   35024 B/op	      55 allocs/op
+BenchmarkWolfSSLFeatureRealUDP/ExternalPSK/WolfSSLClient/WolfSSLServer                  	       1	  22177280 ns/op	         1.028 wolfssl_ms/conn	   34952 B/op	      53 allocs/op
+BenchmarkWolfSSLFeatureRealUDP/ConnectionID/GoClient/GoServer                           	       1	  40110694 ns/op	         1.990 go_ms/conn	 2837792 B/op	   25457 allocs/op
+BenchmarkWolfSSLFeatureRealUDP/ConnectionID/GoClient/GoServer                           	       1	  39038669 ns/op	         1.949 go_ms/conn	 2641048 B/op	   25452 allocs/op
+BenchmarkWolfSSLFeatureRealUDP/ConnectionID/GoClient/GoServer                           	       1	  38823058 ns/op	         1.938 go_ms/conn	 2641048 B/op	   25452 allocs/op
+BenchmarkWolfSSLFeatureRealUDP/ConnectionID/GoClient/GoServer                           	       1	  38998845 ns/op	         1.945 go_ms/conn	 2641048 B/op	   25452 allocs/op
+BenchmarkWolfSSLFeatureRealUDP/ConnectionID/GoClient/GoServer                           	       1	  38980821 ns/op	         1.943 go_ms/conn	 2641048 B/op	   25452 allocs/op
+BenchmarkWolfSSLFeatureRealUDP/ConnectionID/GoClient/WolfSSLServer                      	       1	  93337965 ns/op	         4.653 go_ms/conn	 1164960 B/op	   11120 allocs/op
+BenchmarkWolfSSLFeatureRealUDP/ConnectionID/GoClient/WolfSSLServer                      	       1	  92384524 ns/op	         4.623 go_ms/conn	 1165104 B/op	   11122 allocs/op
+BenchmarkWolfSSLFeatureRealUDP/ConnectionID/GoClient/WolfSSLServer                      	       1	  93079428 ns/op	         4.653 go_ms/conn	 1165104 B/op	   11122 allocs/op
+BenchmarkWolfSSLFeatureRealUDP/ConnectionID/GoClient/WolfSSLServer                      	       1	  92908246 ns/op	         4.643 go_ms/conn	 1165104 B/op	   11122 allocs/op
+BenchmarkWolfSSLFeatureRealUDP/ConnectionID/GoClient/WolfSSLServer                      	       1	  92847690 ns/op	         4.632 go_ms/conn	 1165104 B/op	   11122 allocs/op
+BenchmarkWolfSSLFeatureRealUDP/ConnectionID/WolfSSLClient/GoServer                      	       1	  96667911 ns/op	         4.802 wolf_process_ms/conn	 1956368 B/op	   14565 allocs/op
+BenchmarkWolfSSLFeatureRealUDP/ConnectionID/WolfSSLClient/GoServer                      	       1	  95749206 ns/op	         4.771 wolf_process_ms/conn	 1956368 B/op	   14565 allocs/op
+BenchmarkWolfSSLFeatureRealUDP/ConnectionID/WolfSSLClient/GoServer                      	       1	  95574118 ns/op	         4.771 wolf_process_ms/conn	 1956368 B/op	   14565 allocs/op
+BenchmarkWolfSSLFeatureRealUDP/ConnectionID/WolfSSLClient/GoServer                      	       1	  96000731 ns/op	         4.792 wolf_process_ms/conn	 1956368 B/op	   14565 allocs/op
+BenchmarkWolfSSLFeatureRealUDP/ConnectionID/WolfSSLClient/GoServer                      	       1	  98020166 ns/op	         4.895 wolf_process_ms/conn	 1956368 B/op	   14565 allocs/op
+BenchmarkWolfSSLFeatureRealUDP/ConnectionID/WolfSSLClient/WolfSSLServer                 	       1	 151032725 ns/op	         7.533 wolf_process_ms/conn	  554584 B/op	    1185 allocs/op
+BenchmarkWolfSSLFeatureRealUDP/ConnectionID/WolfSSLClient/WolfSSLServer                 	       1	 151239596 ns/op	         7.509 wolf_process_ms/conn	  554560 B/op	    1184 allocs/op
+BenchmarkWolfSSLFeatureRealUDP/ConnectionID/WolfSSLClient/WolfSSLServer                 	       1	 150959671 ns/op	         7.472 wolf_process_ms/conn	  554632 B/op	    1186 allocs/op
+BenchmarkWolfSSLFeatureRealUDP/ConnectionID/WolfSSLClient/WolfSSLServer                 	       1	 148464988 ns/op	         7.350 wolf_process_ms/conn	  554584 B/op	    1185 allocs/op
+BenchmarkWolfSSLFeatureRealUDP/ConnectionID/WolfSSLClient/WolfSSLServer                 	       1	 151284096 ns/op	         7.512 wolf_process_ms/conn	  554632 B/op	    1186 allocs/op
+BenchmarkWolfSSLFeatureRealUDP/KeyUpdate/GoClient/GoServer                              	       1	  43513850 ns/op	         2.129 go_ms/conn	 3007024 B/op	   26007 allocs/op
+BenchmarkWolfSSLFeatureRealUDP/KeyUpdate/GoClient/GoServer                              	       1	  40222209 ns/op	         2.002 go_ms/conn	 2811448 B/op	   26005 allocs/op
+BenchmarkWolfSSLFeatureRealUDP/KeyUpdate/GoClient/GoServer                              	       1	  40911968 ns/op	         2.045 go_ms/conn	 2811584 B/op	   26007 allocs/op
+BenchmarkWolfSSLFeatureRealUDP/KeyUpdate/GoClient/GoServer                              	       1	  42520478 ns/op	         2.112 go_ms/conn	 2878448 B/op	   26010 allocs/op
+BenchmarkWolfSSLFeatureRealUDP/KeyUpdate/GoClient/GoServer                              	       1	  42022730 ns/op	         2.104 go_ms/conn	 2810608 B/op	   26008 allocs/op
+BenchmarkWolfSSLFeatureRealUDP/KeyUpdate/GoClient/WolfSSLServer                         	       1	  96289380 ns/op	         4.816 go_ms/conn	 1419176 B/op	   12181 allocs/op
+BenchmarkWolfSSLFeatureRealUDP/KeyUpdate/GoClient/WolfSSLServer                         	       1	  96287853 ns/op	         4.810 go_ms/conn	 1412624 B/op	   12162 allocs/op
+BenchmarkWolfSSLFeatureRealUDP/KeyUpdate/GoClient/WolfSSLServer                         	       1	  94542709 ns/op	         4.711 go_ms/conn	 1412624 B/op	   12162 allocs/op
+BenchmarkWolfSSLFeatureRealUDP/KeyUpdate/GoClient/WolfSSLServer                         	       1	  95784003 ns/op	         4.785 go_ms/conn	 1412624 B/op	   12162 allocs/op
+BenchmarkWolfSSLFeatureRealUDP/KeyUpdate/GoClient/WolfSSLServer                         	       1	  96009632 ns/op	         4.790 go_ms/conn	 1412624 B/op	   12162 allocs/op
+BenchmarkWolfSSLFeatureRealUDP/KeyUpdate/WolfSSLClient/GoServer                         	       1	  96905427 ns/op	         4.825 wolf_process_ms/conn	 2119704 B/op	   15645 allocs/op
+BenchmarkWolfSSLFeatureRealUDP/KeyUpdate/WolfSSLClient/GoServer                         	       1	  96680880 ns/op	         4.828 wolf_process_ms/conn	 2119704 B/op	   15645 allocs/op
+BenchmarkWolfSSLFeatureRealUDP/KeyUpdate/WolfSSLClient/GoServer                         	       1	  97159394 ns/op	         4.849 wolf_process_ms/conn	 2119704 B/op	   15645 allocs/op
+BenchmarkWolfSSLFeatureRealUDP/KeyUpdate/WolfSSLClient/GoServer                         	       1	  97365200 ns/op	         4.856 wolf_process_ms/conn	 2119704 B/op	   15645 allocs/op
+BenchmarkWolfSSLFeatureRealUDP/KeyUpdate/WolfSSLClient/GoServer                         	       1	  97215665 ns/op	         4.850 wolf_process_ms/conn	 2119704 B/op	   15645 allocs/op
+BenchmarkWolfSSLFeatureRealUDP/KeyUpdate/WolfSSLClient/WolfSSLServer                    	       1	 150557962 ns/op	         7.452 wolf_process_ms/conn	  543832 B/op	    1184 allocs/op
+BenchmarkWolfSSLFeatureRealUDP/KeyUpdate/WolfSSLClient/WolfSSLServer                    	       1	 148031234 ns/op	         7.377 wolf_process_ms/conn	  543808 B/op	    1183 allocs/op
+BenchmarkWolfSSLFeatureRealUDP/KeyUpdate/WolfSSLClient/WolfSSLServer                    	       1	 150944366 ns/op	         7.401 wolf_process_ms/conn	  536640 B/op	    1180 allocs/op
+BenchmarkWolfSSLFeatureRealUDP/KeyUpdate/WolfSSLClient/WolfSSLServer                    	       1	 147409820 ns/op	         7.351 wolf_process_ms/conn	  536640 B/op	    1180 allocs/op
+BenchmarkWolfSSLFeatureRealUDP/KeyUpdate/WolfSSLClient/WolfSSLServer                    	       1	 150528180 ns/op	         7.449 wolf_process_ms/conn	  543808 B/op	    1183 allocs/op
+BenchmarkWolfSSLFeatureRealUDP/PostHandshakeAuthentication/GoClient/GoServer            	       1	 103006714 ns/op	         5.102 go_ms/conn	 4487736 B/op	   45038 allocs/op
+BenchmarkWolfSSLFeatureRealUDP/PostHandshakeAuthentication/GoClient/GoServer            	       1	 101644534 ns/op	         5.081 go_ms/conn	 4291936 B/op	   45044 allocs/op
+BenchmarkWolfSSLFeatureRealUDP/PostHandshakeAuthentication/GoClient/GoServer            	       1	 101920779 ns/op	         5.101 go_ms/conn	 4296224 B/op	   45058 allocs/op
+BenchmarkWolfSSLFeatureRealUDP/PostHandshakeAuthentication/GoClient/GoServer            	       1	 103299400 ns/op	         5.174 go_ms/conn	 4316992 B/op	   45114 allocs/op
+BenchmarkWolfSSLFeatureRealUDP/PostHandshakeAuthentication/GoClient/GoServer            	       1	 101669811 ns/op	         5.080 go_ms/conn	 4315368 B/op	   45121 allocs/op
+BenchmarkWolfSSLFeatureRealUDP/PostHandshakeAuthentication/GoClient/WolfSSLServer       	       1	 123620950 ns/op	         6.160 go_ms/conn	 1581432 B/op	   15724 allocs/op
+BenchmarkWolfSSLFeatureRealUDP/PostHandshakeAuthentication/GoClient/WolfSSLServer       	       1	 122271876 ns/op	         6.111 go_ms/conn	 1582352 B/op	   15724 allocs/op
+BenchmarkWolfSSLFeatureRealUDP/PostHandshakeAuthentication/GoClient/WolfSSLServer       	       1	 122363576 ns/op	         6.105 go_ms/conn	 1580304 B/op	   15722 allocs/op
+BenchmarkWolfSSLFeatureRealUDP/PostHandshakeAuthentication/GoClient/WolfSSLServer       	       1	 122961764 ns/op	         6.141 go_ms/conn	 1580304 B/op	   15722 allocs/op
+BenchmarkWolfSSLFeatureRealUDP/PostHandshakeAuthentication/GoClient/WolfSSLServer       	       1	 122171566 ns/op	         6.105 go_ms/conn	 1581328 B/op	   15723 allocs/op
+BenchmarkWolfSSLFeatureRealUDP/PostHandshakeAuthentication/WolfSSLClient/GoServer       	       1	 247976351 ns/op	        12.38 wolf_process_ms/conn	 2734328 B/op	   23435 allocs/op
+BenchmarkWolfSSLFeatureRealUDP/PostHandshakeAuthentication/WolfSSLClient/GoServer       	       1	 248111131 ns/op	        12.39 wolf_process_ms/conn	 2734328 B/op	   23435 allocs/op
+BenchmarkWolfSSLFeatureRealUDP/PostHandshakeAuthentication/WolfSSLClient/GoServer       	       1	 247109625 ns/op	        12.33 wolf_process_ms/conn	 2734328 B/op	   23435 allocs/op
+BenchmarkWolfSSLFeatureRealUDP/PostHandshakeAuthentication/WolfSSLClient/GoServer       	       1	 245913557 ns/op	        12.28 wolf_process_ms/conn	 2735016 B/op	   23441 allocs/op
+BenchmarkWolfSSLFeatureRealUDP/PostHandshakeAuthentication/WolfSSLClient/GoServer       	       1	 247311874 ns/op	        12.37 wolf_process_ms/conn	 2734840 B/op	   23441 allocs/op
+BenchmarkWolfSSLFeatureRealUDP/PostHandshakeAuthentication/WolfSSLClient/WolfSSLServer  	       1	 222420931 ns/op	        11.10 wolf_process_ms/conn	  551680 B/op	    1184 allocs/op
+BenchmarkWolfSSLFeatureRealUDP/PostHandshakeAuthentication/WolfSSLClient/WolfSSLServer  	       1	 222417069 ns/op	        11.08 wolf_process_ms/conn	  551680 B/op	    1184 allocs/op
+BenchmarkWolfSSLFeatureRealUDP/PostHandshakeAuthentication/WolfSSLClient/WolfSSLServer  	       1	 224045296 ns/op	        11.12 wolf_process_ms/conn	  551680 B/op	    1184 allocs/op
+BenchmarkWolfSSLFeatureRealUDP/PostHandshakeAuthentication/WolfSSLClient/WolfSSLServer  	       1	 224857336 ns/op	        11.18 wolf_process_ms/conn	  551680 B/op	    1184 allocs/op
+BenchmarkWolfSSLFeatureRealUDP/PostHandshakeAuthentication/WolfSSLClient/WolfSSLServer  	       1	 220945086 ns/op	        11.00 wolf_process_ms/conn	  551680 B/op	    1184 allocs/op
+BenchmarkWolfSSLFeatureRealUDP/SessionResumption/GoClient/GoServer                      	       1	  77126517 ns/op	         0.6156 go_ms/conn	 4692496 B/op	   40525 allocs/op
+BenchmarkWolfSSLFeatureRealUDP/SessionResumption/GoClient/GoServer                      	       1	  75204770 ns/op	         0.5957 go_ms/conn	 4495832 B/op	   40521 allocs/op
+BenchmarkWolfSSLFeatureRealUDP/SessionResumption/GoClient/GoServer                      	       1	  74434679 ns/op	         0.5715 go_ms/conn	 4500152 B/op	   40559 allocs/op
+BenchmarkWolfSSLFeatureRealUDP/SessionResumption/GoClient/GoServer                      	       1	  74151787 ns/op	         0.5803 go_ms/conn	 4500152 B/op	   40559 allocs/op
+BenchmarkWolfSSLFeatureRealUDP/SessionResumption/GoClient/GoServer                      	       1	  75048721 ns/op	         0.5555 go_ms/conn	 4500944 B/op	   40564 allocs/op
+BenchmarkWolfSSLFeatureRealUDP/SessionResumption/GoClient/WolfSSLServer                 	       1	 117974283 ns/op	         1.134 go_ms/conn	 2065256 B/op	   17982 allocs/op
+BenchmarkWolfSSLFeatureRealUDP/SessionResumption/GoClient/WolfSSLServer                 	       1	 118926335 ns/op	         1.143 go_ms/conn	 2065264 B/op	   17982 allocs/op
+BenchmarkWolfSSLFeatureRealUDP/SessionResumption/GoClient/WolfSSLServer                 	       1	 116247362 ns/op	         1.068 go_ms/conn	 2065264 B/op	   17982 allocs/op
+BenchmarkWolfSSLFeatureRealUDP/SessionResumption/GoClient/WolfSSLServer                 	       1	 116815492 ns/op	         1.075 go_ms/conn	 2065264 B/op	   17982 allocs/op
+BenchmarkWolfSSLFeatureRealUDP/SessionResumption/GoClient/WolfSSLServer                 	       1	 116154651 ns/op	         1.046 go_ms/conn	 2065264 B/op	   17982 allocs/op
+BenchmarkWolfSSLFeatureRealUDP/SessionResumption/WolfSSLClient/GoServer                 	       1	20166792467 ns/op	      1008 wolf_process_ms/pair	 2984872 B/op	   22966 allocs/op
+BenchmarkWolfSSLFeatureRealUDP/SessionResumption/WolfSSLClient/GoServer                 	       1	20166606205 ns/op	      1008 wolf_process_ms/pair	 2984824 B/op	   22965 allocs/op
+BenchmarkWolfSSLFeatureRealUDP/SessionResumption/WolfSSLClient/GoServer                 	       1	20166853508 ns/op	      1008 wolf_process_ms/pair	 2984824 B/op	   22965 allocs/op
+BenchmarkWolfSSLFeatureRealUDP/SessionResumption/WolfSSLClient/GoServer                 	       1	20167166518 ns/op	      1008 wolf_process_ms/pair	 2984824 B/op	   22965 allocs/op
+BenchmarkWolfSSLFeatureRealUDP/SessionResumption/WolfSSLClient/GoServer                 	       1	20166577061 ns/op	      1008 wolf_process_ms/pair	 2984824 B/op	   22965 allocs/op
+BenchmarkWolfSSLFeatureRealUDP/SessionResumption/WolfSSLClient/WolfSSLServer            	       1	20230057843 ns/op	      1011 wolf_process_ms/pair	  558472 B/op	    1186 allocs/op
+BenchmarkWolfSSLFeatureRealUDP/SessionResumption/WolfSSLClient/WolfSSLServer            	       1	20235855047 ns/op	      1012 wolf_process_ms/pair	  558472 B/op	    1186 allocs/op
+BenchmarkWolfSSLFeatureRealUDP/SessionResumption/WolfSSLClient/WolfSSLServer            	       1	20236222685 ns/op	      1012 wolf_process_ms/pair	  558400 B/op	    1184 allocs/op
+BenchmarkWolfSSLFeatureRealUDP/SessionResumption/WolfSSLClient/WolfSSLServer            	       1	20232197239 ns/op	      1012 wolf_process_ms/pair	  558424 B/op	    1185 allocs/op
+BenchmarkWolfSSLFeatureRealUDP/SessionResumption/WolfSSLClient/WolfSSLServer            	       1	20235509981 ns/op	      1012 wolf_process_ms/pair	  558472 B/op	    1186 allocs/op
+BenchmarkWolfSSLFeatureRealUDP/MutualTLSSessionResumption/GoClient/GoServer             	       1	 107703513 ns/op	         0.6476 go_ms/conn	 6811480 B/op	   53434 allocs/op
+BenchmarkWolfSSLFeatureRealUDP/MutualTLSSessionResumption/GoClient/GoServer             	       1	 107955893 ns/op	         0.6556 go_ms/conn	 6614144 B/op	   53419 allocs/op
+BenchmarkWolfSSLFeatureRealUDP/MutualTLSSessionResumption/GoClient/GoServer             	       1	 107139538 ns/op	         0.6248 go_ms/conn	 6618552 B/op	   53461 allocs/op
+BenchmarkWolfSSLFeatureRealUDP/MutualTLSSessionResumption/GoClient/GoServer             	       1	 108442663 ns/op	         0.6247 go_ms/conn	 6619544 B/op	   53473 allocs/op
+BenchmarkWolfSSLFeatureRealUDP/MutualTLSSessionResumption/GoClient/GoServer             	       1	 107072382 ns/op	         0.6349 go_ms/conn	 6620024 B/op	   53479 allocs/op
+BenchmarkWolfSSLFeatureRealUDP/MutualTLSSessionResumption/GoClient/WolfSSLServer        	       1	 147329870 ns/op	         1.102 go_ms/conn	 2435336 B/op	   22342 allocs/op
+BenchmarkWolfSSLFeatureRealUDP/MutualTLSSessionResumption/GoClient/WolfSSLServer        	       1	 150630204 ns/op	         1.121 go_ms/conn	 2435344 B/op	   22342 allocs/op
+BenchmarkWolfSSLFeatureRealUDP/MutualTLSSessionResumption/GoClient/WolfSSLServer        	       1	 149780331 ns/op	         1.132 go_ms/conn	 2435344 B/op	   22342 allocs/op
+BenchmarkWolfSSLFeatureRealUDP/MutualTLSSessionResumption/GoClient/WolfSSLServer        	       1	 148958705 ns/op	         1.160 go_ms/conn	 2435344 B/op	   22342 allocs/op
+BenchmarkWolfSSLFeatureRealUDP/MutualTLSSessionResumption/GoClient/WolfSSLServer        	       1	 148936453 ns/op	         1.146 go_ms/conn	 2435544 B/op	   22345 allocs/op
+BenchmarkWolfSSLFeatureRealUDP/MutualTLSSessionResumption/WolfSSLClient/WolfSSLServer   	       1	20309815906 ns/op	      1015 wolf_process_ms/pair	  557832 B/op	    1186 allocs/op
+BenchmarkWolfSSLFeatureRealUDP/MutualTLSSessionResumption/WolfSSLClient/WolfSSLServer   	       1	20311885347 ns/op	      1016 wolf_process_ms/pair	  557832 B/op	    1186 allocs/op
+BenchmarkWolfSSLFeatureRealUDP/MutualTLSSessionResumption/WolfSSLClient/WolfSSLServer   	       1	20305237700 ns/op	      1015 wolf_process_ms/pair	  557832 B/op	    1186 allocs/op
+BenchmarkWolfSSLFeatureRealUDP/MutualTLSSessionResumption/WolfSSLClient/WolfSSLServer   	       1	20304743603 ns/op	      1015 wolf_process_ms/pair	  557760 B/op	    1184 allocs/op
+BenchmarkWolfSSLFeatureRealUDP/MutualTLSSessionResumption/WolfSSLClient/WolfSSLServer   	       1	20307916930 ns/op	      1015 wolf_process_ms/pair	  557760 B/op	    1184 allocs/op
+BenchmarkWolfSSLFeatureRealUDP/EarlyData/GoClient/GoServer                              	       1	   4041948 ns/op	         0.6684 go_ms/conn	  486936 B/op	    2028 allocs/op
+BenchmarkWolfSSLFeatureRealUDP/EarlyData/GoClient/GoServer                              	       1	   4114493 ns/op	         0.6329 go_ms/conn	  290192 B/op	    2023 allocs/op
+BenchmarkWolfSSLFeatureRealUDP/EarlyData/GoClient/GoServer                              	       1	   3725958 ns/op	         0.5929 go_ms/conn	  290192 B/op	    2023 allocs/op
+BenchmarkWolfSSLFeatureRealUDP/EarlyData/GoClient/GoServer                              	       1	   3684361 ns/op	         0.5885 go_ms/conn	  290440 B/op	    2026 allocs/op
+BenchmarkWolfSSLFeatureRealUDP/EarlyData/GoClient/GoServer                              	       1	   3697596 ns/op	         0.5921 go_ms/conn	  290192 B/op	    2023 allocs/op
+BenchmarkWolfSSLFeatureRealUDP/EarlyData/WolfSSLClient/GoServer                         	       1	1022633259 ns/op	      1023 wolf_process_ms/pair	  212712 B/op	    1141 allocs/op
+BenchmarkWolfSSLFeatureRealUDP/EarlyData/WolfSSLClient/GoServer                         	       1	1008264157 ns/op	      1008 wolf_process_ms/pair	  212464 B/op	    1138 allocs/op
+BenchmarkWolfSSLFeatureRealUDP/EarlyData/WolfSSLClient/GoServer                         	       1	1008417309 ns/op	      1008 wolf_process_ms/pair	  212464 B/op	    1138 allocs/op
+BenchmarkWolfSSLFeatureRealUDP/EarlyData/WolfSSLClient/GoServer                         	       1	1008301350 ns/op	      1008 wolf_process_ms/pair	  212712 B/op	    1141 allocs/op
+BenchmarkWolfSSLFeatureRealUDP/EarlyData/WolfSSLClient/GoServer                         	       1	1008299971 ns/op	      1008 wolf_process_ms/pair	  212464 B/op	    1138 allocs/op
+BenchmarkHybridKeyExchangeRealUDP/X25519MLKEM768/GoClient/GoServer                      	       1	  47180872 ns/op	         2.323 go_ms/conn	 3689632 B/op	   24663 allocs/op
+BenchmarkHybridKeyExchangeRealUDP/X25519MLKEM768/GoClient/GoServer                      	       1	  46224430 ns/op	         2.320 go_ms/conn	 3492872 B/op	   24658 allocs/op
+BenchmarkHybridKeyExchangeRealUDP/X25519MLKEM768/GoClient/GoServer                      	       1	  46134221 ns/op	         2.294 go_ms/conn	 3492872 B/op	   24658 allocs/op
+BenchmarkHybridKeyExchangeRealUDP/X25519MLKEM768/GoClient/GoServer                      	       1	  46077636 ns/op	         2.309 go_ms/conn	 3492872 B/op	   24658 allocs/op
+BenchmarkHybridKeyExchangeRealUDP/X25519MLKEM768/GoClient/GoServer                      	       1	  46153497 ns/op	         2.318 go_ms/conn	 3492872 B/op	   24658 allocs/op
+BenchmarkHybridKeyExchangeRealUDP/X25519MLKEM768/GoClient/WolfSSLServer                 	       1	  97104105 ns/op	         4.853 go_ms/conn	 1829360 B/op	   10761 allocs/op
+BenchmarkHybridKeyExchangeRealUDP/X25519MLKEM768/GoClient/WolfSSLServer                 	       1	  96708729 ns/op	         4.839 go_ms/conn	 1829504 B/op	   10763 allocs/op
+BenchmarkHybridKeyExchangeRealUDP/X25519MLKEM768/GoClient/WolfSSLServer                 	       1	  97345446 ns/op	         4.871 go_ms/conn	 1829504 B/op	   10763 allocs/op
+BenchmarkHybridKeyExchangeRealUDP/X25519MLKEM768/GoClient/WolfSSLServer                 	       1	  97317295 ns/op	         4.857 go_ms/conn	 1829424 B/op	   10762 allocs/op
+BenchmarkHybridKeyExchangeRealUDP/X25519MLKEM768/GoClient/WolfSSLServer                 	       1	  97091930 ns/op	         4.855 go_ms/conn	 1829424 B/op	   10762 allocs/op
+BenchmarkHybridKeyExchangeRealUDP/X25519MLKEM768/WolfSSLClient/GoServer                 	       1	  48473371 ns/op	         2.353 wolfssl_ms/conn	 1686768 B/op	   12995 allocs/op
+BenchmarkHybridKeyExchangeRealUDP/X25519MLKEM768/WolfSSLClient/GoServer                 	       1	  48077518 ns/op	         2.340 wolfssl_ms/conn	 1686768 B/op	   12995 allocs/op
+BenchmarkHybridKeyExchangeRealUDP/X25519MLKEM768/WolfSSLClient/GoServer                 	       1	  50703310 ns/op	         2.480 wolfssl_ms/conn	 1686768 B/op	   12995 allocs/op
+BenchmarkHybridKeyExchangeRealUDP/X25519MLKEM768/WolfSSLClient/GoServer                 	       1	  48776606 ns/op	         2.374 wolfssl_ms/conn	 1686768 B/op	   12995 allocs/op
+BenchmarkHybridKeyExchangeRealUDP/X25519MLKEM768/WolfSSLClient/GoServer                 	       1	  47574711 ns/op	         2.322 wolfssl_ms/conn	 1686768 B/op	   12995 allocs/op
+BenchmarkHybridKeyExchangeRealUDP/X25519MLKEM768/WolfSSLClient/WolfSSLServer            	       1	  95088985 ns/op	         4.677 wolfssl_ms/conn	   34888 B/op	      53 allocs/op
+BenchmarkHybridKeyExchangeRealUDP/X25519MLKEM768/WolfSSLClient/WolfSSLServer            	       1	  94948401 ns/op	         4.667 wolfssl_ms/conn	   34888 B/op	      53 allocs/op
+BenchmarkHybridKeyExchangeRealUDP/X25519MLKEM768/WolfSSLClient/WolfSSLServer            	       1	  88907248 ns/op	         4.365 wolfssl_ms/conn	   34888 B/op	      53 allocs/op
+BenchmarkHybridKeyExchangeRealUDP/X25519MLKEM768/WolfSSLClient/WolfSSLServer            	       1	  89688644 ns/op	         4.410 wolfssl_ms/conn	   34888 B/op	      53 allocs/op
+BenchmarkHybridKeyExchangeRealUDP/X25519MLKEM768/WolfSSLClient/WolfSSLServer            	       1	  95191163 ns/op	         4.678 wolfssl_ms/conn	   34888 B/op	      53 allocs/op
+BenchmarkHybridKeyExchangeRealUDP/SecP256r1MLKEM768/GoClient/GoServer                   	       1	  46840679 ns/op	         2.303 go_ms/conn	 3728672 B/op	   24983 allocs/op
+BenchmarkHybridKeyExchangeRealUDP/SecP256r1MLKEM768/GoClient/GoServer                   	       1	  45848876 ns/op	         2.298 go_ms/conn	 3531928 B/op	   24978 allocs/op
+BenchmarkHybridKeyExchangeRealUDP/SecP256r1MLKEM768/GoClient/GoServer                   	       1	  45486974 ns/op	         2.256 go_ms/conn	 3531928 B/op	   24978 allocs/op
+BenchmarkHybridKeyExchangeRealUDP/SecP256r1MLKEM768/GoClient/GoServer                   	       1	  45324361 ns/op	         2.271 go_ms/conn	 3531928 B/op	   24978 allocs/op
+BenchmarkHybridKeyExchangeRealUDP/SecP256r1MLKEM768/GoClient/GoServer                   	       1	  45591961 ns/op	         2.268 go_ms/conn	 3531928 B/op	   24978 allocs/op
+BenchmarkHybridKeyExchangeRealUDP/SecP256r1MLKEM768/GoClient/WolfSSLServer              	       1	 117170443 ns/op	         5.880 go_ms/conn	 1841760 B/op	   10880 allocs/op
+BenchmarkHybridKeyExchangeRealUDP/SecP256r1MLKEM768/GoClient/WolfSSLServer              	       1	 116163713 ns/op	         5.815 go_ms/conn	 1841984 B/op	   10883 allocs/op
+BenchmarkHybridKeyExchangeRealUDP/SecP256r1MLKEM768/GoClient/WolfSSLServer              	       1	 115893252 ns/op	         5.787 go_ms/conn	 1841904 B/op	   10882 allocs/op
+BenchmarkHybridKeyExchangeRealUDP/SecP256r1MLKEM768/GoClient/WolfSSLServer              	       1	 116468616 ns/op	         5.813 go_ms/conn	 1841984 B/op	   10883 allocs/op
+BenchmarkHybridKeyExchangeRealUDP/SecP256r1MLKEM768/GoClient/WolfSSLServer              	       1	 117649584 ns/op	         5.887 go_ms/conn	 1841904 B/op	   10882 allocs/op
+BenchmarkHybridKeyExchangeRealUDP/SecP256r1MLKEM768/WolfSSLClient/GoServer              	       1	  69119788 ns/op	         3.389 wolfssl_ms/conn	 1706928 B/op	   13135 allocs/op
+BenchmarkHybridKeyExchangeRealUDP/SecP256r1MLKEM768/WolfSSLClient/GoServer              	       1	  69107294 ns/op	         3.392 wolfssl_ms/conn	 1706928 B/op	   13135 allocs/op
+BenchmarkHybridKeyExchangeRealUDP/SecP256r1MLKEM768/WolfSSLClient/GoServer              	       1	  68959696 ns/op	         3.389 wolfssl_ms/conn	 1706928 B/op	   13135 allocs/op
+BenchmarkHybridKeyExchangeRealUDP/SecP256r1MLKEM768/WolfSSLClient/GoServer              	       1	  68731764 ns/op	         3.377 wolfssl_ms/conn	 1706928 B/op	   13135 allocs/op
+BenchmarkHybridKeyExchangeRealUDP/SecP256r1MLKEM768/WolfSSLClient/GoServer              	       1	  69652262 ns/op	         3.417 wolfssl_ms/conn	 1706928 B/op	   13135 allocs/op
+BenchmarkHybridKeyExchangeRealUDP/SecP256r1MLKEM768/WolfSSLClient/WolfSSLServer         	       1	 120291078 ns/op	         5.955 wolfssl_ms/conn	   34888 B/op	      53 allocs/op
+BenchmarkHybridKeyExchangeRealUDP/SecP256r1MLKEM768/WolfSSLClient/WolfSSLServer         	       1	 118160733 ns/op	         5.827 wolfssl_ms/conn	   34888 B/op	      53 allocs/op
+BenchmarkHybridKeyExchangeRealUDP/SecP256r1MLKEM768/WolfSSLClient/WolfSSLServer         	       1	 118448056 ns/op	         5.846 wolfssl_ms/conn	   34888 B/op	      53 allocs/op
+BenchmarkHybridKeyExchangeRealUDP/SecP256r1MLKEM768/WolfSSLClient/WolfSSLServer         	       1	 127683655 ns/op	         6.363 wolfssl_ms/conn	   34888 B/op	      53 allocs/op
+BenchmarkHybridKeyExchangeRealUDP/SecP256r1MLKEM768/WolfSSLClient/WolfSSLServer         	       1	 122812082 ns/op	         6.002 wolfssl_ms/conn	   34888 B/op	      53 allocs/op
+BenchmarkHybridKeyExchangeRealUDP/SecP384r1MLKEM1024/GoClient/GoServer                  	       1	  72445324 ns/op	         3.517 go_ms/conn	 4478592 B/op	   31105 allocs/op
+BenchmarkHybridKeyExchangeRealUDP/SecP384r1MLKEM1024/GoClient/GoServer                  	       1	  69918028 ns/op	         3.484 go_ms/conn	 4027592 B/op	   25338 allocs/op
+BenchmarkHybridKeyExchangeRealUDP/SecP384r1MLKEM1024/GoClient/GoServer                  	       1	  69894594 ns/op	         3.483 go_ms/conn	 4027592 B/op	   25338 allocs/op
+BenchmarkHybridKeyExchangeRealUDP/SecP384r1MLKEM1024/GoClient/GoServer                  	       1	  69676988 ns/op	         3.473 go_ms/conn	 4027592 B/op	   25338 allocs/op
+BenchmarkHybridKeyExchangeRealUDP/SecP384r1MLKEM1024/GoClient/GoServer                  	       1	  69664525 ns/op	         3.471 go_ms/conn	 4027592 B/op	   25338 allocs/op
+BenchmarkHybridKeyExchangeRealUDP/SecP384r1MLKEM1024/WolfSSLClient/GoServer             	       1	 143999506 ns/op	         6.447 wolfssl_ms/conn	 1865808 B/op	   13315 allocs/op
+BenchmarkHybridKeyExchangeRealUDP/SecP384r1MLKEM1024/WolfSSLClient/GoServer             	       1	 128957583 ns/op	         6.380 wolfssl_ms/conn	 1865808 B/op	   13315 allocs/op
+BenchmarkHybridKeyExchangeRealUDP/SecP384r1MLKEM1024/WolfSSLClient/GoServer             	       1	 128947774 ns/op	         6.381 wolfssl_ms/conn	 1865808 B/op	   13315 allocs/op
+BenchmarkHybridKeyExchangeRealUDP/SecP384r1MLKEM1024/WolfSSLClient/GoServer             	       1	 128899083 ns/op	         6.380 wolfssl_ms/conn	 1865808 B/op	   13315 allocs/op
+BenchmarkHybridKeyExchangeRealUDP/SecP384r1MLKEM1024/WolfSSLClient/GoServer             	       1	 128941202 ns/op	         6.386 wolfssl_ms/conn	 1865808 B/op	   13315 allocs/op
+BenchmarkHybridKeyExchangeRealUDP/SecP384r1MLKEM1024/WolfSSLClient/WolfSSLServer        	       1	 193016948 ns/op	         9.565 wolfssl_ms/conn	   34888 B/op	      53 allocs/op
+BenchmarkHybridKeyExchangeRealUDP/SecP384r1MLKEM1024/WolfSSLClient/WolfSSLServer        	       1	 193529188 ns/op	         9.602 wolfssl_ms/conn	   34888 B/op	      53 allocs/op
+BenchmarkHybridKeyExchangeRealUDP/SecP384r1MLKEM1024/WolfSSLClient/WolfSSLServer        	       1	 192530073 ns/op	         9.545 wolfssl_ms/conn	   34888 B/op	      53 allocs/op
+BenchmarkHybridKeyExchangeRealUDP/SecP384r1MLKEM1024/WolfSSLClient/WolfSSLServer        	       1	 192249594 ns/op	         9.548 wolfssl_ms/conn	   34888 B/op	      53 allocs/op
+BenchmarkHybridKeyExchangeRealUDP/SecP384r1MLKEM1024/WolfSSLClient/WolfSSLServer        	       1	 229424063 ns/op	        11.38 wolfssl_ms/conn	   34888 B/op	      53 allocs/op
+PASS
+ok  	github.com/puernya/go-dtls	659.011s
