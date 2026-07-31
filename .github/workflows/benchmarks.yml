@@ -26,10 +26,10 @@ jobs:
     runs-on: ubuntu-latest
     timeout-minutes: 90
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v7
         with:
           ref: ${{ github.event_name == 'pull_request' && github.event.pull_request.head.sha || github.sha }}
-      - uses: actions/setup-go@v5
+      - uses: actions/setup-go@v7
         with:
           go-version-file: go.mod
           cache: true
@@ -43,7 +43,7 @@ jobs:
           echo "commit=$commit" >> "$GITHUB_OUTPUT"
       - name: Restore wolfSSL cache
         id: cache-wolfssl
-        uses: actions/cache/restore@v4
+        uses: actions/cache/restore@v6
         with:
           path: |
             ${{ runner.temp }}/wolfssl
@@ -95,7 +95,7 @@ jobs:
           test -x "$WOLFSSL_BUILD/examples/client/client"
       - name: Save wolfSSL cache
         if: steps.cache-wolfssl.outputs.cache-hit != 'true'
-        uses: actions/cache/save@v4
+        uses: actions/cache/save@v6
         with:
           path: |
             ${{ runner.temp }}/wolfssl
@@ -132,7 +132,7 @@ jobs:
             -generated "$(date -u +%Y-%m-%dT%H:%M:%SZ)" \
             -wolfssl "$WOLFSSL_COMMIT (Linux Release static)"
           cat benchmark.md >> "$GITHUB_STEP_SUMMARY"
-      - uses: actions/upload-artifact@v4
+      - uses: actions/upload-artifact@v7
         with:
           name: benchmark-output
           path: |
@@ -152,7 +152,7 @@ jobs:
       actions: read
       contents: write
     steps:
-      - uses: actions/download-artifact@v4
+      - uses: actions/download-artifact@v8
         with:
           name: benchmark-output
           path: report
