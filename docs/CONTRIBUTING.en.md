@@ -41,6 +41,18 @@ On Windows, run every command above except the final race command and replace it
 
 GitHub Actions runs eight required jobs independently on every push and pull request; the module job runs verify followed by tidy diff. Fix every failure; do not bypass it by weakening assertions, skipping tests, or broadening lint exclusions.
 
+## Fuzz Gates
+
+Regular `go test ./...` replays every seed corpus registered with `testing.F.Add` or stored under `testdata/fuzz`. The separate fuzz workflow runs the current five targets in layers: pull requests and manual runs smoke-test each target for 20 seconds, while the daily `18:00 UTC` schedule runs each target for 10 minutes on separate runners without sharing CPU with benchmarks. Adding or renaming a fuzz target requires updating the workflow matrix.
+
+To reproduce one target locally:
+
+```sh
+GODEBUG=fuzzseed=123 go test . -run '^$' -fuzz '^FuzzPlainRecordParsers$' -fuzztime 20s -fuzzminimizetime 30s -parallel 1 -timeout 2m
+```
+
+A failed job uploads the target, Go version, random seed, complete output, and the minimized input Go writes under `testdata/fuzz/<target>`. Reproduce the failure with that input after fixing it, and commit it to the matching corpus when it has lasting regression value. Do not substitute a coverage percentage for parser, record, ACK, and AEAD differential fuzzing.
+
 ## Protocol Changes
 
 Protocol behavior follows RFC 9147, RFC 9846, and applicable related RFCs:

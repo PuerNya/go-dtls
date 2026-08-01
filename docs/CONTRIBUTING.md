@@ -41,6 +41,18 @@ Windows 运行除最后一项 race 外的全部命令，并用仓库脚本替代
 
 GitHub Actions 会在每次 push 和 pull request 上分别执行八个必需 job；module job 依次运行 verify 和 tidy diff。任何一项失败都必须修复，不得通过放宽断言、跳过测试或扩大 lint 排除范围绕过。
 
+## Fuzz 门禁
+
+普通 `go test ./...` 会回放 `testing.F.Add` 和 `testdata/fuzz` 中的全部 seed corpus。独立的 fuzz workflow 对当前五个 fuzz target 分层运行：pull request 和手动运行对每个 target 执行 20 秒 smoke fuzz；每天 `18:00 UTC` 的定时任务在独立 runner 上分别执行 10 分钟，不与 benchmark 共享 CPU。新增或重命名 fuzz target 时必须同步更新 workflow matrix。
+
+本地复现单个 target：
+
+```sh
+GODEBUG=fuzzseed=123 go test . -run '^$' -fuzz '^FuzzPlainRecordParsers$' -fuzztime 20s -fuzzminimizetime 30s -parallel 1 -timeout 2m
+```
+
+失败 job 会上传 target、Go 版本、随机 seed、完整输出和 Go 最小化后写入 `testdata/fuzz/<target>` 的输入。修复后应使用 artifact 中的输入复现；仍有长期回归价值时将其提交到对应 corpus。不得用覆盖率百分比替代 parser、record、ACK 和 AEAD 差分 fuzz。
+
 ## 协议变更
 
 协议行为以 RFC 9147、RFC 9846 及适用的相关 RFC 为准：

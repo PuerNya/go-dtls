@@ -1,0 +1,89 @@
+name: Fuzz
+
+on:
+  pull_request:
+  schedule:
+    # Run after the scheduled benchmark window, on separate hosted runners.
+    - cron: '0 18 * * *'
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: fuzz-${{ github.event.pull_request.number || github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  fuzz:
+    name: ${{ matrix.target }}
+    runs-on: ubuntu-latest
+    timeout-minutes: ${{ github.event_name == 'schedule' && 20 || 5 }}
+    strategy:
+      fail-fast: false
+      matrix:
+        target:
+          - FuzzPlainRecordParsers
+          - FuzzHandshakeFragmentParsers
+          - FuzzACKParser
+          - FuzzHandshakeMessageParsers
+          - FuzzProtectedRecordOpenModes
+    env:
+      FUZZ_TIME: ${{ github.event_name == 'schedule' && '10m' || '20s' }}
+      FUZZ_MINIMIZE_TIME: ${{ github.event_name == 'schedule' && '2m' || '30s' }}
+      TEST_TIMEOUT: ${{ github.event_name == 'schedule' && '15m' || '2m' }}
+    steps:
+      - uses: actions/checkout@v7
+        with:
+          persist-credentials: false
+      - name: Verify checkout credentials are not persisted
+        if: github.event_name == 'pull_request'
+        shell: bash
+        run: |
+          ! git config --local --get-regexp '^http\..*\.extraheader$'
+          ! git remote get-url origin | grep -Eq '(x-access-token|github_pat_|gh[opsu]_)'
+      - uses: actions/setup-go@v7
+        with:
+          go-version-file: go.mod
+          cache: true
+      - name: Verify fuzz matrix
+        shell: bash
+        run: |
+          set -euo pipefail
+          expected=$'FuzzACKParser\nFuzzHandshakeFragmentParsers\nFuzzHandshakeMessageParsers\nFuzzPlainRecordParsers\nFuzzProtectedRecordOpenModes'
+          actual="$(go test . -list '^Fuzz' | grep -E '^Fuzz[[:alnum:]_]+$' | sort)"
+          test "$actual" = "$expected"
+      - name: Fuzz
+        id: fuzz
+        env:
+          FUZZ_TARGET: ${{ matrix.target }}
+        shell: bash
+        run: |
+          set -euo pipefail
+          mkdir -p fuzz-artifact
+          seed="$(od -An -N4 -tu4 /dev/urandom | tr -d ' ')"
+          export GODEBUG="${GODEBUG:+${GODEBUG},}fuzzseed=$seed"
+          {
+            printf 'target: %s\n' "$FUZZ_TARGET"
+            printf 'seed: %s\n' "$seed"
+            printf 'fuzztime: %s\n' "$FUZZ_TIME"
+            printf 'fuzzminimizetime: %s\n' "$FUZZ_MINIMIZE_TIME"
+            printf 'event: %s\n' "$GITHUB_EVENT_NAME"
+            printf 'commit: %s\n' "$GITHUB_SHA"
+            go version
+          } | tee fuzz-artifact/metadata.txt
+          go test . -run '^$' -fuzz "^${FUZZ_TARGET}$" \
+            -fuzztime "$FUZZ_TIME" \
+            -fuzzminimizetime "$FUZZ_MINIMIZE_TIME" \
+            -parallel 1 \
+            -timeout "$TEST_TIMEOUT" 2>&1 | tee fuzz-artifact/output.txt
+      - name: Upload fuzz failure
+        if: failure() && steps.fuzz.outcome == 'failure'
+        uses: actions/upload-artifact@v7
+        with:
+          name: fuzz-failure-${{ matrix.target }}-${{ github.run_attempt }}
+          path: |
+            fuzz-artifact/
+            testdata/fuzz/${{ matrix.target }}/
+          if-no-files-found: error
+          retention-days: 30
