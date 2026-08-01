@@ -133,7 +133,6 @@ jobs:
         shell: bash
         run: |
           set -euo pipefail
-          unset HTTP_PROXY HTTPS_PROXY ALL_PROXY http_proxy https_proxy all_proxy
           export GOMAXPROCS=1
           base_dir="$RUNNER_TEMP/go-dtls-base"
           base_binary="$RUNNER_TEMP/go-dtls-base.test"
