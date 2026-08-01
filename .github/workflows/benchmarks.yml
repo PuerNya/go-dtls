@@ -101,6 +101,23 @@ jobs:
             ${{ runner.temp }}/wolfssl
             ${{ runner.temp }}/wolfssl-build
           key: ${{ steps.cache-wolfssl.outputs.cache-primary-key }}
+      - name: Run wolfSSL interoperability matrix
+        env:
+          WOLFSSL_COMMIT: ${{ steps.wolfssl.outputs.commit }}
+          WOLFSSL_ROOT: ${{ runner.temp }}/wolfssl
+          WOLFSSL_SERVER: ${{ runner.temp }}/wolfssl-build/examples/server/server
+          WOLFSSL_CLIENT: ${{ runner.temp }}/wolfssl-build/examples/client/client
+        shell: bash
+        run: |
+          set -euo pipefail
+          count=10
+          if [[ "${{ github.event_name }}" == pull_request ]]; then
+            count=1
+          fi
+          test "$(git -C "$WOLFSSL_ROOT" rev-parse HEAD)" = "$WOLFSSL_COMMIT"
+          test -x "$WOLFSSL_SERVER"
+          test -x "$WOLFSSL_CLIENT"
+          go test . -run '^TestInteropWolfSSL' -v -count="$count" -timeout=45m
       - name: Run paired PR performance gate
         if: github.event_name == 'pull_request'
         env:

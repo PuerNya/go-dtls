@@ -93,6 +93,8 @@ go test -run TestInteropWolfSSL -v -count=10
 
 When wolfSSL supports the target feature, also add and run a focused real-UDP benchmark covering go-dtls -> go-dtls, go-dtls -> wolfSSL, wolfSSL -> go-dtls, and wolfSSL -> wolfSSL. Include the peer commit/build configuration, workload, timing boundaries, five-run median, and capability limits in the pull request validation evidence; do not put cross-implementation benchmark data in README files.
 
+The benchmark workflow uses the exact wolfSSL SHA resolved for the run and executes the complete interoperability matrix before performance tests: one iteration for pull requests and ten for `master` pushes, scheduled runs, and manual dispatches. Any unexpected failure blocks reporting and publication. The wolfSSL build cache is saved before the matrix, so a test failure does not force recompilation on the next run.
+
 The benchmark workflow updates the separate `benchmark-results` branch after a push to `master`. The scheduled check triggers and publishes only when the go-dtls or wolfSSL `master` SHA changed and no benchmark for that go-dtls SHA is queued or running. A pull request only updates its benchmark comment and never writes to `master` or the results branch. Do not maintain performance numbers manually in README files.
 
 Adding or renaming any benchmark or sub-benchmark requires updating its category, order, and multilingual labels in `tools/benchmark-report`. The report generator rejects benchmark output without explicit coverage, and the benchmark workflow must pass.
