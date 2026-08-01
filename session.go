@@ -35,6 +35,10 @@ type newSessionTicketMessage struct {
 }
 
 func (m *newSessionTicketMessage) marshal() ([]byte, error) {
+	return m.marshalWithGREASE(0)
+}
+
+func (m *newSessionTicketMessage) marshalWithGREASE(greaseExtension uint16) ([]byte, error) {
 	if m.lifetime == 0 || time.Duration(m.lifetime)*time.Second > maxTicketLifetime {
 		return nil, &ProtocolError{"invalid NewSessionTicket lifetime"}
 	}
@@ -51,6 +55,9 @@ func (m *newSessionTicketMessage) marshal() ([]byte, error) {
 	if m.maxEarlyData != 0 {
 		extensionsLength += 8
 	}
+	if greaseExtension != 0 {
+		extensionsLength += 4
+	}
 	w := newWireBuilder(8 + 1 + len(m.nonce) + 2 + len(m.ticket) + extensionsLength)
 	w.u32(m.lifetime)
 	w.u32(m.ageAdd)
@@ -62,6 +69,10 @@ func (m *newSessionTicketMessage) marshal() ([]byte, error) {
 		binary.BigEndian.PutUint32(earlyData[:], m.maxEarlyData)
 		w.u16(int(extEarlyData))
 		w.bytes16(earlyData[:])
+	}
+	if greaseExtension != 0 {
+		w.u16(int(greaseExtension))
+		w.bytes16(nil)
 	}
 	w.endVector16(extensionsStart)
 	return w.b, w.err
@@ -79,7 +90,7 @@ func parseNewSessionTicket(b []byte) (*newSessionTicketMessage, error) {
 	if len(m.ticket) == 0 {
 		return nil, alertError(alertDecodeError, &ProtocolError{"empty NewSessionTicket ticket"})
 	}
-	var extensionStorage [1]orderedExtension
+	var extensionStorage [2]orderedExtension
 	extensions, err := parseOrderedExtensionsView(extensionWire, extensionStorage[:0])
 	if err != nil {
 		return nil, err
@@ -1139,6 +1150,10 @@ func (c *Conn) sendNewSessionTickets(schedule *keySchedule, suite *cipherSuite, 
 			return err
 		}
 		ageAdd := binary.BigEndian.Uint32(ageBytes[:])
+		greaseExtension := uint16(0)
+		if c.config.EnableGREASE {
+			greaseExtension = greaseValue(ageBytes[0])
+		}
 		ticketState := &sessionTicketState{
 			createdAt: createdAt, lifetime: lifetime, suite: suite.id, psk: psk,
 			serverName: serverName, protocol: protocol, ageAdd: ageAdd, maxEarlyData: c.config.MaxEarlyData, recordSizeLimit: c.localRecordSizeLimit,
@@ -1159,9 +1174,10 @@ func (c *Conn) sendNewSessionTickets(schedule *keySchedule, suite *cipherSuite, 
 		if len(ticket) > 65535 {
 			return nil
 		}
-		body, marshalErr := (&newSessionTicketMessage{
+		message := &newSessionTicketMessage{
 			lifetime: lifetime, ageAdd: ageAdd, nonce: nonce, ticket: ticket, maxEarlyData: c.config.MaxEarlyData,
-		}).marshal()
+		}
+		body, marshalErr := message.marshalWithGREASE(greaseExtension)
 		if marshalErr != nil {
 			return marshalErr
 		}

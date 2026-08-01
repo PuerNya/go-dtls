@@ -42,6 +42,10 @@ func knownExtensionType(typ uint16) bool {
 	}
 }
 
+func greaseValue(seed byte) uint16 {
+	return 0x0a0a + uint16(seed&0x0f)*0x1010
+}
+
 type keyShareEntry struct {
 	group tls.CurveID
 	data  []byte
@@ -75,10 +79,27 @@ type clientHello struct {
 	hasConnectionID               bool
 	returnRoutability             bool
 	postHandshakeAuth             bool
+	grease                        bool
 	recordSizeLimit               uint16
 	hasRecordSizeLimit            bool
 	certificateCompressionOffered bool
 	unknownExtensions             map[uint16][]byte
+}
+
+func (h *clientHello) greaseExtension() (uint16, bool) {
+	if h.grease {
+		return greaseValue(h.random[0]), true
+	}
+	if h.unknownExtensions == nil {
+		return 0, false
+	}
+	for seed := range 16 {
+		grease := greaseValue(byte(seed))
+		if _, ok := h.unknownExtensions[grease]; ok {
+			return grease, true
+		}
+	}
+	return 0, false
 }
 
 func (h *clientHello) encryptedClientHello() []byte {
@@ -1002,6 +1023,9 @@ func (h *clientHello) marshal() ([]byte, error) {
 	if ech := h.encryptedClientHello(); ech != nil {
 		extensions = append(extensions, orderedExtension{typ: extECH, value: ech})
 	}
+	if grease, ok := h.greaseExtension(); ok {
+		extensions = append(extensions, orderedExtension{typ: grease})
+	}
 	if hasPSK {
 		extensions = append(extensions,
 			orderedExtension{typ: extPSKKeyExchangeModes, value: marshalPSKKeyExchangeModes()},
@@ -1072,6 +1096,10 @@ func parseClientHello(b []byte) (*clientHello, error) {
 		case extOIDFilters:
 			return nil, alertError(alertIllegalParameter, &ProtocolError{"oid_filters is not permitted in ClientHello"})
 		default:
+			if extension.typ == greaseValue(h.random[0]) && len(extension.value) == 0 {
+				h.grease = true
+				continue
+			}
 			if h.unknownExtensions == nil {
 				h.unknownExtensions = make(map[uint16][]byte)
 			}

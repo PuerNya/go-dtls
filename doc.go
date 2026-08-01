@@ -105,6 +105,19 @@
 // messages use the ordinary RFC 9147 fragmentation, ACK, and retransmission
 // machinery.
 //
+// # GREASE
+//
+// [Config.EnableGREASE] enables the RFC 8701 extension-value strategy. A
+// client sends one randomized reserved extension in ClientHello, and a server
+// sends one in CertificateRequest and NewSessionTicket. The extension is empty,
+// is preserved across HelloRetryRequest and ECH Inner/Outer cloning, and is
+// never negotiated or exposed in [ConnectionState]. Other optional RFC 8701 injection points, such as cipher
+// suites, groups, versions, and signature algorithms, are not actively sent.
+//
+// This option is independent of [Config.EncryptedClientHelloGrease], which
+// sends a syntactically valid but undecryptable ECH offer for RFC 9849 fallback
+// testing. Both options are disabled by default.
+//
 // # Encrypted ClientHello
 //
 // [Config.EncryptedClientHelloConfigList] enables [RFC 9849] Encrypted

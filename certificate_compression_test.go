@@ -153,7 +153,7 @@ func TestCertificateCompressionExtensionRoundTrips(t *testing.T) {
 	request := &certificateRequestMessage{
 		signatureSchemes: []tls.SignatureScheme{tls.Ed25519},
 	}
-	body, err = request.marshalWithCertificateCompression(&certificateCompressionZlibOffer)
+	body, err = request.marshalWithCertificateCompression(&certificateCompressionZlibOffer, 0)
 	if err != nil {
 		t.Fatal(err)
 	}

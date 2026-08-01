@@ -542,6 +542,13 @@ func makeECHOuter(inner *clientHello, config *echConfig, random io.Reader) (*cli
 	outer.serverName = config.publicName
 	outer.alpn = nil
 	_ = outer.setCertificateAuthorities(nil)
+	if outer.grease {
+		if outer.unknownExtensions == nil {
+			outer.unknownExtensions = make(map[uint16][]byte, 1)
+		}
+		outer.unknownExtensions[greaseValue(outer.random[0])] = nil
+		outer.grease = false
+	}
 	if _, err := io.ReadFull(random, outer.random[:]); err != nil {
 		return nil, err
 	}

@@ -158,7 +158,7 @@ jobs:
           done < <(git diff --name-only "$BASE_SHA" "$HEAD_SHA" -- '*_test.go')
           printf 'commit: %s\nworkload-changed: %s\n' "$BASE_SHA" "$workload_changed" > "$base_output"
           printf 'commit: %s\nworkload-changed: %s\n' "$HEAD_SHA" "$workload_changed" > "$head_output"
-          lifecycle='^(BenchmarkConnectionHandshakeLifecycle|BenchmarkSessionTicketRequestHandshakeLifecycle|BenchmarkECHHandshakeLifecycle|BenchmarkExternalPSKHandshakeLifecycle|BenchmarkMutualTLSHandshakeLifecycle|BenchmarkCertificateSelectionHandshakeLifecycle|BenchmarkCertificateCompressionHandshakeLifecycle|BenchmarkHybridKeyExchangeHandshakeLifecycle)$'
+          lifecycle='^(BenchmarkConnectionHandshakeLifecycle|BenchmarkSessionTicketRequestHandshakeLifecycle|BenchmarkGREASEHandshakeLifecycle|BenchmarkECHHandshakeLifecycle|BenchmarkExternalPSKHandshakeLifecycle|BenchmarkMutualTLSHandshakeLifecycle|BenchmarkCertificateSelectionHandshakeLifecycle|BenchmarkCertificateCompressionHandshakeLifecycle|BenchmarkHybridKeyExchangeHandshakeLifecycle)$'
           records='^BenchmarkProtectedRecord(Seal|RoundTripInPlace)$'
           run_suite() {
             local binary="$1" output="$2" directory="$3"

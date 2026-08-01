@@ -96,7 +96,11 @@ func (c *Conn) RequestClientCertificate(ctx context.Context) error {
 	if c.config.EnableCertificateCompression {
 		certificateCompressionAlgorithms = &certificateCompressionZlibOffer
 	}
-	body, err := request.marshalWithCertificateCompression(certificateCompressionAlgorithms)
+	greaseExtension := uint16(0)
+	if c.config.EnableGREASE {
+		greaseExtension = greaseValue(requestContext[0])
+	}
+	body, err := request.marshalWithCertificateCompression(certificateCompressionAlgorithms, greaseExtension)
 	if err != nil {
 		return err
 	}

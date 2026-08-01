@@ -109,9 +109,10 @@ var realUDPDirectionPaths = [...]string{
 }
 
 const (
-	realUDPMatrixSamples  = 5
-	realUDPSkipSamples    = 1
-	reviewedWolfSSLCommit = "6502cdd34cab185217b44821d2bcba77383ebebe"
+	realUDPMatrixSamples          = 5
+	realUDPSkipSamples            = 1
+	previousReviewedWolfSSLCommit = "6502cdd34cab185217b44821d2bcba77383ebebe"
+	reviewedWolfSSLCommit         = "7a8aae3e40138d19c640ae5bc0bc4e8f2998c22d"
 )
 
 type realUDPSkipAllowance struct {
@@ -120,45 +121,48 @@ type realUDPSkipAllowance struct {
 	evidence string
 }
 
-var realUDPSkipAllowlists = map[string]map[string]realUDPSkipAllowance{
-	reviewedWolfSSLCommit: {
-		"BenchmarkWolfSSLFeatureRealUDP/MutualTLSSessionResumption/WolfSSLClient/GoServer": {
-			output: "wolfSSL client cannot parse the go-dtls mTLS session ticket",
-			reason: [3]string{
-				"wolfSSL client cannot parse the go-dtls mTLS session ticket",
-				"wolfSSL 客户端无法解析 go-dtls 的 mTLS session ticket",
-				"Клиент wolfSSL не может разобрать mTLS session ticket от go-dtls",
-			},
-			evidence: "TestInteropWolfSSLClientMutualTLSSessionResumption: wolfSSL_connect resume error -328, malformed buffer input error",
+var reviewedRealUDPSkipAllowances = map[string]realUDPSkipAllowance{
+	"BenchmarkWolfSSLFeatureRealUDP/MutualTLSSessionResumption/WolfSSLClient/GoServer": {
+		output: "wolfSSL client cannot parse the go-dtls mTLS session ticket",
+		reason: [3]string{
+			"wolfSSL client cannot parse the go-dtls mTLS session ticket",
+			"wolfSSL 客户端无法解析 go-dtls 的 mTLS session ticket",
+			"Клиент wolfSSL не может разобрать mTLS session ticket от go-dtls",
 		},
-		"BenchmarkWolfSSLFeatureRealUDP/EarlyData/GoClient/WolfSSLServer": {
-			output: "wolfSSL server rejects go-dtls 0-RTT after HelloRetryRequest",
-			reason: [3]string{
-				"wolfSSL server rejects go-dtls 0-RTT after HelloRetryRequest",
-				"wolfSSL 服务端在 HelloRetryRequest 后拒绝 go-dtls 0-RTT",
-				"Сервер wolfSSL отклоняет 0-RTT go-dtls после HelloRetryRequest",
-			},
-			evidence: "TestInteropWolfSSLServerEarlyData: wolfSSL server rejects 0-RTT after its DTLS HelloRetryRequest",
-		},
-		"BenchmarkWolfSSLFeatureRealUDP/EarlyData/WolfSSLClient/WolfSSLServer": {
-			output: "wolfSSL server rejects wolfSSL client 0-RTT after HelloRetryRequest",
-			reason: [3]string{
-				"wolfSSL server rejects wolfSSL client 0-RTT after HelloRetryRequest",
-				"wolfSSL 服务端在 HelloRetryRequest 后拒绝 wolfSSL 客户端 0-RTT",
-				"Сервер wolfSSL отклоняет 0-RTT клиента wolfSSL после HelloRetryRequest",
-			},
-			evidence: "wolfSSL 5.9.2 client/server output: Early Data was not sent",
-		},
-		"BenchmarkHybridKeyExchangeRealUDP/SecP384r1MLKEM1024/GoClient/WolfSSLServer": {
-			output: "wolfSSL server does not complete this DTLS 1.3 hybrid handshake",
-			reason: [3]string{
-				"wolfSSL server does not complete this DTLS 1.3 hybrid handshake",
-				"wolfSSL 服务端无法完成该 DTLS 1.3 hybrid 握手",
-				"Сервер wolfSSL не завершает это гибридное рукопожатие DTLS 1.3",
-			},
-			evidence: "TestInteropWolfSSLServerHybridKeyExchange/SecP384r1MLKEM1024",
-		},
+		evidence: "TestInteropWolfSSLClientMutualTLSSessionResumption: wolfSSL_connect resume error -328, malformed buffer input error",
 	},
+	"BenchmarkWolfSSLFeatureRealUDP/EarlyData/GoClient/WolfSSLServer": {
+		output: "wolfSSL server rejects go-dtls 0-RTT after HelloRetryRequest",
+		reason: [3]string{
+			"wolfSSL server rejects go-dtls 0-RTT after HelloRetryRequest",
+			"wolfSSL 服务端在 HelloRetryRequest 后拒绝 go-dtls 0-RTT",
+			"Сервер wolfSSL отклоняет 0-RTT go-dtls после HelloRetryRequest",
+		},
+		evidence: "TestInteropWolfSSLServerEarlyData: wolfSSL server rejects 0-RTT after its DTLS HelloRetryRequest",
+	},
+	"BenchmarkWolfSSLFeatureRealUDP/EarlyData/WolfSSLClient/WolfSSLServer": {
+		output: "wolfSSL server rejects wolfSSL client 0-RTT after HelloRetryRequest",
+		reason: [3]string{
+			"wolfSSL server rejects wolfSSL client 0-RTT after HelloRetryRequest",
+			"wolfSSL 服务端在 HelloRetryRequest 后拒绝 wolfSSL 客户端 0-RTT",
+			"Сервер wolfSSL отклоняет 0-RTT клиента wolfSSL после HelloRetryRequest",
+		},
+		evidence: "wolfSSL 5.9.2 client/server output: Early Data was not sent",
+	},
+	"BenchmarkHybridKeyExchangeRealUDP/SecP384r1MLKEM1024/GoClient/WolfSSLServer": {
+		output: "wolfSSL server does not complete this DTLS 1.3 hybrid handshake",
+		reason: [3]string{
+			"wolfSSL server does not complete this DTLS 1.3 hybrid handshake",
+			"wolfSSL 服务端无法完成该 DTLS 1.3 hybrid 握手",
+			"Сервер wolfSSL не завершает это гибридное рукопожатие DTLS 1.3",
+		},
+		evidence: "TestInteropWolfSSLServerHybridKeyExchange/SecP384r1MLKEM1024",
+	},
+}
+
+var realUDPSkipAllowlists = map[string]map[string]realUDPSkipAllowance{
+	previousReviewedWolfSSLCommit: reviewedRealUDPSkipAllowances,
+	reviewedWolfSSLCommit:         reviewedRealUDPSkipAllowances,
 }
 
 var reportLanguages = map[string]reportLanguage{
@@ -375,6 +379,21 @@ var benchmarkFeatureLabels = map[string][3]string{
 		"直接外部 PSK 握手",
 		"Рукопожатие с прямым внешним PSK",
 	},
+	"GREASEDisabled": {
+		"Full mTLS handshake + session ticket / GREASE disabled",
+		"完整 mTLS 握手 + 会话票据 / GREASE 关闭",
+		"Полное рукопожатие mTLS + билет сеанса / GREASE отключен",
+	},
+	"GREASEEnabled": {
+		"Full mTLS handshake + session ticket / GREASE enabled",
+		"完整 mTLS 握手 + 会话票据 / GREASE 启用",
+		"Полное рукопожатие mTLS + билет сеанса / GREASE включен",
+	},
+	"GREASERealUDP": {
+		"GREASE compatibility / full mTLS handshake + session ticket",
+		"GREASE 兼容性 / 完整 mTLS 握手 + 会话票据",
+		"Совместимость с GREASE / полное рукопожатие mTLS + билет сеанса",
+	},
 	"HybridKeyExchange": {
 		"Post-quantum hybrid key exchange",
 		"后量子混合密钥交换",
@@ -508,6 +527,8 @@ var benchmarkDisplayOrders = map[string]int{
 	"CertificateSelectionHandshakeLifecycle/PostHandshakeAuthentication": 33,
 	"SessionTicketRequestHandshakeLifecycle":                             35,
 	"ExternalPSKHandshakeLifecycle":                                      40,
+	"GREASEHandshakeLifecycle/Disabled":                                  38,
+	"GREASEHandshakeLifecycle/Enabled":                                   39,
 	"CertificateCompressionHandshakeLifecycle/ServerCertificate/Plain":   50,
 	"CertificateCompressionHandshakeLifecycle/ServerCertificate/Zlib":    60,
 	"CertificateCompressionHandshakeLifecycle/MutualTLS/Plain":           70,
@@ -521,6 +542,7 @@ var benchmarkDisplayOrders = map[string]int{
 	"WolfSSLFeatureRealUDP/CertificateAES128GCM":        10,
 	"WolfSSLFeatureRealUDP/ApplicationDataRoundTrip":    20,
 	"WolfSSLFeatureRealUDP/MutualTLS":                   30,
+	"WolfSSLFeatureRealUDP/GREASE":                      35,
 	"WolfSSLFeatureRealUDP/AES128CCM":                   40,
 	"WolfSSLFeatureRealUDP/ExternalPSK":                 50,
 	"WolfSSLFeatureRealUDP/ConnectionID":                60,
@@ -1148,6 +1170,8 @@ func validateBenchmarkCoverage(name string) error {
 	switch parts[0] {
 	case "CertificateCompression":
 		parts = parts[1:]
+	case "GREASEHandshakeLifecycle":
+		return fmt.Errorf("benchmark %q is not covered by the report generator", name)
 	default:
 		parts[0] = strings.TrimSuffix(parts[0], "HandshakeLifecycle")
 		parts[0] = strings.TrimSuffix(parts[0], "Suites")
@@ -1452,6 +1476,9 @@ func benchmarkFeatureLabel(parts []string, language int) (string, bool) {
 	case "WolfSSLFeatureRealUDP":
 		if len(parts) == 2 {
 			key = parts[1]
+			if key == "GREASE" {
+				key = "GREASERealUDP"
+			}
 		}
 	case "HybridKeyExchangeRealUDP", "HybridKeyExchangeHandshakeLifecycle":
 		if len(parts) == 2 {
@@ -1477,6 +1504,10 @@ func benchmarkFeatureLabel(parts []string, language int) (string, bool) {
 		key = "Connection"
 	case "ExternalPSKHandshakeLifecycle":
 		key = "ExternalPSK"
+	case "GREASEHandshakeLifecycle":
+		if len(parts) == 2 {
+			key = "GREASE" + parts[1]
+		}
 	case "SessionTicketRequestHandshakeLifecycle":
 		key = "SessionTicketRequest"
 	}

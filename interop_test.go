@@ -241,6 +241,14 @@ func TestInteropWolfSSLServer(t *testing.T) {
 	testInteropWolfSSLServer(t, "", nil, false, nil)
 }
 
+func TestInteropWolfSSLServerGREASE(t *testing.T) {
+	testInteropWolfSSLServerOptions(t, wolfSSLInteropOptions{
+		configure: func(_ *testing.T, _ string, config *Config) {
+			config.EnableGREASE = true
+		},
+	})
+}
+
 func TestInteropWolfSSLServerECHGrease(t *testing.T) {
 	testInteropWolfSSLServerOptions(t, wolfSSLInteropOptions{
 		configure: func(_ *testing.T, _ string, config *Config) {
@@ -540,6 +548,30 @@ func testInteropWolfSSLServerOptions(t *testing.T, options wolfSSLInteropOptions
 
 func TestInteropWolfSSLClient(t *testing.T) {
 	testInteropWolfSSLClient(t, "", nil, false, nil)
+}
+
+func TestInteropWolfSSLClientGREASECertificateRequest(t *testing.T) {
+	testInteropWolfSSLClientOptions(t, wolfSSLInteropOptions{
+		loadClientCertificate: true,
+		configure: func(t *testing.T, root string, config *Config) {
+			config.EnableGREASE = true
+			config.ClientAuth = tls.RequireAndVerifyClientCert
+			config.ClientCAs = wolfSSLClientCAs(t, root)
+		},
+	})
+}
+
+func TestInteropWolfSSLClientGREASESessionTicket(t *testing.T) {
+	testInteropWolfSSLClientOptions(t, wolfSSLInteropOptions{
+		args:        []string{"-r", "--waitTicket"},
+		connections: 2,
+		configure: func(_ *testing.T, _ string, config *Config) {
+			config.EnableGREASE = true
+			config.SessionTicketsDisabled = false
+		},
+		connected:      requireResumptionOnSecondConnection,
+		outputContains: []string{"reused session id"},
+	})
 }
 
 func TestInteropWolfSSLClientAES128CCM(t *testing.T) {
@@ -925,6 +957,7 @@ type wolfSSLBenchmarkFeature struct {
 	externalPSK                     bool
 	connectionID                    bool
 	mutualTLS                       bool
+	waitGoTicket                    bool
 	wolfClientProcess               bool
 	loadWolfClientCertificate       bool
 	requireWolfClientCertificate    bool
@@ -995,6 +1028,16 @@ func BenchmarkWolfSSLFeatureRealUDP(b *testing.B) {
 		{name: "CertificateAES128GCM", configs: baseConfigs, suite: TLS_AES_128_GCM_SHA256, wolfClientArgs: []string{"-l", "TLS13-AES128-GCM-SHA256"}, wolfServerArgs: []string{"-l", "TLS13-AES128-GCM-SHA256"}},
 		{name: "ApplicationDataRoundTrip", configs: baseConfigs, suite: TLS_AES_128_GCM_SHA256, operation: wolfSSLBenchmarkApplicationData, wolfClientProcess: true, wolfClientArgs: []string{"-l", "TLS13-AES128-GCM-SHA256"}, wolfServerArgs: []string{"-l", "TLS13-AES128-GCM-SHA256"}},
 		{name: "MutualTLS", configs: mutualTLSConfigs(false), suite: TLS_AES_128_GCM_SHA256, mutualTLS: true, loadWolfClientCertificate: true, requireWolfClientCertificate: true, wolfClientArgs: []string{"-l", "TLS13-AES128-GCM-SHA256"}, wolfServerArgs: []string{"-l", "TLS13-AES128-GCM-SHA256"}},
+		{name: "GREASE", suite: TLS_AES_128_GCM_SHA256, mutualTLS: true, waitGoTicket: true, loadWolfClientCertificate: true, requireWolfClientCertificate: true, configs: func() (*Config, *Config) {
+			client, server := mutualTLSConfigs(false)()
+			client.EnableGREASE = true
+			client.SessionTicketsDisabled = false
+			server.EnableGREASE = true
+			server.SessionTicketsDisabled = false
+			server.SessionTicketKey = ticketKey
+			server.SessionTicketLifetime = time.Hour
+			return client, server
+		}, wolfClientArgs: []string{"-l", "TLS13-AES128-GCM-SHA256"}, wolfServerArgs: []string{"-l", "TLS13-AES128-GCM-SHA256"}},
 		{name: "AES128CCM", suite: TLS_AES_128_CCM_SHA256, configs: func() (*Config, *Config) {
 			client, server := baseConfigs()
 			client.CipherSuites, server.CipherSuites = []uint16{TLS_AES_128_CCM_SHA256}, []uint16{TLS_AES_128_CCM_SHA256}
@@ -1281,6 +1324,10 @@ func benchmarkGoClient(b *testing.B, address string, config *Config, feature wol
 			b.StartTimer()
 		}
 		clientConfig := config
+		if feature.waitGoTicket && !wolfServer {
+			clientConfig = config.Clone()
+			clientConfig.ClientSessionCache = NewLRUClientSessionCache(1)
+		}
 		if feature.resume {
 			clientConfig = config.Clone()
 			clientConfig.ClientSessionCache = NewLRUClientSessionCache(1)
@@ -1327,6 +1374,9 @@ func benchmarkGoClient(b *testing.B, address string, config *Config, feature wol
 			}
 		} else {
 			conn, err = DialWithDialer(dialer, "udp4", address, clientConfig)
+		}
+		if err == nil && feature.waitGoTicket && !wolfServer {
+			err = waitForBenchmarkTicket(clientConfig)
 		}
 		if err == nil {
 			_ = conn.SetDeadline(time.Now().Add(5 * time.Second))

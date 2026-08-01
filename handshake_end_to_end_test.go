@@ -703,11 +703,11 @@ func TestPostHandshakeClientAuthentication(t *testing.T) {
 	left, right := memoryDatagramPair()
 	client := Client(left, &Config{
 		RootCAs: roots, ServerName: "server.test", Certificates: []tls.Certificate{clientCertificate},
-		PostHandshakeAuth: true, HandshakeTimeout: 2 * time.Second, FlightInterval: 5 * time.Millisecond,
+		PostHandshakeAuth: true, EnableGREASE: true, HandshakeTimeout: 2 * time.Second, FlightInterval: 5 * time.Millisecond,
 	})
 	server := Server(right, &Config{
 		Certificates: []tls.Certificate{serverCertificate}, ClientAuth: tls.RequireAndVerifyClientCert, ClientCAs: clientRoots,
-		HandshakeTimeout: 2 * time.Second, FlightInterval: 5 * time.Millisecond,
+		EnableGREASE: true, HandshakeTimeout: 2 * time.Second, FlightInterval: 5 * time.Millisecond,
 	})
 	serverErr := make(chan error, 1)
 	go func() { serverErr <- server.Handshake() }()

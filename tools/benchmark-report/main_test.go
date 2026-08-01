@@ -106,6 +106,11 @@ func TestParseReportRejectsUncoveredBenchmark(t *testing.T) {
 	if err == nil || !strings.Contains(err.Error(), "unmapped part") {
 		t.Fatalf("parseReport error = %v, want an unmapped benchmark part error", err)
 	}
+
+	_, err = parseReport(strings.NewReader("BenchmarkGREASEHandshakeLifecycle-2 1 100 ns/op 1 B/op 1 allocs/op\n"))
+	if err == nil || !strings.Contains(err.Error(), "not covered by the report generator") {
+		t.Fatalf("parseReport error = %v, want the unsplit GREASE benchmark to be rejected", err)
+	}
 }
 
 func TestMarkdownTextEscapesArtifactInput(t *testing.T) {
@@ -274,6 +279,10 @@ func TestBenchmarkLabel(t *testing.T) {
 	}{
 		{"en", "BenchmarkConnectionHandshakeLifecycle-2", "Certificate-authenticated full handshake / AES-128-GCM"},
 		{"en", "BenchmarkSessionTicketRequestHandshakeLifecycle-2", "Full handshake + 4 acknowledged session tickets"},
+		{"zh-CN", "BenchmarkGREASEHandshakeLifecycle/Disabled-2", "完整 mTLS 握手 + 会话票据 / GREASE 关闭"},
+		{"en", "BenchmarkGREASEHandshakeLifecycle/Enabled-2", "Full mTLS handshake + session ticket / GREASE enabled"},
+		{"ru", "BenchmarkGREASEHandshakeLifecycle/Enabled-2", "Полное рукопожатие mTLS + билет сеанса / GREASE включен"},
+		{"zh-CN", "BenchmarkWolfSSLFeatureRealUDP/GREASE/GoClient/WolfSSLServer-2", "GREASE 兼容性 / 完整 mTLS 握手 + 会话票据"},
 		{"en", "BenchmarkMutualTLSHandshakeLifecycle/Resumed-2", "mTLS session resumption handshake"},
 		{"zh-CN", "BenchmarkCertificateSelectionHandshakeLifecycle/InitialMutualTLS-2", "按 CA 与 OID filters 选择多证书的 mTLS 握手"},
 		{"ru", "BenchmarkCertificateSelectionHandshakeLifecycle/PostHandshakeAuthentication-2", "Выбор сертификата для аутентификации после рукопожатия"},
@@ -367,11 +376,14 @@ func TestBenchmarkDisplayOrder(t *testing.T) {
 	}{
 		{"BenchmarkConnectionHandshakeLifecycle-2", 10},
 		{"BenchmarkSessionTicketRequestHandshakeLifecycle-2", 35},
+		{"BenchmarkGREASEHandshakeLifecycle/Disabled-2", 38},
+		{"BenchmarkGREASEHandshakeLifecycle/Enabled-2", 39},
 		{"BenchmarkMutualTLSHandshakeLifecycle/Resumed-2", 30},
 		{"BenchmarkCertificateSelectionHandshakeLifecycle/InitialMutualTLS-2", 32},
 		{"BenchmarkCertificateSelectionHandshakeLifecycle/PostHandshakeAuthentication-2", 33},
 		{"BenchmarkCertificateCompressionHandshakeLifecycle/MutualTLS/Zlib-2", 80},
 		{"BenchmarkWolfSSLFeatureRealUDP/CertificateAES128GCM/GoClient/WolfSSLServer-2", 10},
+		{"BenchmarkWolfSSLFeatureRealUDP/GREASE/GoClient/WolfSSLServer-2", 35},
 		{"BenchmarkWolfSSLFeatureRealUDP/EarlyData/WolfSSLClient/GoServer-2", 110},
 		{"BenchmarkHybridKeyExchangeRealUDP/X25519MLKEM768/WolfSSLClient/WolfSSLServer-2", 120},
 		{"BenchmarkUnknown-2", 1000},
@@ -426,18 +438,20 @@ func TestParseRealUDPJSON(t *testing.T) {
 }
 
 func TestValidateRealUDPMatrix(t *testing.T) {
-	if workloads := expectedRealUDPWorkloads(); len(workloads) != 14 {
-		t.Fatalf("real UDP workloads = %d, want 14", len(workloads))
+	if workloads := expectedRealUDPWorkloads(); len(workloads) != 15 {
+		t.Fatalf("real UDP workloads = %d, want 15", len(workloads))
 	}
-	if allowances := realUDPSkipAllowlists[reviewedWolfSSLCommit]; len(allowances) != 4 {
-		t.Fatalf("real UDP skip allowances = %d, want 4", len(allowances))
+	for _, commit := range []string{previousReviewedWolfSSLCommit, reviewedWolfSSLCommit} {
+		if allowances := realUDPSkipAllowlists[commit]; len(allowances) != 4 {
+			t.Fatalf("real UDP skip allowances for %s = %d, want 4", commit, len(allowances))
+		}
 	}
 	report := completeRealUDPReport()
 	if err := report.validateRealUDPMatrix(); err != nil {
 		t.Fatal(err)
 	}
-	if len(report.benchmarks) != 14*len(realUDPDirectionPaths) {
-		t.Fatalf("matrix entries = %d, want %d", len(report.benchmarks), 14*len(realUDPDirectionPaths))
+	if len(report.benchmarks) != 15*len(realUDPDirectionPaths) {
+		t.Fatalf("matrix entries = %d, want %d", len(report.benchmarks), 15*len(realUDPDirectionPaths))
 	}
 	var output bytes.Buffer
 	if err := writeReport(&output, report, "", "", "", reportLanguages["zh-CN"], ""); err != nil {

@@ -266,6 +266,7 @@ deadline、socket 关闭和底层 UDP 错误沿 Go `net` 错误模型返回；�
 | `CipherSuites` | AES-128-GCM、AES-256-GCM、ChaCha20-Poly1305、AES-128-CCM |
 | `CurvePreferences` | 默认 X25519、P-256；可显式启用 `tls.X25519MLKEM768`、`tls.SecP256r1MLKEM768`、`tls.SecP384r1MLKEM1024` |
 | `ExternalPSKs` | 默认空；通过 `ImportExternalPSK` 或 `NewDirectExternalPSK` 配置不可变外部 PSK；不能和 `ClientAuth` 组合 |
+| `EnableGREASE` | 默认 `false`；按 RFC 8701 在客户端 CH 及服务端 CR/NST 发送一个随机空 GREASE 扩展；不参与协商，HRR 和 ECH Inner/Outer clone 后保持不变 |
 | `EncryptedClientHelloConfigList` | 默认 `nil`；客户端传入包含两字节长度的完整 RFC 9849 ECHConfigList，非 `nil` 时 ECH 必须被接受 |
 | `EncryptedClientHelloRejectionVerify` | 可选；替代内置 `RootCAs` + `public_name` 检查来认证 ECH 拒绝连接 |
 | `EncryptedClientHelloKeys` / `GetEncryptedClientHelloKeys` | 服务端 ECHConfig 与 HPKE 私钥；至少一个 key 必须设置 `SendAsRetry`，callback 在 SNI/ALPN/证书选择前执行 |
@@ -497,7 +498,7 @@ serverConfig.MaxSessionTickets = 4
 | [RFC 9325](https://www.rfc-editor.org/rfc/rfc9325) | TLS/DTLS 部署安全 BCP | ticket 使用 AES-256-GCM，寿命限制为 1 秒至 7 天；RSA 2048 位及 SHA-1/MD5 证书下限在完整握手、信任锚和恢复路径统一执行；OCSP 和 DTLS 1.2 范围例外见总体状态 |
 | [RFC 9525](https://www.rfc-editor.org/rfc/rfc9525) | 服务身份校验 | DNS-ID/IP-ID 默认严格验证；其他 reference identifier 需要调用方实现应用语义 |
 | [RFC 9853](https://www.rfc-editor.org/rfc/rfc9853) | CID 地址变化的 Return Routability Check | 完成；默认 enhanced check，旧路径失效后执行 basic check，验证成功才 rebind；候选路径执行独立放大限制，并在可用时使用 spare CID 探测 |
-| [RFC 8701](https://www.rfc-editor.org/rfc/rfc8701) | GREASE 抗僵化 | 接收端容忍合法未知值并保持 HRR 不变量；发送端不主动生成 GREASE |
+| [RFC 8701](https://www.rfc-editor.org/rfc/rfc8701) | GREASE 抗僵化 | 完成扩展值策略：`EnableGREASE` 在 CH/CR/NST 发送随机空 GREASE 扩展，接收端按未知值忽略且不写入协商状态，HRR 保持同值；其他 MAY 注入点不主动发送 |
 
 尚未实现的可选扩展包括 RFC 9261 Exported Authenticators 与 RFC 9345 Delegated Credentials。
 
@@ -510,7 +511,7 @@ serverConfig.MaxSessionTickets = 4
 - 发送端采用一条 record 一个 UDP datagram 的合法模式，未暴露可选的多 record 聚合 API。
 - 未暴露并行多个 PHA 请求；RFC 允许但不要求该能力。
 - RRC 自动 rebind 依赖 transport 能接收不同来源并定向发送；标准 Listener 支持，connected UDP 客户端受操作系统 peer 过滤约束。空 CID 不能跨五元组唯一路由。
-- wolfSSL master `c99dafc`（版本字符串 5.9.2）互通构建支持 CID、KeyUpdate、PHA、session ticket、0-RTT、`SESSION_CERTS`、direct external PSK 和三个 hybrid group，但不实现 RFC 8449、RFC 8879、RFC 9149、RFC 9258 importer 或 RFC 9853 RRC。其服务端会忽略本库客户端的 `ticket_request` 并保持普通恢复；这只证明兼容回退。其 ECH/HPKE 构建无法完成 DTLS accepted-ECH 握手，因此只记录成功的 GREASE ECH 普通握手，不声称 accepted-ECH 互通。Hybrid 互通中，wolfSSL 客户端方向三组均通过，服务端方向通过 X25519/P-256 hybrid；其服务端不能完成分片 hybrid ClientHello，且 P-384 hybrid 即使未分片仍超时。对端其他限制为：服务端 HRR 拒绝本库客户端 0-RTT；客户端不能解析本库 1421 字节 mTLS ticket；客户端在最终 ACK 丢失后不重传 Finished。
+- wolfSSL master `6502cdd`（版本字符串 5.9.2）互通构建支持 CID、KeyUpdate、PHA、session ticket、0-RTT、`SESSION_CERTS`、direct external PSK 和三个 hybrid group，但不实现 RFC 8449、RFC 8879、RFC 9149、RFC 9258 importer 或 RFC 9853 RRC。其服务端会忽略本库客户端的 `ticket_request` 并保持普通恢复；这只证明兼容回退。其 ECH/HPKE 构建无法完成 DTLS accepted-ECH 握手，因此只记录成功的 GREASE ECH 普通握手，不声称 accepted-ECH 互通。Hybrid 互通中，wolfSSL 客户端方向三组均通过，服务端方向通过 X25519/P-256 hybrid；其服务端不能完成分片 hybrid ClientHello，且 P-384 hybrid 即使未分片仍超时。对端其他限制为：服务端 HRR 拒绝本库客户端 0-RTT；客户端不能解析本库 1421 字节 mTLS ticket；客户端在最终 ACK 丢失后不重传 Finished。
 
 ## Benchmark
 
@@ -541,6 +542,7 @@ go test -run '^$' -bench '^BenchmarkProtectedRecord(Seal|RoundTripInPlace)$' -be
 - RFC 8449 测试覆盖 CH/EE、最小 64、方向独立限制、非法值与扩展组合、authenticated 超限、HRR、恢复、0-RTT、KeyUpdate、ACK、PMTU 独立性和未协商第三方兼容性。
 - RFC 8879 测试覆盖 CH/CertificateRequest 协商、zlib、CompressedCertificate、transcript、非法算法/压缩流/长度、解压上限、普通 Certificate 回退、HRR、恢复、mTLS/PHA、record limit、分片重传、弱网、资源生命周期和第三方不支持时的安全回退。
 - RFC 9149 测试覆盖 CH/EE wire、严格扩展位置和 alert、HRR 不变量、完整/恢复/零计数、服务端上限、多个可靠 NST、并发 cache 消费、同族失效、弱网、真实 UDP 和第三方忽略扩展时的恢复回退。
+- RFC 8701 测试覆盖固定随机值映射、CH/CR/NST wire、PSK 最后约束、HRR、mTLS/PHA、session ticket、未知值不进入协商状态，以及 wolfSSL 对三类扩展的真实 UDP 容忍。
 - RFC 9257/9258 测试覆盖独立 importer 派生、SHA-256/384 KDF 隔离、`imp/ext` binder 隔离、直接与导入 PSK、多 identity、HRR 过滤、identity/key/context 错误、证书回退、连接状态、ticket 恢复与撤销、0-RTT 策略及弱网。
 - RFC 9848/9849 测试覆盖公开配置向量、ECHConfig/ECHConfigList、HPKE、Inner/Outer 与 padding、outer extension 重建、HRR accept confirmation 和降级拒绝、认证 retry configs、客户端证书抑制、GREASE、恢复、0-RTT、分片、弱网和真实 UDP。
 - 弱网测试覆盖双向丢包、延迟、乱序和重复，以及 CH/SH/Finished/ACK/HRR/mTLS 恢复组合。
@@ -548,7 +550,7 @@ go test -run '^$' -bench '^BenchmarkProtectedRecord(Seal|RoundTripInPlace)$' -be
 - RFC 9846 alert 测试覆盖握手、final ACK 等待、握手后乱序、`close_notify` 和本地加密失败。
 - RFC 9853 测试覆盖 RRC message/状态机、真实 UDP NAT rebind、CID 更新、弱网组合和连接资源生命周期。
 - parser/record fuzz 覆盖四套 AEAD 的复制与原地解密差分。
-- wolfSSL master `c99dafc` 双向真实 UDP 互通测试覆盖 HRR、RSA-PSS 证书握手、Finished ACK、应用数据、AES-GCM、AES-128-CCM、direct external PSK、CID、KeyUpdate、PHA、普通 session resumption 和受支持方向的三个 hybrid group；另覆盖本库客户端发起的 RFC 9149 未协商回退、immediate CID 切换、mTLS 恢复、丢最终 ACK 后的 Finished 重传，以及 wolfSSL 客户端发起的 0-RTT。ECH 只验证 GREASE 回退；对端当前无法完成 DTLS accepted-ECH。
+- wolfSSL master `6502cdd` 双向真实 UDP 互通测试覆盖 HRR、RSA-PSS 证书握手、Finished ACK、应用数据、AES-GCM、AES-128-CCM、direct external PSK、CID、KeyUpdate、PHA、普通 session resumption 和受支持方向的三个 hybrid group；另覆盖本库发出的 RFC 8701 CH/CR/NST GREASE、RFC 9149 未协商回退、immediate CID 切换、mTLS 恢复、丢最终 ACK 后的 Finished 重传，以及 wolfSSL 客户端发起的 0-RTT。ECH 只验证 GREASE 回退；对端当前无法完成 DTLS accepted-ECH。
 
 开发环境、必需检查、性能验证和提交规范见 [CONTRIBUTING.md](CONTRIBUTING.md)。
 

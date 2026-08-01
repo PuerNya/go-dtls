@@ -106,6 +106,65 @@ func BenchmarkSessionTicketRequestHandshakeLifecycle(b *testing.B) {
 	}
 }
 
+func BenchmarkGREASEHandshakeLifecycle(b *testing.B) {
+	serverCertificate, roots := testServerCertificate(b)
+	clientCertificate, clientRoots := testClientCertificate(b)
+	for _, test := range []struct {
+		name    string
+		enabled bool
+	}{
+		{name: "Disabled"},
+		{name: "Enabled", enabled: true},
+	} {
+		b.Run(test.name, func(b *testing.B) {
+			clientConfig := &Config{
+				RootCAs: roots, ServerName: "server.test", Certificates: []tls.Certificate{clientCertificate},
+				EnableGREASE: test.enabled, HandshakeTimeout: time.Second,
+			}
+			serverConfig := &Config{
+				Certificates: []tls.Certificate{serverCertificate}, ClientAuth: tls.RequireAndVerifyClientCert,
+				ClientCAs: clientRoots, EnableGREASE: test.enabled, HandshakeTimeout: time.Second,
+			}
+			b.ReportAllocs()
+			for b.Loop() {
+				cache := NewLRUClientSessionCache(1).(*lruSessionCache)
+				clientConfig.ClientSessionCache = cache
+				left, right := memoryDatagramPair()
+				client := Client(left, clientConfig)
+				server := Server(right, serverConfig)
+				serverDone := make(chan error, 1)
+				go func() { serverDone <- server.Handshake() }()
+				clientErr := client.Handshake()
+				serverErr := <-serverDone
+				if clientErr == nil && serverErr == nil {
+					deadline := time.Now().Add(time.Second)
+					for {
+						cache.mu.Lock()
+						element := cache.entries["server.test"]
+						cached := element != nil && len(element.Value.(*sessionCacheEntry).states) == 1
+						cache.mu.Unlock()
+						server.writeMu.Lock()
+						acknowledged := server.ticketFlight == nil
+						server.writeMu.Unlock()
+						if cached && acknowledged {
+							break
+						}
+						if time.Now().After(deadline) {
+							b.Fatalf("GREASE session ticket timed out: cached=%v acknowledged=%v", cached, acknowledged)
+						}
+						runtime.Gosched()
+					}
+				}
+				_ = client.Close()
+				_ = server.Close()
+				if clientErr != nil || serverErr != nil {
+					b.Fatalf("GREASE handshake failed: client=%v server=%v", clientErr, serverErr)
+				}
+			}
+		})
+	}
+}
+
 func BenchmarkECHHandshakeLifecycle(b *testing.B) {
 	certificate, roots := testServerCertificate(b)
 	configList, key := testECHConfig(b, "public.test", 1)

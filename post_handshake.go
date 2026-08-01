@@ -18,10 +18,10 @@ type certificateRequestMessage struct {
 }
 
 func (m *certificateRequestMessage) marshal() ([]byte, error) {
-	return m.marshalWithCertificateCompression(nil)
+	return m.marshalWithCertificateCompression(nil, 0)
 }
 
-func (m *certificateRequestMessage) marshalWithCertificateCompression(algorithms *certificateCompressionAlgorithms) ([]byte, error) {
+func (m *certificateRequestMessage) marshalWithCertificateCompression(algorithms *certificateCompressionAlgorithms, greaseExtension uint16) ([]byte, error) {
 	schemes, err := marshalSignatureSchemes(m.signatureSchemes)
 	if err != nil {
 		return nil, err
@@ -51,7 +51,13 @@ func (m *certificateRequestMessage) marshalWithCertificateCompression(algorithms
 			return nil, err
 		}
 	}
-	exts, err := marshalExtensions(items, []uint16{extSignatureAlgorithms, extSignatureAlgorithmsCert, extCertificateAuthorities, extOIDFilters, extCompressCertificate})
+	order := [...]uint16{extSignatureAlgorithms, extSignatureAlgorithmsCert, extCertificateAuthorities, extOIDFilters, extCompressCertificate, greaseExtension}
+	orderLength := len(order) - 1
+	if greaseExtension != 0 {
+		items[greaseExtension] = nil
+		orderLength++
+	}
+	exts, err := marshalExtensions(items, order[:orderLength])
 	if err != nil {
 		return nil, err
 	}

@@ -633,6 +633,9 @@ func (c *Conn) clientHandshake() error {
 	if _, err = io.ReadFull(c.config.Rand, hello.random[:]); err != nil {
 		return err
 	}
+	if c.config.EnableGREASE {
+		hello.grease = true
+	}
 	var ech *echClientContext
 	if c.config.EncryptedClientHelloConfigList != nil {
 		ech, err = newECHClientContext(c.config.EncryptedClientHelloConfigList)
@@ -1391,6 +1394,7 @@ func equalClientHelloAfterHRR(initial, second *clientHello, requestedGroup tls.C
 		initial.certificateCompressionOffered == second.certificateCompressionOffered &&
 		initial.recordSizeLimit == second.recordSizeLimit &&
 		initial.hasRecordSizeLimit == second.hasRecordSizeLimit &&
+		initial.grease == second.grease &&
 		equalExtensionMaps(initial.unknownExtensions, second.unknownExtensions)
 }
 
@@ -1873,7 +1877,11 @@ func (c *Conn) serverHandshake() error {
 		if len(clientCertificateSchemes) == 0 {
 			clientCertificateSchemes = append([]tls.SignatureScheme(nil), request.signatureSchemes...)
 		}
-		requestBody, requestErr := request.marshalWithCertificateCompression(clientCertificateCompressionAlgorithms)
+		greaseExtension := uint16(0)
+		if c.config.EnableGREASE {
+			greaseExtension = greaseValue(sh.random[0])
+		}
+		requestBody, requestErr := request.marshalWithCertificateCompression(clientCertificateCompressionAlgorithms, greaseExtension)
 		if requestErr != nil {
 			return requestErr
 		}

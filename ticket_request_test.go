@@ -153,10 +153,10 @@ func TestTicketRequestEncryptedExtensionsAndHRRInvariants(t *testing.T) {
 	}
 }
 
-func ticketCacheSnapshot(cache *lruSessionCache, key string) []*ClientSessionState {
+func ticketCacheSnapshot(cache *lruSessionCache) []*ClientSessionState {
 	cache.mu.Lock()
 	defer cache.mu.Unlock()
-	element := cache.entries[key]
+	element := cache.entries["server.test"]
 	if element == nil {
 		return nil
 	}
@@ -172,13 +172,13 @@ func waitForTicketCount(t *testing.T, cache *lruSessionCache, want int) []*Clien
 	t.Helper()
 	deadline := time.Now().Add(2 * time.Second)
 	for time.Now().Before(deadline) {
-		states := ticketCacheSnapshot(cache, "server.test")
+		states := ticketCacheSnapshot(cache)
 		if len(states) == want {
 			return states
 		}
 		time.Sleep(time.Millisecond)
 	}
-	states := ticketCacheSnapshot(cache, "server.test")
+	states := ticketCacheSnapshot(cache)
 	t.Fatalf("cached %d tickets, want %d", len(states), want)
 	return nil
 }
@@ -458,7 +458,7 @@ func TestTicketRequestRetransmissionIsDeduplicated(t *testing.T) {
 	if err = c.processNewSessionTicket(7, body); err != nil {
 		t.Fatal(err)
 	}
-	if states := ticketCacheSnapshot(cache, "server.test"); len(states) != 1 {
+	if states := ticketCacheSnapshot(cache); len(states) != 1 {
 		t.Fatalf("cached a retransmitted ticket %d times", len(states))
 	}
 }

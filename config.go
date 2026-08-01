@@ -104,6 +104,11 @@ type Config struct {
 	// client authentication and permits it to answer CertificateRequest using
 	// Certificates. It has no effect on server configurations.
 	PostHandshakeAuth bool
+	// EnableGREASE sends one RFC 8701 reserved extension in ClientHello from a
+	// client and in CertificateRequest and NewSessionTicket from a server. The
+	// value is selected from existing per-message randomness and is never
+	// negotiated. The zero value keeps the default handshake wire unchanged.
+	EnableGREASE bool
 	// EncryptedClientHelloGrease sends an RFC 9849 GREASE ECH extension when no
 	// EncryptedClientHelloConfigList is configured. It does not require ECH to
 	// be accepted and preserves ordinary certificate and resumption semantics.
