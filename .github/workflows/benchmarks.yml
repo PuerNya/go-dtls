@@ -201,7 +201,7 @@ jobs:
           WOLFSSL_CLIENT="$WOLFSSL_BUILD/examples/client/client" \
             go test . -run '^$' \
               -bench '^(BenchmarkWolfSSLFeatureRealUDP|BenchmarkHybridKeyExchangeRealUDP)$' \
-              -benchmem -benchtime=1x -count=5 -cpu=1 -timeout=45m | tee -a benchmark.txt
+              -benchmem -benchtime=1x -count=5 -cpu=1 -timeout=45m -json | tee -a benchmark.txt
       - name: Format and sort benchmark report
         env:
           WOLFSSL_COMMIT: ${{ steps.wolfssl.outputs.commit }}

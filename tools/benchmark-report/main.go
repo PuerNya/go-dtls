@@ -2,6 +2,7 @@ package main
 
 import (
 	"bufio"
+	"encoding/json"
 	"errors"
 	"flag"
 	"fmt"
@@ -21,21 +22,28 @@ type metric struct {
 }
 
 type benchmark struct {
-	name    string
-	samples int
-	byUnit  map[string]*metric
+	name        string
+	samples     int
+	byUnit      map[string]*metric
+	unsupported [3]string
 }
 
 type report struct {
-	goVersion       string
-	goos            string
-	goarch          string
-	cpu             string
-	wolfSSL         string
-	commit          string
-	workloadChanged bool
-	benchmarks      []*benchmark
-	byName          map[string]*benchmark
+	goVersion        string
+	goos             string
+	goarch           string
+	cpu              string
+	wolfSSL          string
+	commit           string
+	workloadChanged  bool
+	benchmarks       []*benchmark
+	byName           map[string]*benchmark
+	realUDPJSON      bool
+	realUDPPending   map[string]string
+	realUDPSkips     map[string]string
+	realUDPSamples   map[string]int
+	goTestOutput     string
+	goTestOutputTest string
 }
 
 type benchmarkComparison struct {
@@ -73,6 +81,7 @@ type reportLanguage struct {
 	realUDP         [4]string
 	realUDPTiming   [2]string
 	columns         [6]string
+	unsupported     string
 }
 
 var sectionAnchors = [...]string{
@@ -90,6 +99,66 @@ var realUDPAnchors = [...]string{
 	"real-udp-go-dtls-client-wolfssl-server",
 	"real-udp-wolfssl-client-go-dtls-server",
 	"real-udp-wolfssl-client-wolfssl-server",
+}
+
+var realUDPDirectionPaths = [...]string{
+	"GoClient/GoServer",
+	"GoClient/WolfSSLServer",
+	"WolfSSLClient/GoServer",
+	"WolfSSLClient/WolfSSLServer",
+}
+
+const (
+	realUDPMatrixSamples  = 5
+	realUDPSkipSamples    = 1
+	reviewedWolfSSLCommit = "6502cdd34cab185217b44821d2bcba77383ebebe"
+)
+
+type realUDPSkipAllowance struct {
+	output   string
+	reason   [3]string
+	evidence string
+}
+
+var realUDPSkipAllowlists = map[string]map[string]realUDPSkipAllowance{
+	reviewedWolfSSLCommit: {
+		"BenchmarkWolfSSLFeatureRealUDP/MutualTLSSessionResumption/WolfSSLClient/GoServer": {
+			output: "wolfSSL client cannot parse the go-dtls mTLS session ticket",
+			reason: [3]string{
+				"wolfSSL client cannot parse the go-dtls mTLS session ticket",
+				"wolfSSL 客户端无法解析 go-dtls 的 mTLS session ticket",
+				"Клиент wolfSSL не может разобрать mTLS session ticket от go-dtls",
+			},
+			evidence: "TestInteropWolfSSLClientMutualTLSSessionResumption: wolfSSL_connect resume error -328, malformed buffer input error",
+		},
+		"BenchmarkWolfSSLFeatureRealUDP/EarlyData/GoClient/WolfSSLServer": {
+			output: "wolfSSL server rejects go-dtls 0-RTT after HelloRetryRequest",
+			reason: [3]string{
+				"wolfSSL server rejects go-dtls 0-RTT after HelloRetryRequest",
+				"wolfSSL 服务端在 HelloRetryRequest 后拒绝 go-dtls 0-RTT",
+				"Сервер wolfSSL отклоняет 0-RTT go-dtls после HelloRetryRequest",
+			},
+			evidence: "TestInteropWolfSSLServerEarlyData: wolfSSL server rejects 0-RTT after its DTLS HelloRetryRequest",
+		},
+		"BenchmarkWolfSSLFeatureRealUDP/EarlyData/WolfSSLClient/WolfSSLServer": {
+			output: "wolfSSL server rejects wolfSSL client 0-RTT after HelloRetryRequest",
+			reason: [3]string{
+				"wolfSSL server rejects wolfSSL client 0-RTT after HelloRetryRequest",
+				"wolfSSL 服务端在 HelloRetryRequest 后拒绝 wolfSSL 客户端 0-RTT",
+				"Сервер wolfSSL отклоняет 0-RTT клиента wolfSSL после HelloRetryRequest",
+			},
+			evidence: "wolfSSL 5.9.2 client/server output: Early Data was not sent",
+		},
+		"BenchmarkHybridKeyExchangeRealUDP/SecP384r1MLKEM1024/GoClient/WolfSSLServer": {
+			output: "wolfSSL server does not complete this DTLS 1.3 hybrid handshake",
+			reason: [3]string{
+				"wolfSSL server does not complete this DTLS 1.3 hybrid handshake",
+				"wolfSSL 服务端无法完成该 DTLS 1.3 hybrid 握手",
+				"Сервер wolfSSL не завершает это гибридное рукопожатие DTLS 1.3",
+			},
+			evidence: "TestInteropWolfSSLServerHybridKeyExchange/SecP384r1MLKEM1024",
+		},
+	},
 }
 
 var reportLanguages = map[string]reportLanguage{
@@ -119,7 +188,8 @@ var reportLanguages = map[string]reportLanguage{
 			"Median time is measured by the go-dtls client; `ms/conn` means one complete connection workload.",
 			"Median time is measured by the wolfSSL client; `ms/conn` means one connection, while `ms/pair` means a full-plus-resumed connection pair and includes the client's built-in wait.",
 		},
-		columns: [6]string{"Benchmark", "Samples", "Median time", "Throughput", "Harness memory", "Harness allocations"},
+		columns:     [6]string{"Benchmark", "Samples", "Median time", "Throughput", "Harness memory", "Harness allocations"},
+		unsupported: "Unsupported",
 	},
 	"zh-CN": {
 		labelIndex:      1,
@@ -147,7 +217,8 @@ var reportLanguages = map[string]reportLanguage{
 			"中位耗时由 go-dtls 客户端计时；`ms/conn` 表示一次完整连接工作负载。",
 			"中位耗时由 wolfSSL 客户端计时；`ms/conn` 表示单个连接，`ms/pair` 表示由完整连接和恢复连接组成的一组，并包含客户端内置等待。",
 		},
-		columns: [6]string{"基准测试", "样本数", "中位耗时", "吞吐量", "测试框架内存", "测试框架分配次数"},
+		columns:     [6]string{"基准测试", "样本数", "中位耗时", "吞吐量", "测试框架内存", "测试框架分配次数"},
+		unsupported: "不支持",
 	},
 	"ru": {
 		labelIndex:      2,
@@ -175,7 +246,8 @@ var reportLanguages = map[string]reportLanguage{
 			"Медианное время измеряет клиент go-dtls; `ms/conn` означает одну полную операцию соединения.",
 			"Медианное время измеряет клиент wolfSSL; `ms/conn` означает одно соединение, а `ms/pair` означает пару из полного и возобновленного соединений с учетом встроенного ожидания клиента.",
 		},
-		columns: [6]string{"Бенчмарк", "Замеры", "Медианное время", "Пропускная способность", "Память стенда", "Аллокации стенда"},
+		columns:     [6]string{"Бенчмарк", "Замеры", "Медианное время", "Пропускная способность", "Память стенда", "Аллокации стенда"},
+		unsupported: "Не поддерживается",
 	},
 }
 
@@ -539,6 +611,9 @@ func readReportFile(path string) (*report, error) {
 	if closeErr != nil {
 		return nil, closeErr
 	}
+	if err = result.validateRealUDPMatrix(); err != nil {
+		return nil, err
+	}
 	return result, nil
 }
 
@@ -585,6 +660,10 @@ func parseReport(reader io.Reader) (*report, error) {
 			result.cpu = strings.TrimSpace(strings.TrimPrefix(line, "cpu: "))
 		case strings.HasPrefix(line, "wolfssl: ") && result.wolfSSL == "":
 			result.wolfSSL = strings.TrimSpace(strings.TrimPrefix(line, "wolfssl: "))
+		case strings.HasPrefix(line, "{"):
+			if err := result.addGoTestJSONLine(lineNumber, line); err != nil {
+				return nil, err
+			}
 		case strings.HasPrefix(line, "Benchmark"):
 			if err := result.addBenchmarkLine(lineNumber, line); err != nil {
 				return nil, err
@@ -594,10 +673,227 @@ func parseReport(reader io.Reader) (*report, error) {
 	if err := scanner.Err(); err != nil {
 		return nil, fmt.Errorf("read benchmark output: %w", err)
 	}
+	if result.goTestOutput != "" {
+		return nil, errors.New("go test JSON contains an incomplete output line")
+	}
 	if len(result.benchmarks) == 0 {
 		return nil, errors.New("benchmark output contains no results")
 	}
 	return result, nil
+}
+
+type goTestEvent struct {
+	Action string
+	Test   string
+	Output string
+}
+
+func (r *report) addGoTestJSONLine(lineNumber int, line string) error {
+	var event goTestEvent
+	if err := json.Unmarshal([]byte(line), &event); err != nil {
+		return fmt.Errorf("line %d: parse go test JSON: %w", lineNumber, err)
+	}
+	if event.Action == "output" {
+		return r.addGoTestOutput(lineNumber, event.Test, event.Output)
+	}
+	if !isRealUDPBenchmark(event.Test) {
+		return nil
+	}
+	r.realUDPJSON = true
+	if event.Action != "skip" {
+		return nil
+	}
+	reason := r.realUDPPending[event.Test]
+	if reason == "" {
+		return fmt.Errorf("line %d: skipped real UDP benchmark %q has no structured reason", lineNumber, event.Test)
+	}
+	if r.realUDPSkips == nil {
+		r.realUDPSkips = make(map[string]string)
+		r.realUDPSamples = make(map[string]int)
+	}
+	if previous := r.realUDPSkips[event.Test]; previous != "" && previous != reason {
+		return fmt.Errorf("line %d: skipped real UDP benchmark %q changed reason from %q to %q", lineNumber, event.Test, previous, reason)
+	}
+	r.realUDPSkips[event.Test] = reason
+	r.realUDPSamples[event.Test]++
+	return nil
+}
+
+func (r *report) addGoTestOutput(lineNumber int, test, output string) error {
+	if r.goTestOutput == "" && test != "" {
+		r.goTestOutputTest = test
+	}
+	r.goTestOutput += output
+	for {
+		index := strings.IndexByte(r.goTestOutput, '\n')
+		if index < 0 {
+			return nil
+		}
+		line := strings.TrimSpace(r.goTestOutput[:index])
+		r.goTestOutput = r.goTestOutput[index+1:]
+		lineTest := r.goTestOutputTest
+		r.goTestOutputTest = ""
+		if r.goTestOutput != "" && test != "" {
+			r.goTestOutputTest = test
+		}
+		if isBenchmarkResultLine(line) && isRealUDPBenchmark(strings.Fields(line)[0]) {
+			r.realUDPJSON = true
+			if err := r.addBenchmarkLine(lineNumber, line); err != nil {
+				return err
+			}
+		}
+		if !isRealUDPBenchmark(lineTest) {
+			continue
+		}
+		r.realUDPJSON = true
+		if reason, ok := goTestSkipReason(line); ok {
+			if r.realUDPPending == nil {
+				r.realUDPPending = make(map[string]string)
+			}
+			r.realUDPPending[lineTest] = reason
+		}
+	}
+}
+
+func isBenchmarkResultLine(line string) bool {
+	fields := strings.Fields(line)
+	if len(fields) < 4 || !strings.HasPrefix(fields[0], "Benchmark") {
+		return false
+	}
+	_, err := strconv.ParseUint(fields[1], 10, 64)
+	return err == nil
+}
+
+func goTestSkipReason(output string) (string, bool) {
+	source, reason, ok := strings.Cut(strings.TrimSpace(output), ": ")
+	if !ok || !strings.Contains(source, ".go:") || strings.TrimSpace(reason) == "" {
+		return "", false
+	}
+	return strings.TrimSpace(reason), true
+}
+
+func isRealUDPBenchmark(name string) bool {
+	return strings.HasPrefix(name, "BenchmarkWolfSSLFeatureRealUDP") || strings.HasPrefix(name, "BenchmarkHybridKeyExchangeRealUDP")
+}
+
+func (r *report) validateRealUDPMatrix() error {
+	if r.wolfSSL == "" {
+		return nil
+	}
+	fields := strings.Fields(r.wolfSSL)
+	if len(fields) == 0 {
+		return errors.New("wolfSSL metadata has no commit")
+	}
+	commit := fields[0]
+	allowances, ok := realUDPSkipAllowlists[commit]
+	if !ok {
+		return fmt.Errorf("wolfSSL commit %q has no reviewed real UDP skip allowlist", commit)
+	}
+	if !r.realUDPJSON {
+		return errors.New("wolfSSL benchmark report has no structured real UDP matrix")
+	}
+
+	expected := make(map[string]struct{})
+	workloads := expectedRealUDPWorkloads()
+	for _, workload := range workloads {
+		for _, direction := range realUDPDirectionPaths {
+			expected[workload+"/"+direction] = struct{}{}
+		}
+	}
+	for name, allowance := range allowances {
+		if _, ok := expected[name]; !ok {
+			return fmt.Errorf("real UDP skip allowlist contains unknown direction %q", name)
+		}
+		if allowance.output == "" || allowance.evidence == "" || allowance.reason[0] == "" || allowance.reason[1] == "" || allowance.reason[2] == "" {
+			return fmt.Errorf("real UDP skip allowlist entry %q is incomplete", name)
+		}
+	}
+
+	results := make(map[string]*benchmark)
+	for _, item := range r.benchmarks {
+		name := realUDPBenchmarkName(item.name)
+		if !isRealUDPBenchmark(name) {
+			continue
+		}
+		if _, ok := expected[name]; !ok {
+			return fmt.Errorf("real UDP matrix produced unknown direction %q", name)
+		}
+		if results[name] != nil {
+			return fmt.Errorf("real UDP matrix produced duplicate direction %q", name)
+		}
+		results[name] = item
+	}
+	for name := range r.realUDPSkips {
+		if _, ok := expected[name]; !ok {
+			return fmt.Errorf("real UDP matrix skipped unknown direction %q", name)
+		}
+	}
+
+	for _, workload := range workloads {
+		for _, direction := range realUDPDirectionPaths {
+			name := workload + "/" + direction
+			item, hasResult := results[name]
+			reason, skipped := r.realUDPSkips[name]
+			allowance, allowed := allowances[name]
+			if hasResult && skipped {
+				return fmt.Errorf("real UDP direction %q produced both a result and a skip", name)
+			}
+			if allowed {
+				if hasResult {
+					return fmt.Errorf("real UDP direction %q is allowlisted but now produces a result; revalidate wolfSSL capability", name)
+				}
+				if !skipped {
+					return fmt.Errorf("real UDP direction %q is missing its allowlisted skip", name)
+				}
+				if reason != allowance.output {
+					return fmt.Errorf("real UDP direction %q skip reason = %q, want %q", name, reason, allowance.output)
+				}
+				if samples := r.realUDPSamples[name]; samples != realUDPSkipSamples {
+					return fmt.Errorf("real UDP direction %q has %d skip samples, want %d", name, samples, realUDPSkipSamples)
+				}
+				r.addUnsupportedRealUDP(name, allowance)
+				continue
+			}
+			if skipped {
+				return fmt.Errorf("real UDP direction %q has unregistered skip reason %q", name, reason)
+			}
+			if !hasResult {
+				return fmt.Errorf("real UDP direction %q produced no benchmark result", name)
+			}
+			if item.samples != realUDPMatrixSamples {
+				return fmt.Errorf("real UDP direction %q has %d samples, want %d", name, item.samples, realUDPMatrixSamples)
+			}
+		}
+	}
+	return nil
+}
+
+func realUDPBenchmarkName(name string) string {
+	if index := strings.LastIndexByte(name, '-'); index >= 0 {
+		if _, err := strconv.ParseUint(name[index+1:], 10, 64); err == nil {
+			return name[:index]
+		}
+	}
+	return name
+}
+
+func expectedRealUDPWorkloads() []string {
+	workloads := make([]string, 0, len(benchmarkDisplayOrders))
+	for name := range benchmarkDisplayOrders {
+		if strings.Contains(name, "RealUDP") {
+			workloads = append(workloads, "Benchmark"+name)
+		}
+	}
+	sort.Slice(workloads, func(left, right int) bool {
+		return benchmarkDisplayOrder(workloads[left]) < benchmarkDisplayOrder(workloads[right])
+	})
+	return workloads
+}
+
+func (r *report) addUnsupportedRealUDP(name string, allowance realUDPSkipAllowance) {
+	item := &benchmark{name: name, samples: r.realUDPSamples[name], byUnit: make(map[string]*metric), unsupported: allowance.reason}
+	r.byName[name] = item
+	r.benchmarks = append(r.benchmarks, item)
 }
 
 func compareReports(baseline, candidate *report, minimumPairs int, timeRegressionPercent float64, allowWorkloadChange bool) (*comparisonReport, error) {
@@ -1040,18 +1336,12 @@ func groupRealUDP(items []*benchmark) ([4][]*benchmark, error) {
 }
 
 func realUDPDirection(name string) int {
-	switch {
-	case strings.Contains(name, "/GoClient/GoServer"):
-		return 0
-	case strings.Contains(name, "/GoClient/WolfSSLServer"):
-		return 1
-	case strings.Contains(name, "/WolfSSLClient/GoServer"):
-		return 2
-	case strings.Contains(name, "/WolfSSLClient/WolfSSLServer"):
-		return 3
-	default:
-		return -1
+	for index, direction := range realUDPDirectionPaths {
+		if strings.Contains(name, "/"+direction) {
+			return index
+		}
 	}
+	return -1
 }
 
 func writeBenchmarkTable(writer io.Writer, items []*benchmark, text reportLanguage) error {
@@ -1067,6 +1357,16 @@ func writeBenchmarkTable(writer io.Writer, items []*benchmark, text reportLangua
 		return err
 	}
 	for _, item := range items {
+		if reason := item.unsupported[text.labelIndex]; reason != "" {
+			if hasThroughput {
+				if _, err := fmt.Fprintf(writer, "| %s | - | %s: %s | - | - | - |\n", markdownText(benchmarkLabel(item.name, text)), text.unsupported, markdownText(reason)); err != nil {
+					return err
+				}
+			} else if _, err := fmt.Fprintf(writer, "| %s | - | %s: %s | - | - |\n", markdownText(benchmarkLabel(item.name, text)), text.unsupported, markdownText(reason)); err != nil {
+				return err
+			}
+			continue
+		}
 		format := "| %s | %d | %s | %s | %s |\n"
 		metrics := []any{markdownText(benchmarkLabel(item.name, text)), item.samples, item.timeMetric(), item.metric("B/op"), item.metric("allocs/op")}
 		if hasThroughput {

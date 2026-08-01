@@ -2,6 +2,7 @@ package main
 
 import (
 	"bytes"
+	"encoding/json"
 	"strings"
 	"testing"
 )
@@ -381,5 +382,144 @@ func TestRealUDPDirection(t *testing.T) {
 		if got := realUDPDirection(name); got != want {
 			t.Errorf("realUDPDirection(%q) = %d, want %d", name, got, want)
 		}
+	}
+}
+
+func TestParseRealUDPJSON(t *testing.T) {
+	const skipped = "BenchmarkHybridKeyExchangeRealUDP/SecP384r1MLKEM1024/GoClient/WolfSSLServer"
+	const result = "BenchmarkHybridKeyExchangeRealUDP/SecP384r1MLKEM1024/GoClient/GoServer-2"
+	var input bytes.Buffer
+	encoder := json.NewEncoder(&input)
+	for _, event := range []goTestEvent{
+		{Action: "output", Test: skipped, Output: "    interop_test.go:1079: wolfSSL server does not complete this DTLS 1.3 hybrid handshake\n"},
+		{Action: "skip", Test: skipped},
+		{Action: "output", Test: result, Output: result + "\t"},
+		{Action: "output", Output: "1 100 ns/op 10 B/op 1 allocs/op\n"},
+	} {
+		if err := encoder.Encode(event); err != nil {
+			t.Fatal(err)
+		}
+	}
+	report, err := parseReport(&input)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !report.realUDPJSON || report.realUDPSkips[skipped] != "wolfSSL server does not complete this DTLS 1.3 hybrid handshake" || report.realUDPSamples[skipped] != 1 {
+		t.Fatalf("structured skip was not preserved: %#v", report)
+	}
+	if len(report.benchmarks) != 1 || report.benchmarks[0].name != result || report.benchmarks[0].samples != 1 {
+		t.Fatalf("structured benchmark result was not preserved: %#v", report.benchmarks)
+	}
+}
+
+func TestValidateRealUDPMatrix(t *testing.T) {
+	if workloads := expectedRealUDPWorkloads(); len(workloads) != 14 {
+		t.Fatalf("real UDP workloads = %d, want 14", len(workloads))
+	}
+	if allowances := realUDPSkipAllowlists[reviewedWolfSSLCommit]; len(allowances) != 4 {
+		t.Fatalf("real UDP skip allowances = %d, want 4", len(allowances))
+	}
+	report := completeRealUDPReport()
+	if err := report.validateRealUDPMatrix(); err != nil {
+		t.Fatal(err)
+	}
+	if len(report.benchmarks) != 14*len(realUDPDirectionPaths) {
+		t.Fatalf("matrix entries = %d, want %d", len(report.benchmarks), 14*len(realUDPDirectionPaths))
+	}
+	var output bytes.Buffer
+	if err := writeReport(&output, report, "", "", "", reportLanguages["zh-CN"], ""); err != nil {
+		t.Fatal(err)
+	}
+	if !strings.Contains(output.String(), "不支持: wolfSSL 服务端无法完成该 DTLS 1.3 hybrid 握手") {
+		t.Fatalf("report does not expose the allowlisted reason:\n%s", output.String())
+	}
+}
+
+func TestValidateRealUDPMatrixRejectsMissingDirection(t *testing.T) {
+	report := completeRealUDPReport()
+	name := "BenchmarkWolfSSLFeatureRealUDP/CertificateAES128GCM/GoClient/GoServer"
+	removeRealUDPResult(report, name)
+	if err := report.validateRealUDPMatrix(); err == nil || !strings.Contains(err.Error(), "produced no benchmark result") {
+		t.Fatalf("missing direction error = %v", err)
+	}
+}
+
+func TestValidateRealUDPMatrixRejectsUnregisteredSkip(t *testing.T) {
+	report := completeRealUDPReport()
+	name := "BenchmarkWolfSSLFeatureRealUDP/CertificateAES128GCM/GoClient/GoServer"
+	removeRealUDPResult(report, name)
+	report.realUDPSkips[name] = "unexpected peer limitation"
+	report.realUDPSamples[name] = realUDPMatrixSamples
+	if err := report.validateRealUDPMatrix(); err == nil || !strings.Contains(err.Error(), "unregistered skip reason") {
+		t.Fatalf("unregistered skip error = %v", err)
+	}
+}
+
+func TestValidateRealUDPMatrixRejectsChangedSkipReason(t *testing.T) {
+	report := completeRealUDPReport()
+	name := "BenchmarkWolfSSLFeatureRealUDP/EarlyData/GoClient/WolfSSLServer"
+	report.realUDPSkips[name] = "different reason"
+	if err := report.validateRealUDPMatrix(); err == nil || !strings.Contains(err.Error(), "skip reason") {
+		t.Fatalf("changed skip error = %v", err)
+	}
+}
+
+func TestValidateRealUDPMatrixRejectsNewWolfSSLCommit(t *testing.T) {
+	report := completeRealUDPReport()
+	report.wolfSSL = "0000000000000000000000000000000000000000 (Linux Release static)"
+	if err := report.validateRealUDPMatrix(); err == nil || !strings.Contains(err.Error(), "no reviewed real UDP skip allowlist") {
+		t.Fatalf("new wolfSSL commit error = %v", err)
+	}
+}
+
+func TestValidateRealUDPMatrixRejectsRecoveredAllowlistedDirection(t *testing.T) {
+	report := completeRealUDPReport()
+	name := "BenchmarkHybridKeyExchangeRealUDP/SecP384r1MLKEM1024/GoClient/WolfSSLServer"
+	delete(report.realUDPSkips, name)
+	delete(report.realUDPSamples, name)
+	report.addBenchmarkForTest(name)
+	if err := report.validateRealUDPMatrix(); err == nil || !strings.Contains(err.Error(), "now produces a result") {
+		t.Fatalf("recovered direction error = %v", err)
+	}
+}
+
+func completeRealUDPReport() *report {
+	report := &report{
+		wolfSSL:        reviewedWolfSSLCommit + " (Linux Release static)",
+		byName:         make(map[string]*benchmark),
+		realUDPJSON:    true,
+		realUDPSkips:   make(map[string]string),
+		realUDPSamples: make(map[string]int),
+	}
+	allowances := realUDPSkipAllowlists[reviewedWolfSSLCommit]
+	for _, workload := range expectedRealUDPWorkloads() {
+		for _, direction := range realUDPDirectionPaths {
+			name := workload + "/" + direction
+			if allowance, ok := allowances[name]; ok {
+				report.realUDPSkips[name] = allowance.output
+				report.realUDPSamples[name] = realUDPSkipSamples
+				continue
+			}
+			report.addBenchmarkForTest(name)
+		}
+	}
+	return report
+}
+
+func (r *report) addBenchmarkForTest(name string) {
+	timing := &metric{values: []float64{100, 100, 100, 100, 100}}
+	item := &benchmark{name: name + "-2", samples: realUDPMatrixSamples, byUnit: map[string]*metric{"ns/op": timing}}
+	r.byName[item.name] = item
+	r.benchmarks = append(r.benchmarks, item)
+}
+
+func removeRealUDPResult(report *report, name string) {
+	for index, item := range report.benchmarks {
+		if realUDPBenchmarkName(item.name) != name {
+			continue
+		}
+		report.benchmarks = append(report.benchmarks[:index], report.benchmarks[index+1:]...)
+		delete(report.byName, item.name)
+		return
 	}
 }
