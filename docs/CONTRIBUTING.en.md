@@ -13,11 +13,16 @@ Thank you for contributing to `go-dtls`. Changes must preserve DTLS 1.3 datagram
 
 ## Required Checks
 
-All Go source must be formatted with `gofmt`. Every commit and pull request must pass lint, test, vet, and race. Linux, macOS, and CI use:
+All Go source must satisfy the golangci-lint v2.12.2 formatter configuration. Every commit and pull request must pass format, module, lint, test, shuffle, checkptr, vet, and race. Linux, macOS, and CI use:
 
 ```sh
+go run github.com/golangci/golangci-lint/v2/cmd/golangci-lint@v2.12.2 fmt --diff
+go mod verify
+go mod tidy -diff
 go run github.com/golangci/golangci-lint/v2/cmd/golangci-lint@v2.12.2 run ./...
 go test ./... -count=1
+go test ./... -shuffle=on -count=1
+go test ./... -gcflags=all=-d=checkptr=2 -count=1
 go vet ./...
 go test -race ./... -count=1
 ```
@@ -28,13 +33,13 @@ Protocol, concurrency, or resource-lifecycle changes must also run repeated test
 go test ./... -count=10 -timeout=10m
 ```
 
-On Windows, run the first three checks and replace the race command above with the repository script:
+On Windows, run every command above except the final race command and replace it with the repository script:
 
 ```powershell
 .\tools\test-race.ps1
 ```
 
-GitHub Actions runs the four required checks independently on every push and pull request. Fix every failure; do not bypass it by weakening assertions, skipping tests, or broadening lint exclusions.
+GitHub Actions runs eight required jobs independently on every push and pull request; the module job runs verify followed by tidy diff. Fix every failure; do not bypass it by weakening assertions, skipping tests, or broadening lint exclusions.
 
 ## Protocol Changes
 

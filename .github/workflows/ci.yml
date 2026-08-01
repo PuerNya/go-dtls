@@ -15,7 +15,7 @@ jobs:
     strategy:
       fail-fast: false
       matrix:
-        check: [lint, test, vet, race]
+        check: [format, module, lint, test, shuffle, checkptr, vet, race]
     steps:
       - uses: actions/checkout@v7
         with:
@@ -30,6 +30,14 @@ jobs:
         with:
           go-version-file: go.mod
           cache: true
+      - name: Format
+        if: matrix.check == 'format'
+        run: go run github.com/golangci/golangci-lint/v2/cmd/golangci-lint@v2.12.2 fmt --diff
+      - name: Module
+        if: matrix.check == 'module'
+        run: |
+          go mod verify
+          go mod tidy -diff
       - name: Lint
         if: matrix.check == 'lint'
         uses: golangci/golangci-lint-action@v9.3.0
@@ -38,6 +46,12 @@ jobs:
       - name: Test
         if: matrix.check == 'test'
         run: go test ./... -count=1
+      - name: Shuffle
+        if: matrix.check == 'shuffle'
+        run: go test ./... -shuffle=on -count=1
+      - name: Checkptr
+        if: matrix.check == 'checkptr'
+        run: go test ./... -gcflags=all=-d=checkptr=2 -count=1
       - name: Vet
         if: matrix.check == 'vet'
         run: go vet ./...

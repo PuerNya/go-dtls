@@ -13,11 +13,16 @@
 
 ## Обязательные проверки
 
-Все исходные файлы Go должны быть отформатированы `gofmt`. Каждый commit и pull request обязан пройти lint, test, vet и race. В Linux, macOS и CI выполняйте:
+Все исходные файлы Go должны соответствовать конфигурации formatter в golangci-lint v2.12.2. Каждый commit и pull request обязан пройти format, module, lint, test, shuffle, checkptr, vet и race. В Linux, macOS и CI выполняйте:
 
 ```sh
+go run github.com/golangci/golangci-lint/v2/cmd/golangci-lint@v2.12.2 fmt --diff
+go mod verify
+go mod tidy -diff
 go run github.com/golangci/golangci-lint/v2/cmd/golangci-lint@v2.12.2 run ./...
 go test ./... -count=1
+go test ./... -shuffle=on -count=1
+go test ./... -gcflags=all=-d=checkptr=2 -count=1
 go vet ./...
 go test -race ./... -count=1
 ```
@@ -28,13 +33,13 @@ go test -race ./... -count=1
 go test ./... -count=10 -timeout=10m
 ```
 
-В Windows выполните первые три проверки, а команду race замените скриптом репозитория:
+В Windows выполните все команды выше, кроме последней команды race, и замените ее скриптом репозитория:
 
 ```powershell
 .\tools\test-race.ps1
 ```
 
-GitHub Actions независимо выполняет четыре обязательные проверки для каждого push и pull request. Любую ошибку необходимо исправить; нельзя обходить ее ослаблением проверок, пропуском тестов или расширением исключений lint.
+GitHub Actions независимо выполняет восемь обязательных job для каждого push и pull request; job module последовательно запускает verify и tidy diff. Любую ошибку необходимо исправить; нельзя обходить ее ослаблением проверок, пропуском тестов или расширением исключений lint.
 
 ## Изменения протокола
 

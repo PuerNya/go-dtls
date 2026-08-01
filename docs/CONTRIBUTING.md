@@ -13,11 +13,16 @@
 
 ## 必需检查
 
-所有 Go 源码必须使用 `gofmt` 格式化。每个 commit 和 pull request 都必须通过 lint、test、vet 和 race；Linux、macOS 及 CI 使用：
+所有 Go 源码必须符合 golangci-lint v2.12.2 formatter 配置。每个 commit 和 pull request 都必须通过 format、module、lint、test、shuffle、checkptr、vet 和 race；Linux、macOS 及 CI 使用：
 
 ```sh
+go run github.com/golangci/golangci-lint/v2/cmd/golangci-lint@v2.12.2 fmt --diff
+go mod verify
+go mod tidy -diff
 go run github.com/golangci/golangci-lint/v2/cmd/golangci-lint@v2.12.2 run ./...
 go test ./... -count=1
+go test ./... -shuffle=on -count=1
+go test ./... -gcflags=all=-d=checkptr=2 -count=1
 go vet ./...
 go test -race ./... -count=1
 ```
@@ -28,13 +33,13 @@ go test -race ./... -count=1
 go test ./... -count=10 -timeout=10m
 ```
 
-Windows 运行前三项检查，并用仓库脚本替代上面的 race 命令：
+Windows 运行除最后一项 race 外的全部命令，并用仓库脚本替代 race 命令：
 
 ```powershell
 .\tools\test-race.ps1
 ```
 
-GitHub Actions 会在每次 push 和 pull request 上分别执行四个必需检查。任何一项失败都必须修复，不得通过放宽断言、跳过测试或扩大 lint 排除范围绕过。
+GitHub Actions 会在每次 push 和 pull request 上分别执行八个必需 job；module job 依次运行 verify 和 tidy diff。任何一项失败都必须修复，不得通过放宽断言、跳过测试或扩大 lint 排除范围绕过。
 
 ## 协议变更
 
