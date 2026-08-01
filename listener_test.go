@@ -111,6 +111,8 @@ func TestListenAcceptRealUDP(t *testing.T) {
 }
 
 func TestListenerBoundsAndReclaimsSessions(t *testing.T) {
+	started := time.Now()
+	const reclaimTimeout = time.Second
 	listener, err := Listen("udp4", "127.0.0.1:0", &Config{MaxPendingConnections: 1, MaxSessionQueueDatagrams: 1})
 	if err != nil {
 		t.Fatal(err)
@@ -151,13 +153,14 @@ func TestListenerBoundsAndReclaimsSessions(t *testing.T) {
 		t.Fatalf("listener retained %d sessions", sessions)
 	}
 	session := accepted.conn.(*packetSession)
-	if queued := len(session.in); queued > 1 {
+	queued := len(session.in)
+	if queued > 1 {
 		t.Fatalf("session queued %d datagrams", queued)
 	}
 	if err = accepted.Close(); err != nil {
 		t.Fatal(err)
 	}
-	deadline := time.Now().Add(time.Second)
+	deadline := time.Now().Add(reclaimTimeout)
 	for time.Now().Before(deadline) {
 		internal.mu.Lock()
 		reclaimed := true
@@ -169,6 +172,8 @@ func TestListenerBoundsAndReclaimsSessions(t *testing.T) {
 		}
 		internal.mu.Unlock()
 		if reclaimed {
+			t.Logf("sessions=%d queued_datagrams=%d reclaimed_sessions=1 reclaim_timeout=%s elapsed=%s",
+				sessions, queued, reclaimTimeout, time.Since(started))
 			return
 		}
 		time.Sleep(time.Millisecond)

@@ -53,6 +53,12 @@ GODEBUG=fuzzseed=123 go test . -run '^$' -fuzz '^FuzzPlainRecordParsers$' -fuzzt
 
 失败 job 会上传 target、Go 版本、随机 seed、完整输出和 Go 最小化后写入 `testdata/fuzz/<target>` 的输入。修复后应使用 artifact 中的输入复现；仍有长期回归价值时将其提交到对应 corpus。不得用覆盖率百分比替代 parser、record、ACK 和 AEAD 差分 fuzz。
 
+## Race 与资源稳定性门禁
+
+pull request 继续由 CI 执行一次全模块 `go test -race ./... -count=1`。独立 Stability workflow 在 `master` push、每天 `19:00 UTC` 和手动触发时执行全模块 `-race -shuffle=on -count=3`，并把连接生命周期、证书压缩和 Listener 回收测试拆成三个独立 job，各运行八轮。
+
+资源测试记录连接/session 数、平均分配、保留堆、goroutine 前后值、清理超时和耗时；判定使用测试内固定上限，不比较 Windows、WSL 或不同 hosted runner 的绝对值。Windows `tools/test-race.ps1` 只构建并运行根包；工具子包由普通 Windows test 与 Linux/WSL 全模块 race 覆盖。
+
 ## 协议变更
 
 协议行为以 RFC 9147、RFC 9846 及适用的相关 RFC 为准：

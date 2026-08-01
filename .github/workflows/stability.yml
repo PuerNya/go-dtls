@@ -1,0 +1,58 @@
+name: Stability
+
+on:
+  push:
+    branches: [master]
+  schedule:
+    # Run after the benchmark and fuzz schedules, on separate hosted runners.
+    - cron: '0 19 * * *'
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: stability-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  race:
+    name: race-shuffle
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    steps:
+      - uses: actions/checkout@v7
+        with:
+          persist-credentials: false
+      - uses: actions/setup-go@v7
+        with:
+          go-version-file: go.mod
+          cache: true
+      - run: go test -race -shuffle=on -count=3 -timeout=20m ./...
+
+  resource:
+    name: resource-${{ matrix.name }}
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - name: connection-lifecycle
+            test: TestConnectionLifecycleResourceStability
+          - name: certificate-compression
+            test: TestCertificateCompressionResourceStability
+          - name: listener-reclamation
+            test: TestListenerBoundsAndReclaimsSessions
+    steps:
+      - uses: actions/checkout@v7
+        with:
+          persist-credentials: false
+      - uses: actions/setup-go@v7
+        with:
+          go-version-file: go.mod
+          cache: true
+      - name: Run resource stability test
+        env:
+          RESOURCE_TEST: ${{ matrix.test }}
+        run: go test . -run "^${RESOURCE_TEST}$" -count=8 -timeout=10m -v

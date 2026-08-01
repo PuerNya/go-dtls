@@ -10,6 +10,8 @@ import (
 func TestConnectionLifecycleResourceStability(t *testing.T) {
 	certificate, roots := testServerCertificate(t)
 	const connections = 32
+	const cleanupTimeout = 2 * time.Second
+	started := time.Now()
 	runtime.GC()
 	baselineGoroutines := runtime.NumGoroutine()
 	var before runtime.MemStats
@@ -44,7 +46,7 @@ func TestConnectionLifecycleResourceStability(t *testing.T) {
 		_ = right.Close()
 	}
 
-	deadline := time.Now().Add(2 * time.Second)
+	deadline := time.Now().Add(cleanupTimeout)
 	for runtime.NumGoroutine() > baselineGoroutines+8 && time.Now().Before(deadline) {
 		runtime.GC()
 		time.Sleep(10 * time.Millisecond)
@@ -62,11 +64,12 @@ func TestConnectionLifecycleResourceStability(t *testing.T) {
 		t.Fatalf("retained heap grew by %d bytes across %d connections", retained, connections)
 	}
 	averageAllocated := (after.TotalAlloc - before.TotalAlloc) / connections
+	retained := int64(after.HeapAlloc) - int64(before.HeapAlloc)
 	if averageAllocated > 512<<10 {
 		t.Fatalf("average allocation is %d bytes per connection", averageAllocated)
 	}
-	t.Logf("connections=%d average_alloc=%dB retained_heap_delta=%dB goroutines=%d->%d",
-		connections, averageAllocated, int64(after.HeapAlloc)-int64(before.HeapAlloc), baselineGoroutines, runtime.NumGoroutine())
+	t.Logf("connections=%d average_alloc=%dB retained_heap_delta=%dB goroutines=%d->%d cleanup_timeout=%s elapsed=%s",
+		connections, averageAllocated, retained, baselineGoroutines, runtime.NumGoroutine(), cleanupTimeout, time.Since(started))
 }
 
 func TestCertificateCompressionResourceStability(t *testing.T) {
@@ -82,11 +85,14 @@ func TestCertificateCompressionResourceStability(t *testing.T) {
 		Certificates: []tls.Certificate{serverCertificate}, ClientAuth: tls.RequireAndVerifyClientCert, ClientCAs: clientRoots,
 		EnableCertificateCompression: true, SessionTicketsDisabled: true, HandshakeTimeout: time.Second,
 	}
+	const connections = 16
+	const cleanupTimeout = 2 * time.Second
+	started := time.Now()
 	runtime.GC()
 	baselineGoroutines := runtime.NumGoroutine()
 	var before runtime.MemStats
 	runtime.ReadMemStats(&before)
-	for range 16 {
+	for range connections {
 		left, right := memoryDatagramPair()
 		client := Client(left, clientConfig)
 		server := Server(right, serverConfig)
@@ -100,7 +106,7 @@ func TestCertificateCompressionResourceStability(t *testing.T) {
 			t.Fatalf("handshake failed: client=%v server=%v", clientErr, serverErr)
 		}
 	}
-	deadline := time.Now().Add(2 * time.Second)
+	deadline := time.Now().Add(cleanupTimeout)
 	for runtime.NumGoroutine() > baselineGoroutines+8 && time.Now().Before(deadline) {
 		runtime.GC()
 		time.Sleep(10 * time.Millisecond)
@@ -114,4 +120,11 @@ func TestCertificateCompressionResourceStability(t *testing.T) {
 	if retained := int64(after.HeapAlloc) - int64(before.HeapAlloc); retained > 8<<20 {
 		t.Fatalf("retained heap grew by %d bytes", retained)
 	}
+	averageAllocated := (after.TotalAlloc - before.TotalAlloc) / connections
+	retained := int64(after.HeapAlloc) - int64(before.HeapAlloc)
+	if averageAllocated > 1<<20 {
+		t.Fatalf("average allocation is %d bytes per compressed mTLS connection", averageAllocated)
+	}
+	t.Logf("connections=%d average_alloc=%dB retained_heap_delta=%dB goroutines=%d->%d cleanup_timeout=%s elapsed=%s",
+		connections, averageAllocated, retained, baselineGoroutines, runtime.NumGoroutine(), cleanupTimeout, time.Since(started))
 }
