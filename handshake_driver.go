@@ -616,6 +616,9 @@ func (c *Conn) clientHandshake() error {
 		keyShares = append(keyShares, keyShareEntry{group: group, data: public})
 	}
 	hello := &clientHello{cipherSuites: append([]uint16(nil), c.config.CipherSuites...), keyShares: keyShares, supportedGroups: c.config.CurvePreferences, signatureSchemes: defaultSignatureSchemes(), serverName: c.config.ServerName, alpn: c.config.NextProtos, postHandshakeAuth: c.config.PostHandshakeAuth, recordSizeLimit: c.config.RecordSizeLimit, hasRecordSizeLimit: true}
+	if err = hello.setCertificateAuthorities(c.config.ServerCertificateAuthorities); err != nil {
+		return err
+	}
 	if c.config.SessionTicketRequest.Enabled {
 		hello.ticketRequest = c.config.SessionTicketRequest
 	}
@@ -1236,14 +1239,12 @@ func (c *Conn) clientHandshake() error {
 	if certificateRequest != nil {
 		certMessage := &certificateMessage{requestContext: certificateRequest.requestContext}
 		var clientCertificate *tls.Certificate
-		if (ech == nil || !ech.rejected) && len(c.config.Certificates) > 0 {
-			candidate := &c.config.Certificates[0]
-			certificateSchemes := certificateRequest.certificateSignatureSchemes
-			if len(certificateSchemes) == 0 {
-				certificateSchemes = certificateRequest.signatureSchemes
+		if ech == nil || !ech.rejected {
+			clientCertificate, err = c.selectClientCertificate(certificateRequest)
+			if err != nil {
+				return err
 			}
-			if validateConfiguredCertificate(candidate, certificateSchemes, false) == nil {
-				clientCertificate = candidate
+			if clientCertificate != nil {
 				for _, der := range clientCertificate.Certificate {
 					certMessage.certificates = append(certMessage.certificates, certificateEntry{data: der})
 				}
@@ -1260,7 +1261,7 @@ func (c *Conn) clientHandshake() error {
 		clientMessages = append(clientMessages, handshakeMessage{typ: certificateType, sequence: nextClientSequence, body: certificateBody})
 		_ = transcript.add(certificateType, nextClientSequence, certificateBody)
 		nextClientSequence++
-		if clientCertificate != nil {
+		if clientCertificate != nil && len(clientCertificate.Certificate) > 0 {
 			signer, ok := clientCertificate.PrivateKey.(crypto.Signer)
 			if !ok {
 				return errors.New("dtls13: client private key does not implement crypto.Signer")
@@ -1393,6 +1394,10 @@ func equalClientHelloAfterHRR(initial, second *clientHello, requestedGroup tls.C
 		equalExtensionMaps(initial.unknownExtensions, second.unknownExtensions)
 }
 
+func equalByteSlices(left, right [][]byte) bool {
+	return slices.EqualFunc(left, right, equalBytes)
+}
+
 func equalKeyShareEntries(left, right []keyShareEntry) bool {
 	return slices.EqualFunc(left, right, func(a, b keyShareEntry) bool {
 		return a.group == b.group && equalBytes(a.data, b.data)
@@ -1495,7 +1500,7 @@ func (c *Conn) serverHandshake() error {
 		if echOuterOffered {
 			echKeys = c.config.EncryptedClientHelloKeys
 			if c.config.GetEncryptedClientHelloKeys != nil {
-				echKeys, parseErr = c.config.GetEncryptedClientHelloKeys(&ClientHelloInfo{ServerName: outerHello.serverName, SupportedProtos: outerHello.alpn, Conn: c})
+				echKeys, parseErr = c.config.GetEncryptedClientHelloKeys(c.clientHelloInfo(outerHello))
 				if parseErr != nil {
 					return parseErr
 				}
@@ -1855,14 +1860,16 @@ func (c *Conn) serverHandshake() error {
 	serverSequence++
 	var clientSignatureSchemes []tls.SignatureScheme
 	var clientCertificateSchemes []tls.SignatureScheme
+	var clientCertificateOIDFilters []CertificateOIDFilter
 	var clientCertificateCompressionAlgorithms *certificateCompressionAlgorithms
 	if !usingPSK && c.config.ClientAuth != tls.NoClientCert {
-		request := &certificateRequestMessage{signatureSchemes: defaultSignatureSchemes()}
+		request := c.newCertificateRequest(nil)
 		if c.config.EnableCertificateCompression {
 			clientCertificateCompressionAlgorithms = &certificateCompressionZlibOffer
 		}
 		clientSignatureSchemes = append([]tls.SignatureScheme(nil), request.signatureSchemes...)
 		clientCertificateSchemes = request.certificateSignatureSchemes
+		clientCertificateOIDFilters = request.oidFilters
 		if len(clientCertificateSchemes) == 0 {
 			clientCertificateSchemes = append([]tls.SignatureScheme(nil), request.signatureSchemes...)
 		}
@@ -1970,6 +1977,9 @@ func (c *Conn) serverHandshake() error {
 					clientCerts, clientChains, parseErr = verifyClientCertificate(c.config, certMessage, clientCertificateSchemes)
 					if parseErr != nil {
 						return parseErr
+					}
+					if parseErr = matchCertificateOIDFilters(clientCerts[0], clientCertificateOIDFilters); parseErr != nil {
+						return alertError(alertUnsupportedCertificate, parseErr)
 					}
 				}
 				if len(certMessage.certificates) > 0 {
@@ -2088,7 +2098,7 @@ func verifyClientCertificate(config *Config, message *certificateMessage, signat
 
 func (c *Conn) serverCertificate(ch *clientHello) (*tls.Certificate, error) {
 	if c.config.GetCertificate != nil {
-		certificate, err := c.config.GetCertificate(&ClientHelloInfo{ServerName: ch.serverName, SupportedProtos: ch.alpn, Conn: c})
+		certificate, err := c.config.GetCertificate(c.clientHelloInfo(ch))
 		if err != nil {
 			return nil, err
 		}
@@ -2099,6 +2109,14 @@ func (c *Conn) serverCertificate(ch *clientHello) (*tls.Certificate, error) {
 	}
 	if len(c.config.Certificates) == 0 {
 		return nil, errors.New("dtls13: server has no certificates")
+	}
+	if len(c.config.Certificates) > 1 {
+		info := c.clientHelloInfo(ch)
+		for i := range c.config.Certificates {
+			if info.SupportsCertificate(&c.config.Certificates[i]) == nil {
+				return &c.config.Certificates[i], nil
+			}
+		}
 	}
 	return &c.config.Certificates[0], nil
 }

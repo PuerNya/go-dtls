@@ -41,9 +41,9 @@ type Config struct {
 	Time func() time.Time
 
 	// Certificates contains certificate chains to present to the peer. A
-	// server uses the first certificate unless GetCertificate is set. A client
-	// considers the first certificate when the server requests client
-	// authentication and sends it when compatible. The leaf certificate must be
+	// server selects the first compatible certificate unless GetCertificate is
+	// set. A client selects the first compatible certificate when the server
+	// requests client authentication. The leaf certificate must be
 	// followed by any intermediates, as in tls.Certificate. SHA-1 and MD5
 	// certificate signatures are rejected. An RSA server leaf must have a
 	// modulus of at least 2048 bits.
@@ -53,6 +53,16 @@ type Config struct {
 	// it takes precedence over Certificates. It is not used by clients. The
 	// callback must be safe for concurrent use when Config is shared.
 	GetCertificate func(*ClientHelloInfo) (*tls.Certificate, error)
+	// GetClientCertificate selects a client certificate after a server's
+	// CertificateRequest has been parsed. If it returns a certificate with an
+	// empty Certificate field, the client sends no certificate. A nil callback
+	// selects the first compatible entry in Certificates. The callback must be
+	// safe for concurrent use when Config is shared.
+	GetClientCertificate func(*CertificateRequestInfo) (*tls.Certificate, error)
+	// ServerCertificateAuthorities optionally carries DER-encoded X.501 names
+	// in the client's certificate_authorities ClientHello extension. It is an
+	// explicit hint for server certificate selection; RootCAs is not sent.
+	ServerCertificateAuthorities [][]byte
 	// RootCAs defines the roots used by a client to verify the server
 	// certificate. If nil, the host's root CA set is used.
 	RootCAs *x509.CertPool
@@ -79,6 +89,11 @@ type Config struct {
 	// client certificate state in its encrypted ticket; the abbreviated PSK
 	// handshake does not request a fresh certificate. It is ignored by clients.
 	ClientAuth tls.ClientAuthType
+	// ClientCertificateOIDFilters are RFC 9846 filters sent in CertificateRequest
+	// messages. Values are DER-encoded certificate-extension values without the
+	// X.509 extension wrapper. Unknown OIDs are retained on the wire and ignored
+	// by clients that do not recognize them.
+	ClientCertificateOIDFilters []CertificateOIDFilter
 	// InsecureSkipVerify disables built-in certificate-chain and hostname
 	// verification. Certificate signatures within the DTLS handshake are still
 	// checked, and the RFC 9325 RSA and SHA-1/MD5 security floors still apply.
@@ -330,6 +345,17 @@ type ClientHelloInfo struct {
 	// SupportedProtos lists the ALPN protocols offered by the client, in client
 	// preference order. The callback must not retain or modify this slice.
 	SupportedProtos []string
+	// AcceptableCAs contains the DER-encoded X.501 names received in the
+	// client's certificate_authorities extension, or nil when no preference was
+	// sent.
+	AcceptableCAs [][]byte
+	// SignatureSchemes and CertificateSignatureSchemes are the client's offered
+	// signature schemes. The latter is used when present for certificate-chain
+	// signatures.
+	SignatureSchemes            []tls.SignatureScheme
+	CertificateSignatureSchemes []tls.SignatureScheme
+	// Version is the negotiated DTLS version.
+	Version uint16
 	// Conn is the server connection processing the ClientHello. Its handshake is
 	// not complete while GetCertificate is running.
 	Conn *Conn
@@ -408,6 +434,16 @@ func (c *Config) normalized() (*Config, error) {
 			return nil, &ConfigError{"CurvePreferences contains a duplicate group"}
 		}
 		seenGroups[group] = true
+	}
+	if len(x.ServerCertificateAuthorities) > 0 {
+		if err := validateCertificateAuthorities(x.ServerCertificateAuthorities); err != nil {
+			return nil, &ConfigError{"ServerCertificateAuthorities is invalid: " + err.Error()}
+		}
+	}
+	if len(x.ClientCertificateOIDFilters) > 0 {
+		if err := validateOIDFilters(x.ClientCertificateOIDFilters); err != nil {
+			return nil, &ConfigError{"ClientCertificateOIDFilters is invalid: " + err.Error()}
+		}
 	}
 	if len(x.ExternalPSKs) > 0 {
 		seenExternalIdentities := make(map[string]bool)
@@ -530,6 +566,8 @@ func cloneConfig(c *Config) *Config {
 	x.NextProtos = append([]string(nil), c.NextProtos...)
 	x.CipherSuites = append([]uint16(nil), c.CipherSuites...)
 	x.CurvePreferences = append([]tls.CurveID(nil), c.CurvePreferences...)
+	x.ServerCertificateAuthorities = cloneByteSlices(c.ServerCertificateAuthorities)
+	x.ClientCertificateOIDFilters = cloneOIDFilters(c.ClientCertificateOIDFilters)
 	x.ExternalPSKs = append([]*ExternalPSK(nil), c.ExternalPSKs...)
 	if c.EncryptedClientHelloConfigList != nil {
 		x.EncryptedClientHelloConfigList = append([]byte{}, c.EncryptedClientHelloConfigList...)

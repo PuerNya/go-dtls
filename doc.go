@@ -66,6 +66,23 @@
 // [Config.GetCertificate], and may configure [Config.ClientAuth] and
 // [Config.ClientCAs] for client authentication.
 //
+// [Config.GetCertificate] receives [ClientHelloInfo], including the client's
+// optional [Config.ServerCertificateAuthorities] hint and offered signature
+// schemes. Without a callback, multiple server certificates are tried in
+// configuration order and the first certificate compatible with SNI, the
+// client's signature schemes, and its CA hint is selected; when no certificate
+// matches, the first configured certificate remains the compatibility fallback.
+//
+// A client can configure multiple certificates and the first chain compatible
+// with the server's [CertificateRequestInfo] is selected. [Config.GetClientCertificate]
+// can make that decision explicitly. The request exposes acceptable CAs,
+// signature schemes, and RFC 9846 [CertificateOIDFilter] values through
+// [CertificateRequestInfo.SupportsCertificate]. Recognized Key Usage and
+// Extended Key Usage filters are enforced; unknown OIDs are ignored as required
+// by RFC 9846. [Config.ClientCAs] populates the server's
+// certificate_authorities hint, while [Config.ClientCertificateOIDFilters]
+// adds oid_filters to initial and post-handshake requests.
+//
 // [Config.InsecureSkipVerify] disables the built-in peer identity check and
 // should not be enabled in production unless [Config.VerifyPeerCertificate]
 // performs an equivalent check. Encryption without authentication does not

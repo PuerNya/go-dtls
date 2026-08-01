@@ -12,10 +12,10 @@ if ($LASTEXITCODE -ne 0) {
 $env:CGO_ENABLED = "1"
 $env:CC = "zig cc"
 $env:CXX = "zig c++"
-$linkerFlags = "-extldflags `"-L$toolsDir -lkernelbase`""
+$env:CGO_LDFLAGS = "-L$toolsDir -lkernelbase"
 
 try {
-    go test -race -c -ldflags $linkerFlags -o $testBinary .
+    go test -race -c -o $testBinary .
     if ($LASTEXITCODE -ne 0) {
         exit $LASTEXITCODE
     }

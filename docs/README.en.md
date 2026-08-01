@@ -229,6 +229,7 @@ Deadlines, socket closure, and underlying UDP errors follow Go's `net` error mod
 | KeyUpdate | `SendKeyUpdate(requestPeer)` | Reliably sent, with the sending epoch switched after ACK; also triggered automatically near AEAD usage limits |
 | CID / path validation | `ConnectionID`, `GetConnectionID`, `SendNewConnectionIDs`, `RequestConnectionIDs`, `UseNextConnectionID` | Supports RFC 9146 CID negotiation and updates and negotiates RFC 9853 RRC by default; Listener rebinds only after validating the new path |
 | Certificate compression | `EnableCertificateCompression` | Explicitly enables RFC 8879 zlib for server certificates and mTLS/PHA client certificates; sends a plain Certificate when compression is not smaller |
+| Dynamic certificate selection | `GetCertificate`, `GetClientCertificate`, `ServerCertificateAuthorities`, `ClientCertificateOIDFilters` | RFC 9846 CA/OID hints and multi-certificate selection on both endpoints; initial mTLS and PHA share the same rules |
 | Encrypted ClientHello | `EncryptedClientHelloConfigList`, `EncryptedClientHelloKeys`, `EncryptedClientHelloGrease` | RFC 9849 Inner/Outer ClientHello, HPKE, HRR, acceptance confirmation, retry configurations, resumption, and 0-RTT |
 | Handshake client authentication | `ClientAuth`, `ClientCAs`, `Certificates` | Uses the client-certificate policies from `crypto/tls` |
 | Post-handshake client authentication | `PostHandshakeAuth`, `RequestClientCertificate` | The client first advertises support, then the server initiates PHA |
@@ -248,9 +249,12 @@ Where TLS 1.3 semantics match, `Config` follows `crypto/tls.Config`. A configura
 
 | Configuration | Default / behavior |
 | --- | --- |
-| `Certificates` / `GetCertificate` | Server certificate; an RSA leaf must be at least 2048 bits, and the complete chain must not use SHA-1/MD5 |
+| `Certificates` / `GetCertificate` | Server certificates; by default the first certificate compatible with SNI, signature algorithms, and the client CA hint is selected; an RSA leaf must be at least 2048 bits, and the complete chain must not use SHA-1/MD5 |
+| `GetClientCertificate` | Optional client-certificate callback; when nil, the first entry in `Certificates` compatible with signature algorithms, CA names, and recognized OID filters is selected |
+| `ServerCertificateAuthorities` | Empty by default; DER-encoded X.501 CA names sent by a client in ClientHello to guide server certificate selection; `RootCAs` is never sent implicitly |
 | `RootCAs` / `ServerName` | Client-side server-certificate verification; `Dial` uses the target hostname when `ServerName` is unset |
 | `ClientCAs` / `ClientAuth` | Server-side client-certificate verification policy |
+| `ClientCertificateOIDFilters` | Empty by default; RFC 9846 OID filters sent by a server in CertificateRequest; Key Usage/EKU participate in client selection and server verification |
 | `VerifyPeerCertificate` | Additional verification after standard certificate processing on a full handshake; like `crypto/tls`, it is not called again on resumption |
 | `InsecureSkipVerify` | `false` by default; production applications should not rely on it to bypass identity verification |
 | `NextProtos` | ALPN protocol list |
@@ -354,6 +358,12 @@ With `EnableCertificateCompression: true`, a client offers zlib in ClientHello s
 
 The implementation uses only Go's standard-library zlib. It sends `CompressedCertificate` only when the complete message is smaller than a plain Certificate and otherwise falls back safely. Handshake fragmentation, ACK, retransmission, HRR, resumption, and `record_size_limit` semantics are unchanged. Both the declared uncompressed length and actual output are bounded by `MaxHandshakeMessage`.
 
+### Dynamic Certificate Selection
+
+When either endpoint configures multiple entries in `Certificates`, the default selector chooses the first certificate compatible with the peer's signature algorithms, certificate-chain algorithms, and CA hints; servers also check SNI. A server sends the subjects from `ClientCAs` in initial and post-handshake CertificateRequest messages. A client may separately set `ServerCertificateAuthorities` to guide server selection in ClientHello; `RootCAs` is not exposed automatically.
+
+Custom server policy uses `GetCertificate` with `ClientHelloInfo.SupportsCertificate`; custom client policy uses `GetClientCertificate` with `CertificateRequestInfo.SupportsCertificate`. Callback slices are valid only for the call and must not be modified or retained. Each `ClientCertificateOIDFilters` entry contains an ASN.1 OID and the DER extension value without the X.509 extension wrapper. Key Usage and Extended Key Usage are recognized; unknown OIDs remain on the wire and are ignored as required by RFC 9846. Initial mTLS and PHA use the same selection rules. A resumed handshake has no CertificateRequest, so it neither reselects a client certificate nor calls the client callback.
+
 ### Fast mTLS Resumption
 
 The client and server use their normal mTLS settings; additionally enable a client session cache and server tickets:
@@ -425,7 +435,7 @@ Normative keywords are interpreted according to BCP 14. `MUST`, `MUST NOT`, `REQ
 | [RFC 9848](https://www.rfc-editor.org/rfc/rfc9848) | Complete/application integration | Accepts the complete ECHConfigList decoded from a DNS `ech` parameter; SVCB/HTTPS lookup and Base64 decoding belong to the application |
 | [RFC 9849](https://www.rfc-editor.org/rfc/rfc9849) | Complete | HPKE, Inner/Outer ClientHello, padding, HRR, acceptance confirmation, retry configurations, authenticated rejection, GREASE, resumption, and 0-RTT |
 | [RFC 9954](https://www.rfc-editor.org/rfc/rfc9954) | Complete | Three standard ECDHE-MLKEM groups, traditional-share fallback, HRR, fragmentation, mTLS resumption, 0-RTT, ECH, and strict error semantics; disabled by default |
-| [RFC 9846](https://www.rfc-editor.org/rfc/rfc9846) | Complete for enabled features | Ignores `user_canceled(90)` and continues waiting for `close_notify` during the handshake, final-ACK wait, and post-handshake processing; local cryptographic failure without a more specific alert sends `general_error(117)`, while a specific protocol alert always takes precedence |
+| [RFC 9846](https://www.rfc-editor.org/rfc/rfc9846) | Complete for enabled features | Implements CA/OID certificate-selection hints and multi-certificate selection on both endpoints; ignores `user_canceled(90)` and continues waiting for `close_notify` during the handshake, final-ACK wait, and post-handshake processing; local cryptographic failure without a more specific alert sends `general_error(117)`, while a specific protocol alert always takes precedence |
 | [RFC 9325](https://www.rfc-editor.org/rfc/rfc9325) | Partial | PFS, AEAD, SNI/ALPN, tickets, 0-RTT, KeyUpdate, and certificate security limits are covered; OCSP stapling is absent, and this module intentionally does not implement the DTLS 1.2 support required by the BCP |
 | [RFC 9525](https://www.rfc-editor.org/rfc/rfc9525) | Partial | Go X.509 and `ServerName` cover DNS-ID/IP-ID; URI-ID, SRV-ID, and application service identities are delegated to caller verification callbacks |
 | [RFC 9853](https://www.rfc-editor.org/rfc/rfc9853) | Complete | Extension 61, protected content type 27, all three messages, unknown types, enhanced/basic state machines, the three-times amplification limit, one-second/3xRTT timer, NAT rebinding, off-path protection, and spare-CID cross-path privacy |
@@ -470,7 +480,7 @@ This table contains all 11 `Normative References` from the RFC Editor XML for RF
 
 | Specification | Relationship to this implementation | Status |
 | --- | --- | --- |
-| [RFC 9846](https://www.rfc-editor.org/rfc/rfc9846) | TLS 1.3 KeyShare, PSK/HRR, NST, AEAD limits, KeyUpdate, alerts, and vector bounds | Complete for enabled features; mTLS resumption preserves authentication state, policy/CA/validity, and total authentication lifetime; see Overall Status for `user_canceled` and `general_error` |
+| [RFC 9846](https://www.rfc-editor.org/rfc/rfc9846) | TLS 1.3 KeyShare, PSK/HRR, NST, AEAD limits, KeyUpdate, certificate selection, alerts, and vector bounds | Complete for enabled features; supports CH/CR `certificate_authorities`, CR `oid_filters`, and multi-certificate selection on both endpoints; mTLS resumption preserves authentication state, policy/CA/validity, and total authentication lifetime; see Overall Status for `user_canceled` and `general_error` |
 | [RFC 8449](https://www.rfc-editor.org/rfc/rfc8449) | TLS/DTLS `record_size_limit` | Clients advertise it by default; servers respond only to an offer. Sending follows the peer limit, receiving follows the local limit, absence restores the protocol maximum, and PMTU remains an independent lower bound |
 | [RFC 8879](https://www.rfc-editor.org/rfc/rfc8879) | TLS/DTLS Certificate Compression | Explicit opt-in standard zlib; CH/CR negotiation, server and client certificates, HRR, mTLS, PHA, fragmentation/retransmission, transcripts, and bounded decompression are complete; plain Certificate is used when smaller |
 | [RFC 9149](https://www.rfc-editor.org/rfc/rfc9149) | TLS/DTLS 1.3 Ticket Requests | Clients can request separate ticket counts for full and resumed connections; servers return a bounded expected count, send multiple NSTs reliably, and preserve one-ticket behavior when absent |

@@ -10,28 +10,29 @@ import (
 )
 
 const (
-	alertLevelWarning          uint8 = 1
-	alertLevelFatal            uint8 = 2
-	alertCloseNotify           uint8 = 0
-	alertUnexpectedMessage     uint8 = 10
-	alertRecordOverflow        uint8 = 22
-	alertHandshakeFailure      uint8 = 40
-	alertBadCertificate        uint8 = 42
-	alertIllegalParameter      uint8 = 47
-	alertUnknownCA             uint8 = 48
-	alertAccessDenied          uint8 = 49
-	alertDecodeError           uint8 = 50
-	alertDecryptError          uint8 = 51
-	alertTooManyCIDsRequest    uint8 = 52
-	alertProtocolVersion       uint8 = 70
-	alertInternalError         uint8 = 80
-	alertUserCanceled          uint8 = 90
-	alertMissingExtension      uint8 = 109
-	alertUnsupportedExtension  uint8 = 110
-	alertCertificateRequired   uint8 = 116
-	alertGeneralError          uint8 = 117
-	alertNoApplicationProtocol uint8 = 120
-	alertECHRequired           uint8 = 121
+	alertLevelWarning           uint8 = 1
+	alertLevelFatal             uint8 = 2
+	alertCloseNotify            uint8 = 0
+	alertUnexpectedMessage      uint8 = 10
+	alertRecordOverflow         uint8 = 22
+	alertHandshakeFailure       uint8 = 40
+	alertBadCertificate         uint8 = 42
+	alertUnsupportedCertificate uint8 = 43
+	alertIllegalParameter       uint8 = 47
+	alertUnknownCA              uint8 = 48
+	alertAccessDenied           uint8 = 49
+	alertDecodeError            uint8 = 50
+	alertDecryptError           uint8 = 51
+	alertTooManyCIDsRequest     uint8 = 52
+	alertProtocolVersion        uint8 = 70
+	alertInternalError          uint8 = 80
+	alertUserCanceled           uint8 = 90
+	alertMissingExtension       uint8 = 109
+	alertUnsupportedExtension   uint8 = 110
+	alertCertificateRequired    uint8 = 116
+	alertGeneralError           uint8 = 117
+	alertNoApplicationProtocol  uint8 = 120
+	alertECHRequired            uint8 = 121
 )
 
 type alertMessage struct{ level, description uint8 }

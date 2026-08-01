@@ -129,9 +129,12 @@ func (s ConnectionState) ExportKeyingMaterial(label string, context []byte, leng
 // reads and writes may run concurrently. Concurrent reads are serialized, as
 // are concurrent writes.
 type Conn struct {
-	conn     net.Conn
-	config   *Config
-	isClient bool
+	conn                     net.Conn
+	config                   *Config
+	isClient                 bool
+	hasCompletedPeerFlight   bool
+	postHandshakeAuthOffered bool
+	hasCompletedClientAuth   bool
 
 	handshakeOnce                    sync.Once
 	handshakeErr                     error
@@ -161,7 +164,6 @@ type Conn struct {
 	finishedMessageSequence          uint16
 	completedPeerFlightStart         uint16
 	completedPeerFlightEnd           uint16
-	hasCompletedPeerFlight           bool
 	resumptionSuite                  *cipherSuite
 	resumptionMasterSecret           []byte
 	sessionTicketRequest             *sessionTicketRequestState
@@ -172,7 +174,6 @@ type Conn struct {
 	pendingHandshakeApplications     []pendingPostAuthApplication
 	pendingHandshakeApplicationBytes int
 	postHandshakeTranscript          *transcriptHash
-	postHandshakeAuthOffered         bool
 	postHandshakeAuthCounter         atomic.Uint64
 	postHandshakeAuthState           *postHandshakeAuthState
 	clientAuthRequestFlight          *flight
@@ -181,7 +182,6 @@ type Conn struct {
 	hasClientAuthRequestSeq          bool
 	completedClientAuthStart         uint16
 	completedClientAuthEnd           uint16
-	hasCompletedClientAuth           bool
 	sendConnectionID                 []byte
 	receiveConnectionID              []byte
 	connectionIDNegotiated           bool

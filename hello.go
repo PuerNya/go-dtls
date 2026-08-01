@@ -20,6 +20,8 @@ const (
 	extPreSharedKey            uint16 = 41
 	extCookie                  uint16 = 44
 	extPSKKeyExchangeModes     uint16 = 45
+	extCertificateAuthorities  uint16 = 47
+	extOIDFilters              uint16 = 48
 	extPostHandshakeAuth       uint16 = 49
 	extSignatureAlgorithmsCert uint16 = 50
 	extConnectionID            uint16 = 54
@@ -32,7 +34,7 @@ func knownExtensionType(typ uint16) bool {
 	case extServerName, extSupportedGroups, extSupportedVersions, extKeyShare,
 		extSignatureAlgorithms, extALPN, extPadding, extCompressCertificate, extRecordSizeLimit, extPreSharedKey, extEarlyData,
 		extCookie, extPSKKeyExchangeModes, extPostHandshakeAuth,
-		extSignatureAlgorithmsCert, extConnectionID, extTicketRequest, extReturnRoutability,
+		extCertificateAuthorities, extOIDFilters, extSignatureAlgorithmsCert, extConnectionID, extTicketRequest, extReturnRoutability,
 		extECH, extECHOuterExtensions:
 		return true
 	default:
@@ -952,7 +954,7 @@ func (h *clientHello) marshal() ([]byte, error) {
 			return nil, err
 		}
 	}
-	var extensionStorage [19]orderedExtension
+	var extensionStorage [20]orderedExtension
 	extensions := extensionStorage[:0]
 	if serverName != nil {
 		extensions = append(extensions, orderedExtension{typ: extServerName, value: serverName})
@@ -963,6 +965,9 @@ func (h *clientHello) marshal() ([]byte, error) {
 	)
 	if certificateSignatures != nil {
 		extensions = append(extensions, orderedExtension{typ: extSignatureAlgorithmsCert, value: certificateSignatures})
+	}
+	if certificateAuthorities := h.unknownExtensions[extCertificateAuthorities]; certificateAuthorities != nil {
+		extensions = append(extensions, orderedExtension{typ: extCertificateAuthorities, value: certificateAuthorities})
 	}
 	if alpn != nil {
 		extensions = append(extensions, orderedExtension{typ: extALPN, value: alpn})
@@ -1054,16 +1059,18 @@ func parseClientHello(b []byte) (*clientHello, error) {
 		h.cipherSuites = append(h.cipherSuites, binary.BigEndian.Uint16(suites))
 		suites = suites[2:]
 	}
-	var extensionStorage [18]orderedExtension
+	var extensionStorage [19]orderedExtension
 	exts, err := parseOrderedExtensionsView(extBytes, extensionStorage[:0])
 	if err != nil {
 		return nil, err
 	}
 	for _, extension := range exts {
 		switch extension.typ {
-		case extServerName, extSupportedGroups, extSignatureAlgorithms, extSignatureAlgorithmsCert, extALPN, extPadding, extCompressCertificate, extRecordSizeLimit,
+		case extServerName, extSupportedGroups, extSignatureAlgorithms, extSignatureAlgorithmsCert, extCertificateAuthorities, extALPN, extPadding, extCompressCertificate, extRecordSizeLimit,
 			extSupportedVersions, extCookie, extKeyShare, extPostHandshakeAuth,
 			extConnectionID, extTicketRequest, extReturnRoutability, extEarlyData, extPSKKeyExchangeModes, extPreSharedKey, extECH:
+		case extOIDFilters:
+			return nil, alertError(alertIllegalParameter, &ProtocolError{"oid_filters is not permitted in ClientHello"})
 		default:
 			if h.unknownExtensions == nil {
 				h.unknownExtensions = make(map[uint16][]byte)
@@ -1106,6 +1113,15 @@ func parseClientHello(b []byte) (*clientHello, error) {
 		if err != nil {
 			return nil, err
 		}
+	}
+	if authorities, ok := orderedExtensionValue(exts, extCertificateAuthorities); ok {
+		if err = forEachCertificateAuthority(authorities, nil); err != nil {
+			return nil, err
+		}
+		if h.unknownExtensions == nil {
+			h.unknownExtensions = make(map[uint16][]byte)
+		}
+		h.unknownExtensions[extCertificateAuthorities] = append([]byte(nil), authorities...)
 	}
 	groupsRaw, hasGroups := orderedExtensionValue(exts, extSupportedGroups)
 	ks, hasKeyShare := orderedExtensionValue(exts, extKeyShare)

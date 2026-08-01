@@ -175,36 +175,44 @@ func validateCertificateSignatureAlgorithms(certificates []*x509.Certificate, of
 }
 
 func validateConfiguredCertificate(certificate *tls.Certificate, offered []tls.SignatureScheme, serverAuth bool) error {
+	_, err := validateConfiguredCertificateChain(certificate, offered, serverAuth)
+	return err
+}
+
+func validateConfiguredCertificateChain(certificate *tls.Certificate, offered []tls.SignatureScheme, serverAuth bool) ([]*x509.Certificate, error) {
 	if certificate == nil || len(certificate.Certificate) == 0 {
-		return errors.New("dtls13: configured certificate chain is empty")
+		return nil, errors.New("dtls13: configured certificate chain is empty")
 	}
 	parsed := make([]*x509.Certificate, len(certificate.Certificate))
 	for i, der := range certificate.Certificate {
-		cert, err := x509.ParseCertificate(der)
-		if err != nil {
-			return fmt.Errorf("dtls13: parse configured certificate %d: %w", i, err)
+		if i == 0 && certificate.Leaf != nil && bytes.Equal(certificate.Leaf.Raw, der) {
+			parsed[i] = certificate.Leaf
+			continue
 		}
-		parsed[i] = cert
+		var err error
+		parsed[i], err = x509.ParseCertificate(der)
+		if err != nil {
+			return nil, fmt.Errorf("dtls13: parse configured certificate %d: %w", i, err)
+		}
 	}
 	if err := validateCertificateSecurityPolicy(parsed, serverAuth); err != nil {
-		return err
+		return nil, err
 	}
 	for _, extension := range parsed[0].Extensions {
 		if extension.Id.Equal(oidExtensionKeyUsage) && parsed[0].KeyUsage&x509.KeyUsageDigitalSignature == 0 {
-			return errors.New("dtls13: configured certificate does not permit digital signatures")
+			return nil, errors.New("dtls13: configured certificate does not permit digital signatures")
 		}
 	}
-	signer, ok := certificate.PrivateKey.(interface{ Public() crypto.PublicKey })
+	signer, ok := certificate.PrivateKey.(crypto.Signer)
 	if !ok {
-		return errors.New("dtls13: configured certificate private key is not a signer")
+		return nil, errors.New("dtls13: configured certificate private key is not a signer")
 	}
-	certificatePublic, err := x509.MarshalPKIXPublicKey(parsed[0].PublicKey)
-	if err != nil {
-		return err
+	certificatePublic, ok := parsed[0].PublicKey.(interface{ Equal(crypto.PublicKey) bool })
+	if !ok || !certificatePublic.Equal(signer.Public()) {
+		return nil, errors.New("dtls13: configured certificate and private key do not match")
 	}
-	signerPublic, err := x509.MarshalPKIXPublicKey(signer.Public())
-	if err != nil || !bytes.Equal(certificatePublic, signerPublic) {
-		return errors.New("dtls13: configured certificate and private key do not match")
+	if err := validateCertificateSignatureAlgorithms(parsed, offered); err != nil {
+		return nil, err
 	}
-	return validateCertificateSignatureAlgorithms(parsed, offered)
+	return parsed, nil
 }

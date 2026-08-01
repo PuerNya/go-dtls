@@ -275,6 +275,8 @@ func TestBenchmarkLabel(t *testing.T) {
 		{"en", "BenchmarkConnectionHandshakeLifecycle-2", "Certificate-authenticated full handshake / AES-128-GCM"},
 		{"en", "BenchmarkSessionTicketRequestHandshakeLifecycle-2", "Full handshake + 4 acknowledged session tickets"},
 		{"en", "BenchmarkMutualTLSHandshakeLifecycle/Resumed-2", "mTLS session resumption handshake"},
+		{"zh-CN", "BenchmarkCertificateSelectionHandshakeLifecycle/InitialMutualTLS-2", "按 CA 与 OID filters 选择多证书的 mTLS 握手"},
+		{"ru", "BenchmarkCertificateSelectionHandshakeLifecycle/PostHandshakeAuthentication-2", "Выбор сертификата для аутентификации после рукопожатия"},
 		{"en", "BenchmarkHybridKeyExchangeRealUDP/X25519MLKEM768/WolfSSLClient/GoServer-2", "Post-quantum hybrid key exchange / X25519MLKEM768"},
 		{"en", "BenchmarkWolfSSLFeatureRealUDP/MutualTLSSessionResumption/GoClient/WolfSSLServer-2", "mTLS session resumption handshake"},
 		{"zh-CN", "BenchmarkCertificateCompressionHandshakeLifecycle/MutualTLS/Zlib-2", "zlib mTLS 证书压缩握手"},
@@ -343,6 +345,7 @@ func TestBenchmarkSection(t *testing.T) {
 		want int
 	}{
 		{"BenchmarkConnectionHandshakeLifecycle", 0},
+		{"BenchmarkCertificateSelectionHandshakeLifecycle/InitialMutualTLS", 0},
 		{"BenchmarkWolfSSLFeatureRealUDP/KeyUpdate/GoClient/GoServer", 1},
 		{"BenchmarkProtectedRecordSeal", 2},
 		{"BenchmarkKeyScheduleDerivation", 3},
@@ -365,6 +368,8 @@ func TestBenchmarkDisplayOrder(t *testing.T) {
 		{"BenchmarkConnectionHandshakeLifecycle-2", 10},
 		{"BenchmarkSessionTicketRequestHandshakeLifecycle-2", 35},
 		{"BenchmarkMutualTLSHandshakeLifecycle/Resumed-2", 30},
+		{"BenchmarkCertificateSelectionHandshakeLifecycle/InitialMutualTLS-2", 32},
+		{"BenchmarkCertificateSelectionHandshakeLifecycle/PostHandshakeAuthentication-2", 33},
 		{"BenchmarkCertificateCompressionHandshakeLifecycle/MutualTLS/Zlib-2", 80},
 		{"BenchmarkWolfSSLFeatureRealUDP/CertificateAES128GCM/GoClient/WolfSSLServer-2", 10},
 		{"BenchmarkWolfSSLFeatureRealUDP/EarlyData/WolfSSLClient/GoServer-2", 110},

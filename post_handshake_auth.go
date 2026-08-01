@@ -25,6 +25,7 @@ type postHandshakeAuthState struct {
 	hasStartSequence                 bool
 	signatureSchemes                 []tls.SignatureScheme
 	certificateSchemes               []tls.SignatureScheme
+	oidFilters                       []CertificateOIDFilter
 	certificateCompressionAlgorithms *certificateCompressionAlgorithms
 	stage                            uint8
 	responseEpoch                    uint64
@@ -90,7 +91,7 @@ func (c *Conn) RequestClientCertificate(ctx context.Context) error {
 	if err != nil {
 		return err
 	}
-	request := &certificateRequestMessage{requestContext: requestContext, signatureSchemes: defaultSignatureSchemes()}
+	request := c.newCertificateRequest(requestContext)
 	var certificateCompressionAlgorithms *certificateCompressionAlgorithms
 	if c.config.EnableCertificateCompression {
 		certificateCompressionAlgorithms = &certificateCompressionZlibOffer
@@ -140,6 +141,7 @@ func (c *Conn) RequestClientCertificate(ctx context.Context) error {
 		signatureSchemes: append([]tls.SignatureScheme(nil), request.signatureSchemes...),
 	}
 	state.certificateSchemes = append([]tls.SignatureScheme(nil), request.certificateSignatureSchemes...)
+	state.oidFilters = cloneOIDFilters(request.oidFilters)
 	if len(state.certificateSchemes) == 0 {
 		state.certificateSchemes = append([]tls.SignatureScheme(nil), request.signatureSchemes...)
 	}
@@ -183,18 +185,13 @@ func (c *Conn) processPostHandshakeCertificateRequest(sequence uint16, body []by
 	}
 
 	certificate := &certificateMessage{requestContext: append([]byte(nil), request.requestContext...)}
-	var local *tls.Certificate
-	if len(c.config.Certificates) > 0 {
-		candidate := &c.config.Certificates[0]
-		certificateSchemes := request.certificateSignatureSchemes
-		if len(certificateSchemes) == 0 {
-			certificateSchemes = request.signatureSchemes
-		}
-		if validateConfiguredCertificate(candidate, certificateSchemes, false) == nil {
-			local = candidate
-			for _, der := range local.Certificate {
-				certificate.certificates = append(certificate.certificates, certificateEntry{data: der})
-			}
+	local, err := c.selectClientCertificate(request)
+	if err != nil {
+		return err
+	}
+	if local != nil {
+		for _, der := range local.Certificate {
+			certificate.certificates = append(certificate.certificates, certificateEntry{data: der})
 		}
 	}
 	certificateBody, err := certificate.marshal()
@@ -340,6 +337,9 @@ func (c *Conn) processPostHandshakeAuthMessageLocked(state *postHandshakeAuthSta
 			state.peerCertificates, state.verifiedChains, err = verifyClientCertificate(c.config, certificate, state.certificateSchemes)
 			if err != nil {
 				return err
+			}
+			if err = matchCertificateOIDFilters(state.peerCertificates[0], state.oidFilters); err != nil {
+				return alertError(alertUnsupportedCertificate, err)
 			}
 			state.stage = postAuthExpectCertificateVerify
 		} else {

@@ -229,6 +229,7 @@ if _, err := conn.WriteDatagram(payload); errors.Is(err, dtls13.ErrDatagramTooLa
 | KeyUpdate | `SendKeyUpdate(requestPeer)` | Надежно отправляется, эпоха отправки переключается после ACK; также запускается автоматически при приближении к пределу использования AEAD |
 | CID / проверка пути | `ConnectionID`, `GetConnectionID`, `SendNewConnectionIDs`, `RequestConnectionIDs`, `UseNextConnectionID` | Поддерживает согласование и обновление CID по RFC 9146 и по умолчанию согласует RRC по RFC 9853; Listener меняет привязку только после проверки нового пути |
 | Сжатие сертификатов | `EnableCertificateCompression` | Явно включает zlib по RFC 8879 для сертификатов сервера и клиентских сертификатов mTLS/PHA; если сжатое сообщение не меньше, отправляется обычный Certificate |
+| Динамический выбор сертификата | `GetCertificate`, `GetClientCertificate`, `ServerCertificateAuthorities`, `ClientCertificateOIDFilters` | Подсказки УЦ/OID по RFC 9846 и выбор из нескольких сертификатов на обеих сторонах; начальный mTLS и PHA используют одинаковые правила |
 | Encrypted ClientHello | `EncryptedClientHelloConfigList`, `EncryptedClientHelloKeys`, `EncryptedClientHelloGrease` | Inner/Outer ClientHello, HPKE, HRR, подтверждение принятия, retry-конфигурации, возобновление и 0-RTT по RFC 9849 |
 | Аутентификация клиента в рукопожатии | `ClientAuth`, `ClientCAs`, `Certificates` | Использует политики клиентских сертификатов из `crypto/tls` |
 | Аутентификация клиента после рукопожатия | `PostHandshakeAuth`, `RequestClientCertificate` | Сначала клиент объявляет поддержку, затем сервер инициирует PHA |
@@ -248,9 +249,12 @@ if _, err := conn.WriteDatagram(payload); errors.Is(err, dtls13.ErrDatagramTooLa
 
 | Параметр | Значение по умолчанию / поведение |
 | --- | --- |
-| `Certificates` / `GetCertificate` | Сертификат сервера; конечный RSA-ключ должен быть не короче 2048 бит, а вся цепочка не должна использовать SHA-1/MD5 |
+| `Certificates` / `GetCertificate` | Сертификаты сервера; по умолчанию выбирается первый сертификат, совместимый с SNI, алгоритмами подписи и подсказкой УЦ клиента; конечный RSA-ключ должен быть не короче 2048 бит, а вся цепочка не должна использовать SHA-1/MD5 |
+| `GetClientCertificate` | Необязательный callback выбора клиентского сертификата; при `nil` выбирается первая запись `Certificates`, совместимая с алгоритмами подписи, именами УЦ и распознанными фильтрами OID |
+| `ServerCertificateAuthorities` | По умолчанию пусто; DER-кодированные имена X.501 УЦ, отправляемые клиентом в ClientHello для выбора сертификата сервера; `RootCAs` автоматически не раскрывается |
 | `RootCAs` / `ServerName` | Проверка сертификата сервера на клиенте; если `ServerName` не задан, `Dial` использует имя целевого узла |
 | `ClientCAs` / `ClientAuth` | Политика проверки клиентского сертификата на сервере |
+| `ClientCertificateOIDFilters` | По умолчанию пусто; фильтры OID RFC 9846, отправляемые сервером в CertificateRequest; Key Usage/EKU участвуют в выборе клиентом и проверке сервером |
 | `VerifyPeerCertificate` | Дополнительная проверка после стандартной обработки сертификатов полного рукопожатия; как и в `crypto/tls`, при возобновлении повторно не вызывается |
 | `InsecureSkipVerify` | По умолчанию `false`; производственные приложения не должны полагаться на него для обхода проверки идентичности |
 | `NextProtos` | Список протоколов ALPN |
@@ -354,6 +358,12 @@ Identity и context importer передаются открытым тексто�
 
 Реализация использует только zlib из стандартной библиотеки Go. `CompressedCertificate` отправляется лишь тогда, когда полное сообщение меньше обычного Certificate; иначе выполняется безопасный откат. Семантика фрагментации рукопожатия, ACK, повторной передачи, HRR, возобновления и `record_size_limit` не меняется. Заявленная несжатая длина и фактический выход ограничены `MaxHandshakeMessage`.
 
+### Динамический выбор сертификата
+
+Если любая сторона настроила несколько записей в `Certificates`, стандартный выбор берет первый сертификат, совместимый с алгоритмами подписи узла, алгоритмами цепочки и подсказками УЦ; сервер также проверяет SNI. Сервер отправляет subjects из `ClientCAs` в начальном и post-handshake CertificateRequest. Клиент может отдельно задать `ServerCertificateAuthorities` для подсказки серверу в ClientHello; `RootCAs` автоматически не передается.
+
+Пользовательская политика сервера использует `GetCertificate` и `ClientHelloInfo.SupportsCertificate`, политика клиента — `GetClientCertificate` и `CertificateRequestInfo.SupportsCertificate`. Срезы callback действительны только во время вызова: их нельзя изменять или сохранять. Элемент `ClientCertificateOIDFilters` содержит ASN.1 OID и DER-значение расширения без оболочки X.509 extension. Распознаются Key Usage и Extended Key Usage; неизвестные OID остаются в wire и игнорируются согласно RFC 9846. Начальный mTLS и PHA используют одинаковые правила. В возобновленном рукопожатии CertificateRequest отсутствует, поэтому клиентский сертификат не выбирается повторно и callback клиента не вызывается.
+
 ### Быстрое возобновление mTLS
 
 Клиент и сервер используют обычные настройки mTLS; дополнительно включите кэш сессий клиента и ticket сервера:
@@ -425,7 +435,7 @@ serverConfig.MaxSessionTickets = 4
 | [RFC 9848](https://www.rfc-editor.org/rfc/rfc9848) | Реализовано/интеграция приложения | Принимается полный ECHConfigList, декодированный из DNS-параметра `ech`; запрос SVCB/HTTPS и декодирование Base64 выполняет приложение |
 | [RFC 9849](https://www.rfc-editor.org/rfc/rfc9849) | Реализовано | Реализованы HPKE, Inner/Outer ClientHello, padding, HRR, подтверждение принятия, retry-конфигурации, аутентифицированное отклонение, GREASE, возобновление и 0-RTT |
 | [RFC 9954](https://www.rfc-editor.org/rfc/rfc9954) | Реализовано | Три стандартные группы ECDHE-MLKEM, fallback на традиционный share, HRR, фрагментация, возобновление mTLS, 0-RTT, ECH и строгая семантика ошибок; по умолчанию отключено |
-| [RFC 9846](https://www.rfc-editor.org/rfc/rfc9846) | Реализовано для включенных возможностей | `user_canceled(90)` игнорируется с продолжением ожидания `close_notify` во время рукопожатия, ожидания финального ACK и post-handshake; локальная криптографическая ошибка без более точного предупреждения отправляет `general_error(117)`, а конкретное предупреждение протокола всегда имеет приоритет |
+| [RFC 9846](https://www.rfc-editor.org/rfc/rfc9846) | Реализовано для включенных возможностей | Реализованы подсказки УЦ/OID и выбор из нескольких сертификатов на обеих сторонах; `user_canceled(90)` игнорируется с продолжением ожидания `close_notify` во время рукопожатия, ожидания финального ACK и post-handshake; локальная криптографическая ошибка без более точного предупреждения отправляет `general_error(117)`, а конкретное предупреждение протокола всегда имеет приоритет |
 | [RFC 9325](https://www.rfc-editor.org/rfc/rfc9325) | Частично | Покрыты PFS, AEAD, SNI/ALPN, tickets, 0-RTT, KeyUpdate и ограничения сертификатов; OCSP stapling отсутствует, а модуль намеренно не реализует поддержку DTLS 1.2, требуемую этим BCP |
 | [RFC 9525](https://www.rfc-editor.org/rfc/rfc9525) | Частично | Go X.509 и `ServerName` покрывают DNS-ID/IP-ID; URI-ID, SRV-ID и прикладные service identity делегированы callback-функциям проверки вызывающего кода |
 | [RFC 9853](https://www.rfc-editor.org/rfc/rfc9853) | Реализовано | Расширение 61, защищенный content type 27, все три сообщения, неизвестные типы, enhanced/basic state machine, трехкратное ограничение усиления, таймер одна секунда/3xRTT, NAT rebinding, защита от off-path атак и межпутевая приватность с резервным CID |
@@ -470,7 +480,7 @@ serverConfig.MaxSessionTickets = 4
 
 | Спецификация | Связь с реализацией | Статус |
 | --- | --- | --- |
-| [RFC 9846](https://www.rfc-editor.org/rfc/rfc9846) | KeyShare, PSK/HRR, NST, пределы AEAD, KeyUpdate, предупреждения и границы векторов TLS 1.3 | Реализовано для включенных возможностей; возобновление mTLS сохраняет состояние аутентификации, политику/CA/срок действия и общий срок аутентификации; семантика `user_canceled` и `general_error` описана в общем статусе |
+| [RFC 9846](https://www.rfc-editor.org/rfc/rfc9846) | KeyShare, PSK/HRR, NST, пределы AEAD, KeyUpdate, выбор сертификата, предупреждения и границы векторов TLS 1.3 | Реализовано для включенных возможностей; поддерживаются CH/CR `certificate_authorities`, CR `oid_filters` и выбор из нескольких сертификатов на обеих сторонах; возобновление mTLS сохраняет состояние аутентификации, политику/CA/срок действия и общий срок аутентификации; семантика `user_canceled` и `general_error` описана в общем статусе |
 | [RFC 8449](https://www.rfc-editor.org/rfc/rfc8449) | TLS/DTLS `record_size_limit` | Клиент объявляет расширение по умолчанию; сервер отвечает только на предложение. Отправка следует ограничению узла, прием — локальному ограничению, отсутствие расширения восстанавливает максимум протокола, а PMTU остается независимой нижней границей |
 | [RFC 8879](https://www.rfc-editor.org/rfc/rfc8879) | Сжатие сертификатов TLS/DTLS | Явно включаемый стандартный zlib; реализованы согласование CH/CR, сертификаты сервера и клиента, HRR, mTLS, PHA, фрагментация/повторная передача, transcript и ограниченная распаковка; если сжатие не дает выигрыша, используется обычный Certificate |
 | [RFC 9149](https://www.rfc-editor.org/rfc/rfc9149) | Запросы tickets TLS/DTLS 1.3 | Клиент отдельно запрашивает число tickets для полного и возобновленного соединения; сервер возвращает ограниченный expected count, надежно отправляет несколько NST и сохраняет один ticket при отсутствии расширения |

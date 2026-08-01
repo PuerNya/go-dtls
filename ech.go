@@ -541,6 +541,7 @@ func makeECHOuter(inner *clientHello, config *echConfig, random io.Reader) (*cli
 	outer := cloneClientHello(inner)
 	outer.serverName = config.publicName
 	outer.alpn = nil
+	_ = outer.setCertificateAuthorities(nil)
 	if _, err := io.ReadFull(random, outer.random[:]); err != nil {
 		return nil, err
 	}

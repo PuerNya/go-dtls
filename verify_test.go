@@ -238,6 +238,15 @@ func TestSignatureAlgorithmsCertIsApplied(t *testing.T) {
 	if err = validateConfiguredCertificate(configured, []tls.SignatureScheme{tls.Ed25519}, true); err != nil {
 		t.Fatal(err)
 	}
+	_, wrongKey, err := ed25519.GenerateKey(rand.Reader)
+	if err != nil {
+		t.Fatal(err)
+	}
+	configured.PrivateKey = wrongKey
+	if err = validateConfiguredCertificate(configured, []tls.SignatureScheme{tls.Ed25519}, true); err == nil {
+		t.Fatal("accepted a certificate with a mismatched private key")
+	}
+	configured.PrivateKey = leafKey
 	if err = validateConfiguredCertificate(configured, []tls.SignatureScheme{tls.ECDSAWithP256AndSHA256}, true); err == nil {
 		t.Fatal("accepted a certificate chain signature excluded by signature_algorithms_cert")
 	}

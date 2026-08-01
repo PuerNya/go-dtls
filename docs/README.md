@@ -234,6 +234,7 @@ deadline、socket 关闭和底层 UDP 错误沿 Go `net` 错误模型返回；�
 | KeyUpdate | `SendKeyUpdate(requestPeer)` | 可靠发送并在 ACK 后切换发送 epoch；接近 AEAD 使用上限时也会自动触发 |
 | CID / 路径验证 | `ConnectionID`、`GetConnectionID`、`SendNewConnectionIDs`、`RequestConnectionIDs`、`UseNextConnectionID` | 支持 RFC 9146 CID 协商和更新，并默认协商 RFC 9853 RRC；Listener 只在新路径验证完成后 rebind |
 | 证书压缩 | `EnableCertificateCompression` | 显式启用 RFC 8879 zlib；支持服务端证书以及 mTLS/PHA 客户端证书，压缩后不更小时自动发送普通 Certificate |
+| 动态证书选择 | `GetCertificate`、`GetClientCertificate`、`ServerCertificateAuthorities`、`ClientCertificateOIDFilters` | RFC 9846 CA/OID 提示和双端多证书选择；初始 mTLS 与 PHA 使用相同规则 |
 | Encrypted ClientHello | `EncryptedClientHelloConfigList`、`EncryptedClientHelloKeys`、`EncryptedClientHelloGrease` | RFC 9849 Inner/Outer ClientHello、HPKE、HRR、accept confirmation、retry configs、恢复和 0-RTT |
 | 握手内客户端认证 | `ClientAuth`、`ClientCAs`、`Certificates` | 使用 `crypto/tls` 的客户端证书策略 |
 | 握手后客户端认证 | `PostHandshakeAuth`、`RequestClientCertificate` | 客户端先声明支持，服务端再发起 PHA |
@@ -253,9 +254,12 @@ deadline、socket 关闭和底层 UDP 错误沿 Go `net` 错误模型返回；�
 
 | 配置 | 默认值 / 行为 |
 | --- | --- |
-| `Certificates` / `GetCertificate` | 服务端证书；RSA leaf 必须至少 2048 位，整条证书链不得使用 SHA-1/MD5 |
+| `Certificates` / `GetCertificate` | 服务端证书；默认按 SNI、签名算法和客户端 CA 提示选择首张兼容证书；RSA leaf 必须至少 2048 位，整条证书链不得使用 SHA-1/MD5 |
+| `GetClientCertificate` | 可选客户端证书 callback；未设置时按签名算法、CA 和已识别 OID filters 从 `Certificates` 选择首张兼容证书 |
+| `ServerCertificateAuthorities` | 默认空；客户端在 ClientHello 中发送 DER X.501 CA 名称，提示服务端选择证书；不会自动泄露 `RootCAs` |
 | `RootCAs` / `ServerName` | 客户端服务端证书验证；`Dial` 未设置 `ServerName` 时使用目标主机名 |
 | `ClientCAs` / `ClientAuth` | 服务端客户端证书验证策略 |
+| `ClientCertificateOIDFilters` | 默认空；服务端在 CertificateRequest 中发送 RFC 9846 OID filters；Key Usage/EKU 会参与客户端选择和服务端验证 |
 | `VerifyPeerCertificate` | 在完整握手的标准证书处理后执行附加验证；与 `crypto/tls` 一样，恢复连接不会再次调用 |
 | `InsecureSkipVerify` | 默认 `false`；生产环境不应依赖它跳过身份验证 |
 | `NextProtos` | ALPN 协议列表 |
@@ -359,6 +363,12 @@ identity 和 importer context 都以明文出现在 ClientHello 中，重复使�
 
 实现只使用 Go 标准库 zlib。只有完整 `CompressedCertificate` 比普通 Certificate 更小时才采用压缩，否则安全回退普通消息。握手分片、ACK、重传、HRR、恢复和 `record_size_limit` 语义不变；声明的未压缩长度与实际解压输出都受 `MaxHandshakeMessage` 限制。
 
+### 动态证书选择
+
+客户端或服务端在 `Certificates` 中配置多张证书时，库默认选择第一张满足对端签名算法、证书链算法和 CA 提示的证书；服务端还检查 SNI。服务端的 `ClientCAs` 会写入初始及握手后 CertificateRequest，客户端可用 `ServerCertificateAuthorities` 在 ClientHello 中单独提供服务端证书 CA 提示，`RootCAs` 不会自动发送。
+
+需要自定义策略时，服务端使用 `GetCertificate` 和 `ClientHelloInfo.SupportsCertificate`，客户端使用 `GetClientCertificate` 和 `CertificateRequestInfo.SupportsCertificate`。callback 收到的 slice 只在调用期间有效，不得修改或保留。`ClientCertificateOIDFilters` 的 OID 和值分别是 ASN.1 OID 与不含 X.509 extension wrapper 的 DER extension value；当前识别 Key Usage 和 Extended Key Usage，未知 OID 按 RFC 9846 保留在 wire 上并忽略。初始 mTLS 和 PHA 共用这些规则；恢复握手没有 CertificateRequest，因此不会重新选择或调用客户端 callback。
+
 ### mTLS 快速恢复
 
 客户端和服务端沿用普通 mTLS 配置，只需同时启用客户端 session cache 和服务端 ticket：
@@ -430,7 +440,7 @@ serverConfig.MaxSessionTickets = 4
 | [RFC 9848](https://www.rfc-editor.org/rfc/rfc9848) | 完成/应用集成 | 接收 DNS `ech` 参数解码后的完整 ECHConfigList；SVCB/HTTPS 查询和 Base64 解码由应用承担 |
 | [RFC 9849](https://www.rfc-editor.org/rfc/rfc9849) | 完成 | HPKE、Inner/Outer ClientHello、padding、HRR、accept confirmation、retry configs、认证拒绝、GREASE、恢复和 0-RTT 完成 |
 | [RFC 9954](https://www.rfc-editor.org/rfc/rfc9954) | 完成 | 三个标准 ECDHE-MLKEM 组、传统 share fallback、HRR、分片、mTLS 恢复、0-RTT、ECH 和严格错误语义完成；默认不启用 |
-| [RFC 9846](https://www.rfc-editor.org/rfc/rfc9846) | 完成（已启用范围） | 握手内、final ACK 等待和握手后均忽略 `user_canceled(90)` 并继续等 `close_notify`；没有更具体 alert 的本地加密失败发送 `general_error(117)`，具体协议 alert 始终优先 |
+| [RFC 9846](https://www.rfc-editor.org/rfc/rfc9846) | 完成（已启用范围） | 完成 CA/OID 证书选择提示和双端多证书选择；握手内、final ACK 等待和握手后均忽略 `user_canceled(90)` 并继续等 `close_notify`；没有更具体 alert 的本地加密失败发送 `general_error(117)`，具体协议 alert 始终优先 |
 | [RFC 9325](https://www.rfc-editor.org/rfc/rfc9325) | 部分实现 | PFS、AEAD、SNI/ALPN、ticket、0-RTT、KeyUpdate 和证书安全下限已覆盖；缺少 OCSP stapling，且本模块有意不实现该 BCP 要求的 DTLS 1.2 |
 | [RFC 9525](https://www.rfc-editor.org/rfc/rfc9525) | 部分实现 | Go X.509 与 `ServerName` 覆盖 DNS-ID/IP-ID；URI-ID、SRV-ID 和应用 service identity 由调用方验证回调承担 |
 | [RFC 9853](https://www.rfc-editor.org/rfc/rfc9853) | 完成 | 扩展 61、受保护 content type 27、三类消息、unknown type、enhanced/basic 状态机、3 倍放大限制、1 秒/3xRTT timer、NAT rebind、off-path 防护和 spare-CID 跨路径隐私完成 |
@@ -475,7 +485,7 @@ serverConfig.MaxSessionTickets = 4
 
 | 规范 | 与本实现的关系 | 状态 |
 | --- | --- | --- |
-| [RFC 9846](https://www.rfc-editor.org/rfc/rfc9846) | TLS 1.3 的 KeyShare、PSK/HRR、NST、AEAD limit、KeyUpdate、alert 和 vector 边界 | 已启用范围完成；mTLS 恢复保留认证状态、策略/CA/有效期及总认证寿命；`user_canceled` 和 `general_error` 语义见总体状态 |
+| [RFC 9846](https://www.rfc-editor.org/rfc/rfc9846) | TLS 1.3 的 KeyShare、PSK/HRR、NST、AEAD limit、KeyUpdate、证书选择、alert 和 vector 边界 | 已启用范围完成；支持 CH/CR `certificate_authorities`、CR `oid_filters`、双端多证书选择，mTLS 恢复保留认证状态、策略/CA/有效期及总认证寿命；`user_canceled` 和 `general_error` 语义见总体状态 |
 | [RFC 8449](https://www.rfc-editor.org/rfc/rfc8449) | TLS/DTLS `record_size_limit` | 客户端默认主动提供，服务端仅响应收到的 offer；发送服从 peer limit、接收服从 local limit，未协商时保持协议最大值；PMTU 仍独立取更小约束 |
 | [RFC 8879](https://www.rfc-editor.org/rfc/rfc8879) | TLS/DTLS Certificate Compression | 显式 opt-in 标准 zlib；CH/CR 协商、服务端与客户端证书、HRR、mTLS、PHA、分片/重传、transcript 和有界解压完成；不更小时回退普通 Certificate |
 | [RFC 9149](https://www.rfc-editor.org/rfc/rfc9149) | TLS/DTLS 1.3 Ticket Requests | 客户端可分别请求完整/恢复连接的 ticket 数；服务端以有界 expected count 响应，多个 NST 可靠发送，扩展缺席时保持单 ticket |

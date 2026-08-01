@@ -315,6 +315,16 @@ var benchmarkFeatureLabels = map[string][3]string{
 		"证书认证完整握手 / AES-128-GCM",
 		"Полное рукопожатие с сертификатом / AES-128-GCM",
 	},
+	"CertificateSelectionInitialMutualTLS": {
+		"Multi-certificate mTLS selection by CA and OID filters",
+		"按 CA 与 OID filters 选择多证书的 mTLS 握手",
+		"Выбор сертификата mTLS по УЦ и фильтрам OID",
+	},
+	"CertificateSelectionPostHandshakeAuthentication": {
+		"Multi-certificate post-handshake authentication selection",
+		"握手后认证的多证书选择",
+		"Выбор сертификата для аутентификации после рукопожатия",
+	},
 	"CertificateCompressionMutualTLSPlain": {
 		"Full mTLS handshake / uncompressed certificates",
 		"完整 mTLS 握手 / 证书未压缩",
@@ -491,20 +501,22 @@ var benchmarkPartTranslations = map[string][3]string{
 }
 
 var benchmarkDisplayOrders = map[string]int{
-	"ConnectionHandshakeLifecycle":                                     10,
-	"MutualTLSHandshakeLifecycle/Full":                                 20,
-	"MutualTLSHandshakeLifecycle/Resumed":                              30,
-	"SessionTicketRequestHandshakeLifecycle":                           35,
-	"ExternalPSKHandshakeLifecycle":                                    40,
-	"CertificateCompressionHandshakeLifecycle/ServerCertificate/Plain": 50,
-	"CertificateCompressionHandshakeLifecycle/ServerCertificate/Zlib":  60,
-	"CertificateCompressionHandshakeLifecycle/MutualTLS/Plain":         70,
-	"CertificateCompressionHandshakeLifecycle/MutualTLS/Zlib":          80,
-	"ECHHandshakeLifecycle/Direct":                                     90,
-	"ECHHandshakeLifecycle/HRR":                                        100,
-	"HybridKeyExchangeHandshakeLifecycle/X25519MLKEM768":               110,
-	"HybridKeyExchangeHandshakeLifecycle/SecP256r1MLKEM768":            120,
-	"HybridKeyExchangeHandshakeLifecycle/SecP384r1MLKEM1024":           130,
+	"ConnectionHandshakeLifecycle":                                       10,
+	"MutualTLSHandshakeLifecycle/Full":                                   20,
+	"MutualTLSHandshakeLifecycle/Resumed":                                30,
+	"CertificateSelectionHandshakeLifecycle/InitialMutualTLS":            32,
+	"CertificateSelectionHandshakeLifecycle/PostHandshakeAuthentication": 33,
+	"SessionTicketRequestHandshakeLifecycle":                             35,
+	"ExternalPSKHandshakeLifecycle":                                      40,
+	"CertificateCompressionHandshakeLifecycle/ServerCertificate/Plain":   50,
+	"CertificateCompressionHandshakeLifecycle/ServerCertificate/Zlib":    60,
+	"CertificateCompressionHandshakeLifecycle/MutualTLS/Plain":           70,
+	"CertificateCompressionHandshakeLifecycle/MutualTLS/Zlib":            80,
+	"ECHHandshakeLifecycle/Direct":                                       90,
+	"ECHHandshakeLifecycle/HRR":                                          100,
+	"HybridKeyExchangeHandshakeLifecycle/X25519MLKEM768":                 110,
+	"HybridKeyExchangeHandshakeLifecycle/SecP256r1MLKEM768":              120,
+	"HybridKeyExchangeHandshakeLifecycle/SecP384r1MLKEM1024":             130,
 
 	"WolfSSLFeatureRealUDP/CertificateAES128GCM":        10,
 	"WolfSSLFeatureRealUDP/ApplicationDataRoundTrip":    20,
@@ -1448,6 +1460,10 @@ func benchmarkFeatureLabel(parts []string, language int) (string, bool) {
 	case "CertificateCompressionHandshakeLifecycle":
 		if len(parts) == 3 {
 			key = "CertificateCompression" + parts[1] + parts[2]
+		}
+	case "CertificateSelectionHandshakeLifecycle":
+		if len(parts) == 2 {
+			key = "CertificateSelection" + parts[1]
 		}
 	case "MutualTLSHandshakeLifecycle":
 		if len(parts) == 2 {

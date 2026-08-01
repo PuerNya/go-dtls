@@ -2,8 +2,10 @@ package dtls13
 
 import (
 	"bytes"
+	"context"
 	"crypto/sha256"
 	"crypto/tls"
+	"crypto/x509"
 	"fmt"
 	"runtime"
 	"testing"
@@ -252,6 +254,49 @@ func BenchmarkMutualTLSHandshakeLifecycle(b *testing.B) {
 			}
 		}
 	})
+}
+
+func BenchmarkCertificateSelectionHandshakeLifecycle(b *testing.B) {
+	serverCertificate, roots := testServerCertificate(b)
+	wrongServer := testSelectionCertificate(b, 1000, "wrong-server", "server.test", x509.KeyUsageDigitalSignature, x509.ExtKeyUsageServerAuth)
+	wrongClient := testSelectionCertificate(b, 1001, "wrong-client", "", x509.KeyUsageDigitalSignature, x509.ExtKeyUsageClientAuth)
+	rightClient := testSelectionCertificate(b, 1002, "right-client", "", x509.KeyUsageDigitalSignature|x509.KeyUsageKeyEncipherment, x509.ExtKeyUsageClientAuth, x509.ExtKeyUsageCodeSigning)
+	filters := []CertificateOIDFilter{
+		keyUsageFilter(b, x509.KeyUsageDigitalSignature|x509.KeyUsageKeyEncipherment),
+		extendedKeyUsageFilter(b, oidExtKeyUsageCodeSigning),
+	}
+	serverConfig := &Config{
+		Certificates: []tls.Certificate{wrongServer, serverCertificate}, ClientAuth: tls.RequireAndVerifyClientCert,
+		ClientCAs: certificatePool(rightClient), ClientCertificateOIDFilters: filters,
+		SessionTicketsDisabled: true, HandshakeTimeout: time.Second,
+	}
+	run := func(b *testing.B, postHandshake bool) {
+		clientConfig := &Config{
+			RootCAs: roots, ServerName: "server.test", Certificates: []tls.Certificate{wrongClient, rightClient},
+			ServerCertificateAuthorities: [][]byte{serverCertificate.Leaf.RawSubject},
+			PostHandshakeAuth:            postHandshake, SessionTicketsDisabled: true, HandshakeTimeout: time.Second,
+		}
+		b.ReportAllocs()
+		for b.Loop() {
+			left, right := memoryDatagramPair()
+			client := Client(left, clientConfig)
+			server := Server(right, serverConfig)
+			serverDone := make(chan error, 1)
+			go func() { serverDone <- server.Handshake() }()
+			clientErr := client.Handshake()
+			serverErr := <-serverDone
+			if clientErr == nil && serverErr == nil && postHandshake {
+				serverErr = server.RequestClientCertificate(context.Background())
+			}
+			_ = left.Close()
+			_ = right.Close()
+			if clientErr != nil || serverErr != nil {
+				b.Fatalf("certificate selection handshake failed: client=%v server=%v", clientErr, serverErr)
+			}
+		}
+	}
+	b.Run("InitialMutualTLS", func(b *testing.B) { run(b, false) })
+	b.Run("PostHandshakeAuthentication", func(b *testing.B) { run(b, true) })
 }
 
 func newBenchmarkRecordCipher(b *testing.B, suiteID uint16, secretByte byte, cidBytes int) *recordCipher {
