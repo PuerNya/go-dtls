@@ -4,7 +4,7 @@ on:
   push:
     branches: [master]
   pull_request:
-    types: [opened, reopened, synchronize]
+    types: [opened, reopened, synchronize, labeled, unlabeled]
   workflow_dispatch:
     inputs:
       publish:
@@ -101,6 +101,72 @@ jobs:
             ${{ runner.temp }}/wolfssl
             ${{ runner.temp }}/wolfssl-build
           key: ${{ steps.cache-wolfssl.outputs.cache-primary-key }}
+      - name: Run paired PR performance gate
+        if: github.event_name == 'pull_request'
+        env:
+          BASE_SHA: ${{ github.event.pull_request.base.sha }}
+          HEAD_SHA: ${{ github.event.pull_request.head.sha }}
+        shell: bash
+        run: |
+          set -euo pipefail
+          unset HTTP_PROXY HTTPS_PROXY ALL_PROXY http_proxy https_proxy all_proxy
+          export GOMAXPROCS=1
+          base_dir="$RUNNER_TEMP/go-dtls-base"
+          base_binary="$RUNNER_TEMP/go-dtls-base.test"
+          head_binary="$RUNNER_TEMP/go-dtls-head.test"
+          base_output="$RUNNER_TEMP/benchmark-base.txt"
+          head_output="$RUNNER_TEMP/benchmark-head.txt"
+          git fetch --no-tags --depth=1 origin "$BASE_SHA"
+          git worktree add --detach "$base_dir" "$BASE_SHA"
+          trap 'git worktree remove --force "$base_dir" >/dev/null 2>&1 || true' EXIT
+          go test -c -o "$head_binary" .
+          (
+            cd "$base_dir"
+            go test -c -o "$base_binary" .
+          )
+          workload_changed=false
+          while IFS= read -r path; do
+            if [[ "$path" == handshake_end_to_end_test.go || "$path" == ech_test.go ]] ||
+               git show "$BASE_SHA:$path" 2>/dev/null | grep -q '^func Benchmark' ||
+               { [[ -f "$path" ]] && grep -q '^func Benchmark' "$path"; }; then
+              workload_changed=true
+              break
+            fi
+          done < <(git diff --name-only "$BASE_SHA" "$HEAD_SHA" -- '*_test.go')
+          printf 'commit: %s\nworkload-changed: %s\n' "$BASE_SHA" "$workload_changed" > "$base_output"
+          printf 'commit: %s\nworkload-changed: %s\n' "$HEAD_SHA" "$workload_changed" > "$head_output"
+          lifecycle='^(BenchmarkConnectionHandshakeLifecycle|BenchmarkSessionTicketRequestHandshakeLifecycle|BenchmarkECHHandshakeLifecycle|BenchmarkExternalPSKHandshakeLifecycle|BenchmarkMutualTLSHandshakeLifecycle|BenchmarkCertificateCompressionHandshakeLifecycle|BenchmarkHybridKeyExchangeHandshakeLifecycle)$'
+          records='^BenchmarkProtectedRecord(Seal|RoundTripInPlace)$'
+          run_suite() {
+            local binary="$1" output="$2" directory="$3"
+            (
+              cd "$directory"
+              "$binary" -test.run='^$' -test.bench="$lifecycle" -test.benchmem -test.benchtime=500x -test.count=1 -test.cpu=1 -test.timeout=20m | tee -a "$output"
+              "$binary" -test.run='^$' -test.bench="$records" -test.benchmem -test.benchtime=100000x -test.count=1 -test.cpu=1 -test.timeout=20m | tee -a "$output"
+            )
+          }
+          warm_up() {
+            local binary="$1" directory="$2"
+            (
+              cd "$directory"
+              "$binary" -test.run='^$' -test.bench="$lifecycle" -test.benchtime=1x -test.count=1 -test.cpu=1 -test.timeout=20m >/dev/null
+              "$binary" -test.run='^$' -test.bench="$records" -test.benchtime=1x -test.count=1 -test.cpu=1 -test.timeout=20m >/dev/null
+            )
+          }
+          warm_up "$base_binary" "$base_dir"
+          warm_up "$head_binary" "$GITHUB_WORKSPACE"
+          for pair in $(seq 1 9); do
+            if (( pair % 2 == 1 )); then
+              run_suite "$base_binary" "$base_output" "$base_dir"
+              run_suite "$head_binary" "$head_output" "$GITHUB_WORKSPACE"
+            else
+              run_suite "$head_binary" "$head_output" "$GITHUB_WORKSPACE"
+              run_suite "$base_binary" "$base_output" "$base_dir"
+            fi
+          done
+          cp "$base_output" benchmark-base.txt
+          cp "$head_output" benchmark-head.txt
+          printf 'workload-changed=%s\n' "$workload_changed"
       - name: Run all benchmarks
         env:
           WOLFSSL_COMMIT: ${{ steps.wolfssl.outputs.commit }}
@@ -122,6 +188,7 @@ jobs:
       - name: Format and sort benchmark report
         env:
           WOLFSSL_COMMIT: ${{ steps.wolfssl.outputs.commit }}
+          ALLOW_WORKLOAD_CHANGE: ${{ contains(github.event.pull_request.labels.*.name, 'performance-workload-approved') }}
         shell: bash
         run: |
           set -euo pipefail
@@ -136,6 +203,25 @@ jobs:
           "$tool" "${common[@]}" -language zh-CN -output benchmark.md
           "$tool" "${common[@]}" -language en -output benchmark.en.md
           "$tool" "${common[@]}" -language ru -output benchmark.ru.md
+          if [[ "${{ github.event_name }}" == pull_request ]]; then
+            set +e
+            "$tool" \
+              -baseline benchmark-base.txt \
+              -candidate benchmark-head.txt \
+              -output benchmark-comparison.md \
+              -language zh-CN \
+              -minimum-pairs 9 \
+              -time-regression-percent 5 \
+              -allow-workload-change "${ALLOW_WORKLOAD_CHANGE:-false}" \
+              -fail-on-regression=true
+            status=$?
+            set -e
+            if [[ ! -f benchmark-comparison.md ]]; then
+              printf '## PR base/head 配对性能门禁\n\n比较工具失败，详见 workflow 日志。\n' > benchmark-comparison.md
+            fi
+            printf '%s\n' "$status" > performance-gate-status.txt
+            cat benchmark-comparison.md >> "$GITHUB_STEP_SUMMARY"
+          fi
           cat benchmark.md >> "$GITHUB_STEP_SUMMARY"
       - uses: actions/upload-artifact@v7
         with:
@@ -145,8 +231,16 @@ jobs:
             benchmark.en.md
             benchmark.ru.md
             benchmark.txt
+            benchmark-base.txt
+            benchmark-head.txt
+            benchmark-comparison.md
+            performance-gate-status.txt
           retention-days: 30
           if-no-files-found: error
+      - name: Enforce paired PR performance gate
+        if: github.event_name == 'pull_request'
+        shell: bash
+        run: test "$(cat performance-gate-status.txt)" = 0
 
   publish:
     name: publish master results

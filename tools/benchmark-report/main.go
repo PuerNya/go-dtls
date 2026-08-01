@@ -27,13 +27,39 @@ type benchmark struct {
 }
 
 type report struct {
-	goVersion  string
-	goos       string
-	goarch     string
-	cpu        string
-	wolfSSL    string
-	benchmarks []*benchmark
-	byName     map[string]*benchmark
+	goVersion       string
+	goos            string
+	goarch          string
+	cpu             string
+	wolfSSL         string
+	commit          string
+	workloadChanged bool
+	benchmarks      []*benchmark
+	byName          map[string]*benchmark
+}
+
+type benchmarkComparison struct {
+	name            string
+	pairs           int
+	baselineTime    float64
+	candidateTime   float64
+	pairedTimeDelta float64
+	worseTimePairs  int
+	baselineBytes   float64
+	candidateBytes  float64
+	baselineAllocs  float64
+	candidateAllocs float64
+	failures        []string
+}
+
+type comparisonReport struct {
+	baselineCommit        string
+	candidateCommit       string
+	timeRegressionPercent float64
+	workloadChanged       bool
+	workloadChangeAllowed bool
+	failed                bool
+	items                 []benchmarkComparison
 }
 
 type reportLanguage struct {
@@ -426,14 +452,20 @@ var benchmarkDisplayOrders = map[string]int{
 
 func main() {
 	input := flag.String("input", "", "go test benchmark output")
+	baseline := flag.String("baseline", "", "baseline go test benchmark output")
+	candidate := flag.String("candidate", "", "candidate go test benchmark output")
 	output := flag.String("output", "", "Markdown report path")
 	commit := flag.String("commit", "", "tested commit")
 	wolfSSL := flag.String("wolfssl", "", "wolfSSL commit and build")
 	generated := flag.String("generated", time.Now().UTC().Format(time.RFC3339), "generation time")
 	language := flag.String("language", "zh-CN", "report language: en, zh-CN, or ru")
 	languageLinks := flag.Bool("language-links", true, "include links to sibling language reports")
+	minimumPairs := flag.Int("minimum-pairs", 9, "minimum paired samples required for each benchmark")
+	timeRegressionPercent := flag.Float64("time-regression-percent", 5, "paired median time regression that fails the gate")
+	allowWorkloadChange := flag.Bool("allow-workload-change", false, "allow benchmark workload source changes")
+	failOnRegression := flag.Bool("fail-on-regression", true, "exit unsuccessfully when the comparison fails")
 	flag.Parse()
-	if *input == "" || *output == "" {
+	if *output == "" {
 		flag.Usage()
 		os.Exit(2)
 	}
@@ -441,18 +473,39 @@ func main() {
 	if !ok {
 		fatal(fmt.Errorf("unsupported report language %q", *language))
 	}
+	if *baseline != "" || *candidate != "" {
+		if *baseline == "" || *candidate == "" || *input != "" {
+			flag.Usage()
+			os.Exit(2)
+		}
+		baselineReport, err := readReportFile(*baseline)
+		if err != nil {
+			fatal(err)
+		}
+		candidateReport, err := readReportFile(*candidate)
+		if err != nil {
+			fatal(err)
+		}
+		comparison, err := compareReports(baselineReport, candidateReport, *minimumPairs, *timeRegressionPercent, *allowWorkloadChange)
+		if err != nil {
+			fatal(err)
+		}
+		if err = writeComparisonFile(*output, comparison, text); err != nil {
+			fatal(err)
+		}
+		if comparison.failed && *failOnRegression {
+			os.Exit(1)
+		}
+		return
+	}
+	if *input == "" {
+		flag.Usage()
+		os.Exit(2)
+	}
 
-	in, err := os.Open(*input) // #nosec G304 -- path is an explicit local command argument.
+	result, err := readReportFile(*input)
 	if err != nil {
 		fatal(err)
-	}
-	result, err := parseReport(in)
-	closeErr := in.Close()
-	if err != nil {
-		fatal(err)
-	}
-	if closeErr != nil {
-		fatal(closeErr)
 	}
 
 	out, err := os.Create(*output) // #nosec G304 -- path is an explicit local command argument.
@@ -464,13 +517,42 @@ func main() {
 		links = reportLanguageLinks(*output)
 	}
 	err = writeReport(out, result, *commit, *wolfSSL, *generated, text, links)
-	closeErr = out.Close()
+	closeErr := out.Close()
 	if err != nil {
 		fatal(err)
 	}
 	if closeErr != nil {
 		fatal(closeErr)
 	}
+}
+
+func readReportFile(path string) (*report, error) {
+	in, err := os.Open(path) // #nosec G304 -- path is an explicit local command argument.
+	if err != nil {
+		return nil, err
+	}
+	result, parseErr := parseReport(in)
+	closeErr := in.Close()
+	if parseErr != nil {
+		return nil, parseErr
+	}
+	if closeErr != nil {
+		return nil, closeErr
+	}
+	return result, nil
+}
+
+func writeComparisonFile(path string, comparison *comparisonReport, text reportLanguage) error {
+	out, err := os.Create(path) // #nosec G304 -- path is an explicit local command argument.
+	if err != nil {
+		return err
+	}
+	writeErr := writeComparisonReport(out, comparison, text)
+	closeErr := out.Close()
+	if writeErr != nil {
+		return writeErr
+	}
+	return closeErr
 }
 
 func fatal(err error) {
@@ -485,6 +567,14 @@ func parseReport(reader io.Reader) (*report, error) {
 	for lineNumber := 1; scanner.Scan(); lineNumber++ {
 		line := strings.TrimSpace(scanner.Text())
 		switch {
+		case strings.HasPrefix(line, "commit: ") && result.commit == "":
+			result.commit = strings.TrimSpace(strings.TrimPrefix(line, "commit: "))
+		case strings.HasPrefix(line, "workload-changed: "):
+			changed, err := strconv.ParseBool(strings.TrimSpace(strings.TrimPrefix(line, "workload-changed: ")))
+			if err != nil {
+				return nil, fmt.Errorf("line %d: parse workload change marker: %w", lineNumber, err)
+			}
+			result.workloadChanged = changed
 		case strings.HasPrefix(line, "go version ") && result.goVersion == "":
 			result.goVersion = line
 		case strings.HasPrefix(line, "goos: ") && result.goos == "":
@@ -508,6 +598,193 @@ func parseReport(reader io.Reader) (*report, error) {
 		return nil, errors.New("benchmark output contains no results")
 	}
 	return result, nil
+}
+
+func compareReports(baseline, candidate *report, minimumPairs int, timeRegressionPercent float64, allowWorkloadChange bool) (*comparisonReport, error) {
+	if minimumPairs < 1 {
+		return nil, errors.New("minimum paired samples must be positive")
+	}
+	if timeRegressionPercent < 0 {
+		return nil, errors.New("time regression percentage must not be negative")
+	}
+	result := &comparisonReport{
+		baselineCommit:        baseline.commit,
+		candidateCommit:       candidate.commit,
+		timeRegressionPercent: timeRegressionPercent,
+		workloadChanged:       candidate.workloadChanged,
+		workloadChangeAllowed: allowWorkloadChange,
+	}
+	if result.workloadChanged {
+		result.failed = !result.workloadChangeAllowed
+		return result, nil
+	}
+	candidateByName, err := canonicalBenchmarks(candidate)
+	if err != nil {
+		return nil, err
+	}
+	for _, baselineItem := range baseline.benchmarks {
+		name := canonicalBenchmarkName(baselineItem.name)
+		candidateItem := candidateByName[name]
+		if candidateItem == nil {
+			return nil, fmt.Errorf("candidate output is missing baseline benchmark %q", name)
+		}
+		item, compareErr := compareBenchmark(baselineItem, candidateItem, minimumPairs, timeRegressionPercent)
+		if compareErr != nil {
+			return nil, fmt.Errorf("compare %s: %w", name, compareErr)
+		}
+		if len(item.failures) != 0 {
+			result.failed = true
+		}
+		result.items = append(result.items, item)
+	}
+	sort.Slice(result.items, func(left, right int) bool {
+		leftOrder := benchmarkDisplayOrder(result.items[left].name)
+		rightOrder := benchmarkDisplayOrder(result.items[right].name)
+		if leftOrder != rightOrder {
+			return leftOrder < rightOrder
+		}
+		return result.items[left].name < result.items[right].name
+	})
+	return result, nil
+}
+
+func canonicalBenchmarks(result *report) (map[string]*benchmark, error) {
+	benchmarks := make(map[string]*benchmark, len(result.benchmarks))
+	for _, item := range result.benchmarks {
+		name := canonicalBenchmarkName(item.name)
+		if benchmarks[name] != nil {
+			return nil, fmt.Errorf("benchmark output contains duplicate canonical name %q", name)
+		}
+		benchmarks[name] = item
+	}
+	return benchmarks, nil
+}
+
+func canonicalBenchmarkName(name string) string {
+	return "Benchmark" + strings.Join(benchmarkNameParts(name), "/")
+}
+
+func compareBenchmark(baseline, candidate *benchmark, minimumPairs int, timeRegressionPercent float64) (benchmarkComparison, error) {
+	item := benchmarkComparison{name: canonicalBenchmarkName(baseline.name)}
+	baselineTime, candidateTime, err := pairedMetric(baseline, candidate, "ns/op", minimumPairs)
+	if err != nil {
+		return item, err
+	}
+	baselineBytes, candidateBytes, err := pairedMetric(baseline, candidate, "B/op", minimumPairs)
+	if err != nil {
+		return item, err
+	}
+	baselineAllocs, candidateAllocs, err := pairedMetric(baseline, candidate, "allocs/op", minimumPairs)
+	if err != nil {
+		return item, err
+	}
+	item.pairs = len(baselineTime)
+	item.baselineTime = median(baselineTime)
+	item.candidateTime = median(candidateTime)
+	item.baselineBytes = median(baselineBytes)
+	item.candidateBytes = median(candidateBytes)
+	item.baselineAllocs = median(baselineAllocs)
+	item.candidateAllocs = median(candidateAllocs)
+	deltas := make([]float64, len(baselineTime))
+	for index := range baselineTime {
+		if baselineTime[index] <= 0 {
+			return item, errors.New("baseline time must be positive")
+		}
+		deltas[index] = (candidateTime[index] - baselineTime[index]) * 100 / baselineTime[index]
+		if candidateTime[index] > baselineTime[index] {
+			item.worseTimePairs++
+		}
+	}
+	item.pairedTimeDelta = median(deltas)
+	if item.pairedTimeDelta > timeRegressionPercent && item.worseTimePairs > item.pairs/2 {
+		item.failures = append(item.failures, fmt.Sprintf("time +%.3f%%", item.pairedTimeDelta))
+	}
+	if item.candidateBytes > item.baselineBytes && stableResourceIncrease(baselineBytes, candidateBytes) {
+		item.failures = append(item.failures, fmt.Sprintf("B/op %s -> %s", formatNumber(item.baselineBytes), formatNumber(item.candidateBytes)))
+	}
+	if item.candidateAllocs > item.baselineAllocs && stableResourceIncrease(baselineAllocs, candidateAllocs) {
+		item.failures = append(item.failures, fmt.Sprintf("allocs/op %s -> %s", formatNumber(item.baselineAllocs), formatNumber(item.candidateAllocs)))
+	}
+	return item, nil
+}
+
+func stableResourceIncrease(baseline, candidate []float64) bool {
+	worse := 0
+	for index := range baseline {
+		if candidate[index] > baseline[index] {
+			worse++
+		}
+	}
+	return worse*4 >= len(baseline)*3
+}
+
+func pairedMetric(baseline, candidate *benchmark, unit string, minimumPairs int) ([]float64, []float64, error) {
+	baselineMetric := baseline.byUnit[unit]
+	candidateMetric := candidate.byUnit[unit]
+	if baselineMetric == nil || candidateMetric == nil {
+		return nil, nil, fmt.Errorf("missing %s metric", unit)
+	}
+	if len(baselineMetric.values) != len(candidateMetric.values) {
+		return nil, nil, fmt.Errorf("%s sample count differs: baseline=%d candidate=%d", unit, len(baselineMetric.values), len(candidateMetric.values))
+	}
+	if len(baselineMetric.values) < minimumPairs {
+		return nil, nil, fmt.Errorf("%s has %d paired samples, need at least %d", unit, len(baselineMetric.values), minimumPairs)
+	}
+	return baselineMetric.values, candidateMetric.values, nil
+}
+
+func writeComparisonReport(writer io.Writer, comparison *comparisonReport, text reportLanguage) error {
+	decision := "PASS"
+	if comparison.failed {
+		decision = "FAIL"
+	}
+	if _, err := fmt.Fprintln(writer, "## PR base/head 配对性能门禁"); err != nil {
+		return err
+	}
+	if _, err := fmt.Fprintf(writer, "\n- 结论：`%s`\n- Base：`%s`\n- Head：`%s`\n- 耗时自动失败阈值：`+%s%%`，且多数配对同向\n- 资源自动失败条件：中位数增加，且至少 75%% 配对同向\n", decision, markdownText(comparison.baselineCommit), markdownText(comparison.candidateCommit), formatNumber(comparison.timeRegressionPercent)); err != nil {
+		return err
+	}
+	if comparison.workloadChanged {
+		status := "未批准，门禁失败"
+		if comparison.workloadChangeAllowed {
+			status = "已由维护者批准；新旧 workload 不可直接比较，不生成差值结论"
+		}
+		if _, err := fmt.Fprintf(writer, "- Benchmark workload 源码发生变化：%s\n", status); err != nil {
+			return err
+		}
+	}
+	if len(comparison.items) == 0 {
+		return nil
+	}
+	if _, err := fmt.Fprintln(writer, "\n| Benchmark | Base 中位耗时 | Head 中位耗时 | 配对中位差 | 较慢配对 | B/op（Base -> Head） | allocs/op（Base -> Head） | 判定 |\n| --- | ---: | ---: | ---: | :---: | :---: | :---: | :---: |"); err != nil {
+		return err
+	}
+	for _, item := range comparison.items {
+		status := "通过"
+		if len(item.failures) != 0 {
+			status = strings.Join(item.failures, "；")
+		}
+		if _, err := fmt.Fprintf(writer, "| %s | %s | %s | %+.3f%% | %d/%d | %s -> %s | %s -> %s | %s |\n",
+			markdownText(benchmarkLabel(item.name, text)), formatComparisonTime(item.baselineTime), formatComparisonTime(item.candidateTime), item.pairedTimeDelta,
+			item.worseTimePairs, item.pairs, formatNumber(item.baselineBytes), formatNumber(item.candidateBytes),
+			formatNumber(item.baselineAllocs), formatNumber(item.candidateAllocs), markdownText(status)); err != nil {
+			return err
+		}
+	}
+	return nil
+}
+
+func formatComparisonTime(value float64) string {
+	switch {
+	case value >= 1e9:
+		return formatDecimal(value/1e9) + " s/op"
+	case value >= 1e6:
+		return formatDecimal(value/1e6) + " ms/op"
+	case value >= 1e3:
+		return formatDecimal(value/1e3) + " us/op"
+	default:
+		return formatNumber(value) + " ns/op"
+	}
 }
 
 func (r *report) addBenchmarkLine(lineNumber int, line string) error {
@@ -933,11 +1210,11 @@ func (b *benchmark) timeMetric() string {
 	value := median(entry.values)
 	switch {
 	case value >= 1e9:
-		return formatDecimal(value/1e9, 3) + " s/op"
+		return formatDecimal(value/1e9) + " s/op"
 	case value >= 1e6:
-		return formatDecimal(value/1e6, 3) + " ms/op"
+		return formatDecimal(value/1e6) + " ms/op"
 	case value >= 1e3:
-		return formatDecimal(value/1e3, 3) + " us/op"
+		return formatDecimal(value/1e3) + " us/op"
 	default:
 		return formatNumber(value) + " ns/op"
 	}
@@ -965,8 +1242,8 @@ func formatNumber(value float64) string {
 	return strconv.FormatFloat(value, 'f', -1, 64)
 }
 
-func formatDecimal(value float64, precision int) string {
-	return strings.TrimRight(strings.TrimRight(strconv.FormatFloat(value, 'f', precision, 64), "0"), ".")
+func formatDecimal(value float64) string {
+	return strings.TrimRight(strings.TrimRight(strconv.FormatFloat(value, 'f', 3, 64), "0"), ".")
 }
 
 func markdownText(value string) string {

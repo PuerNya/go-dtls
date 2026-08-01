@@ -107,6 +107,156 @@ func TestParseReportRejectsUncoveredBenchmark(t *testing.T) {
 	}
 }
 
+func TestCompareReports(t *testing.T) {
+	baselineInput := `commit: base
+BenchmarkConnectionHandshakeLifecycle-1 100 100 ns/op 1000 B/op 10 allocs/op
+BenchmarkConnectionHandshakeLifecycle-1 100 101 ns/op 1000 B/op 10 allocs/op
+BenchmarkConnectionHandshakeLifecycle-1 100 99 ns/op 1000 B/op 10 allocs/op
+BenchmarkMutualTLSHandshakeLifecycle/Full-1 100 200 ns/op 2000 B/op 20 allocs/op
+BenchmarkMutualTLSHandshakeLifecycle/Full-1 100 201 ns/op 2000 B/op 20 allocs/op
+BenchmarkMutualTLSHandshakeLifecycle/Full-1 100 199 ns/op 2000 B/op 20 allocs/op
+`
+	candidateInput := `commit: head
+BenchmarkConnectionHandshakeLifecycle-1 100 103 ns/op 1000 B/op 10 allocs/op
+BenchmarkConnectionHandshakeLifecycle-1 100 104 ns/op 1000 B/op 10 allocs/op
+BenchmarkConnectionHandshakeLifecycle-1 100 102 ns/op 1000 B/op 10 allocs/op
+BenchmarkMutualTLSHandshakeLifecycle/Full-1 100 220 ns/op 2001 B/op 21 allocs/op
+BenchmarkMutualTLSHandshakeLifecycle/Full-1 100 221 ns/op 2001 B/op 21 allocs/op
+BenchmarkMutualTLSHandshakeLifecycle/Full-1 100 219 ns/op 2001 B/op 21 allocs/op
+`
+	baseline, err := parseReport(strings.NewReader(baselineInput))
+	if err != nil {
+		t.Fatal(err)
+	}
+	candidate, err := parseReport(strings.NewReader(candidateInput))
+	if err != nil {
+		t.Fatal(err)
+	}
+	comparison, err := compareReports(baseline, candidate, 3, 5, false)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !comparison.failed {
+		t.Fatal("comparison passed despite a stable time and allocation regression")
+	}
+	if len(comparison.items) != 2 || len(comparison.items[0].failures) != 0 || len(comparison.items[1].failures) != 3 {
+		t.Fatalf("unexpected comparison: %+v", comparison.items)
+	}
+	var output bytes.Buffer
+	if err = writeComparisonReport(&output, comparison, reportLanguages["zh-CN"]); err != nil {
+		t.Fatal(err)
+	}
+	for _, want := range []string{"结论：`FAIL`", "Base：`base`", "Head：`head`", "完整 mTLS 握手", "time +10.000%", "B/op 2000 -> 2001", "allocs/op 20 -> 21"} {
+		if !strings.Contains(output.String(), want) {
+			t.Errorf("comparison report does not contain %q:\n%s", want, output.String())
+		}
+	}
+	passing, err := compareReports(baseline, baseline, 3, 5, false)
+	if err != nil {
+		t.Fatal(err)
+	}
+	output.Reset()
+	if err = writeComparisonReport(&output, passing, reportLanguages["zh-CN"]); err != nil {
+		t.Fatal(err)
+	}
+	if !strings.Contains(output.String(), "结论：`PASS`") || !strings.Contains(output.String(), "| 0/3 |") {
+		t.Fatalf("unexpected passing comparison report:\n%s", output.String())
+	}
+}
+
+func TestCompareReportsRejectsUnapprovedWorkloadChanges(t *testing.T) {
+	const baselineInput = `commit: base
+BenchmarkConnectionHandshakeLifecycle-1 100 100 ns/op 1000 B/op 10 allocs/op
+`
+	const candidateInput = `commit: head
+workload-changed: true
+BenchmarkConnectionHandshakeLifecycle-1 100 100 ns/op 1000 B/op 10 allocs/op
+`
+	baseline, err := parseReport(strings.NewReader(baselineInput))
+	if err != nil {
+		t.Fatal(err)
+	}
+	candidate, err := parseReport(strings.NewReader(candidateInput))
+	if err != nil {
+		t.Fatal(err)
+	}
+	comparison, err := compareReports(baseline, candidate, 1, 5, false)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !comparison.failed {
+		t.Fatal("unapproved workload source change passed")
+	}
+	comparison, err = compareReports(baseline, candidate, 1, 5, true)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if comparison.failed {
+		t.Fatal("approved workload source change failed without metric regressions")
+	}
+	if len(comparison.items) != 0 {
+		t.Fatalf("approved workload change produced incomparable metric rows: %+v", comparison.items)
+	}
+	var output bytes.Buffer
+	if err = writeComparisonReport(&output, comparison, reportLanguages["zh-CN"]); err != nil {
+		t.Fatal(err)
+	}
+	if !strings.Contains(output.String(), "结论：`PASS`") {
+		t.Fatalf("passing comparison report does not contain PASS:\n%s", output.String())
+	}
+	if strings.Contains(output.String(), "| Benchmark |") {
+		t.Fatalf("incomparable workload report contains a metric table:\n%s", output.String())
+	}
+}
+
+func TestCompareReportsRejectsIncompletePairs(t *testing.T) {
+	tests := []struct {
+		name      string
+		baseline  string
+		candidate string
+		want      string
+	}{
+		{
+			name:      "missing benchmark",
+			baseline:  "BenchmarkConnectionHandshakeLifecycle-1 1 100 ns/op 1000 B/op 10 allocs/op\n",
+			candidate: "BenchmarkECHHandshakeLifecycle/Direct-1 1 100 ns/op 1000 B/op 10 allocs/op\n",
+			want:      "missing baseline benchmark",
+		},
+		{
+			name:      "unequal sample count",
+			baseline:  "BenchmarkConnectionHandshakeLifecycle-1 1 100 ns/op 1000 B/op 10 allocs/op\nBenchmarkConnectionHandshakeLifecycle-1 1 100 ns/op 1000 B/op 10 allocs/op\n",
+			candidate: "BenchmarkConnectionHandshakeLifecycle-1 1 100 ns/op 1000 B/op 10 allocs/op\n",
+			want:      "sample count differs",
+		},
+	}
+	for _, test := range tests {
+		t.Run(test.name, func(t *testing.T) {
+			baseline, err := parseReport(strings.NewReader(test.baseline))
+			if err != nil {
+				t.Fatal(err)
+			}
+			candidate, err := parseReport(strings.NewReader(test.candidate))
+			if err != nil {
+				t.Fatal(err)
+			}
+			_, err = compareReports(baseline, candidate, 1, 5, false)
+			if err == nil || !strings.Contains(err.Error(), test.want) {
+				t.Fatalf("compareReports error = %v, want %q", err, test.want)
+			}
+		})
+	}
+}
+
+func TestStableResourceIncrease(t *testing.T) {
+	baseline := []float64{1000, 1000, 1000, 1000, 1000, 1000, 1000, 1000, 1000}
+	if stableResourceIncrease(baseline, []float64{1001, 1001, 1001, 1001, 1001, 1001, 999, 999, 999}) {
+		t.Fatal("six of nine higher resource samples were treated as stable")
+	}
+	if !stableResourceIncrease(baseline, []float64{1001, 1001, 1001, 1001, 1001, 1001, 1001, 999, 999}) {
+		t.Fatal("seven of nine higher resource samples were not treated as stable")
+	}
+}
+
 func TestBenchmarkLabel(t *testing.T) {
 	tests := []struct {
 		language string

@@ -73,10 +73,12 @@ go test -run '^$' -bench '^BenchmarkProtectedRecord(Seal|RoundTripInPlace)$' -be
 比较修改前后性能时：
 
 - 固定 Go 版本、CPU、`-cpu` 和 `-benchtime`。
-- 预编译修改前后的测试二进制；完整连接使用 `-cpu=1`、每个样本 500 次迭代，至少交替运行 8 轮并比较中位数。
+- 预编译修改前后的测试二进制；完整连接使用 `-cpu=1`、每个样本 500 次迭代，至少交替运行 9 轮并比较配对中位数。
 - 同时检查 `ns/op`、`B/op`、`allocs/op`、完整连接吞吐和资源生命周期。
 - 分配或内存出现差异时使用 profile 定位到具体对象和调用路径。
 - benchmark、profile 和临时二进制保存在仓库外，不得提交生成物。
+
+pull request benchmark workflow 会自动执行上述 base/head 配对门禁。配对中位耗时超过 5% 且多数样本同向时失败；`B/op` 或 `allocs/op` 中位数增加且至少 75% 样本同向时失败。benchmark workload 源码变化默认不可比较并失败；维护者确认后可添加 `performance-workload-approved` 标签重跑，但报告不会生成新旧 workload 的差值。缺失 benchmark、metric 或配对样本同样失败，判定和原始输出显示在 PR 评论及 artifact 中。
 
 README 只记录当前环境下的代表性能，不记录 A/B、冻结基线或修改前后叙事；这些内容应作为 pull request 的验证证据。
 

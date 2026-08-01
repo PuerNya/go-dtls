@@ -73,10 +73,12 @@ go test -run '^$' -bench '^BenchmarkProtectedRecord(Seal|RoundTripInPlace)$' -be
 When comparing performance before and after a change:
 
 - Keep the Go version, CPU, `-cpu`, and `-benchtime` fixed.
-- Precompile test binaries before and after the change. For full connections, use `-cpu=1`, 500 iterations per sample, alternate the binaries for at least eight rounds, and compare medians.
+- Precompile test binaries before and after the change. For full connections, use `-cpu=1`, 500 iterations per sample, alternate the binaries for at least nine rounds, and compare paired medians.
 - Check `ns/op`, `B/op`, `allocs/op`, full-connection throughput, and resource lifecycles together.
 - When allocations or memory differ, use profiles to identify the exact object and call path.
 - Store benchmark output, profiles, and temporary binaries outside the repository. Do not commit generated artifacts.
+
+The pull request benchmark workflow runs this base/head paired gate automatically. It fails when the paired median time increases by more than 5% and most pairs are slower, or when median `B/op` or `allocs/op` increases with at least 75% of pairs in the same direction. Benchmark workload source changes are incomparable and fail by default; after maintainer review, the `performance-workload-approved` label may rerun the workflow, but the report does not generate deltas between different workloads. Missing benchmarks, metrics, or paired samples also fail, and the PR comment and artifact retain the decision and raw output.
 
 README files record only representative performance for the current environment. A/B data, frozen baselines, and before/after narratives belong in pull request validation evidence.
 
