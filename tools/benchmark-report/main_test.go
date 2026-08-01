@@ -35,7 +35,7 @@ BenchmarkConnectionHandshakeLifecycle-2 1 1500000 ns/op 90000 B/op 800 allocs/op
 		"[Real UDP interoperability (2)](#section-real-udp-interoperability)",
 		"  - [go-dtls client -> wolfSSL server (1)](#real-udp-go-dtls-client-wolfssl-server)",
 		"  - [wolfSSL client -> go-dtls server (1)](#real-udp-wolfssl-client-go-dtls-server)",
-		"[简体中文](benchmark.md) | [English](benchmark.en.md) | [Русский](benchmark.ru.md)",
+		"[简体中文](README.md) | [English](benchmark.en.md) | [Русский](benchmark.ru.md)",
 		"| Benchmark | Samples | Median time | Harness memory | Harness allocations |",
 		"| --- | :---: | :---: | :---: | :---: |",
 		"| --- | :---: | :---: | :---: | :---: | :---: |",
@@ -315,8 +315,13 @@ func TestLocalizedReports(t *testing.T) {
 }
 
 func TestReportLanguageLinks(t *testing.T) {
-	const want = "[简体中文](benchmark-preview.md) | [English](benchmark-preview.en.md) | [Русский](benchmark-preview.ru.md)"
-	for _, output := range []string{"benchmark-preview.md", "benchmark-preview.en.md", "benchmark-preview.ru.md"} {
+	tests := map[string]string{
+		"README.md":            "[简体中文](README.md) | [English](benchmark.en.md) | [Русский](benchmark.ru.md)",
+		"benchmark.en.md":      "[简体中文](README.md) | [English](benchmark.en.md) | [Русский](benchmark.ru.md)",
+		"benchmark.ru.md":      "[简体中文](README.md) | [English](benchmark.en.md) | [Русский](benchmark.ru.md)",
+		"benchmark-preview.md": "[简体中文](benchmark-preview.md) | [English](benchmark-preview.en.md) | [Русский](benchmark-preview.ru.md)",
+	}
+	for output, want := range tests {
 		if got := reportLanguageLinks(output); got != want {
 			t.Errorf("reportLanguageLinks(%q) = %q, want %q", output, got, want)
 		}

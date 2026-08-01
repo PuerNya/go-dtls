@@ -217,7 +217,7 @@ jobs:
             -generated "$(date -u +%Y-%m-%dT%H:%M:%SZ)"
             -wolfssl "$WOLFSSL_COMMIT (Linux Release static)"
           )
-          "$tool" "${common[@]}" -language zh-CN -output benchmark.md
+          "$tool" "${common[@]}" -language zh-CN -output README.md
           "$tool" "${common[@]}" -language en -output benchmark.en.md
           "$tool" "${common[@]}" -language ru -output benchmark.ru.md
           if [[ "${{ github.event_name }}" == pull_request ]]; then
@@ -239,12 +239,12 @@ jobs:
             printf '%s\n' "$status" > performance-gate-status.txt
             cat benchmark-comparison.md >> "$GITHUB_STEP_SUMMARY"
           fi
-          cat benchmark.md >> "$GITHUB_STEP_SUMMARY"
+          cat README.md >> "$GITHUB_STEP_SUMMARY"
       - uses: actions/upload-artifact@v7
         with:
           name: benchmark-output
           path: |
-            benchmark.md
+            README.md
             benchmark.en.md
             benchmark.ru.md
             benchmark.txt
@@ -287,15 +287,16 @@ jobs:
             git init -b benchmark-results "$target"
             git -C "$target" remote add origin "$remote"
           fi
-          cp report/benchmark*.md "$target/"
+          cp report/README.md "$target/README.md"
+          cp report/benchmark.en.md report/benchmark.ru.md "$target/"
           cp report/benchmark.txt "$target/benchmark.txt"
-          printf '\n[Go benchmark 原始输出](benchmark.txt)\n' >> "$target/benchmark.md"
+          printf '\n[Go benchmark 原始输出](benchmark.txt)\n' >> "$target/README.md"
           printf '\n[Raw Go benchmark output](benchmark.txt)\n' >> "$target/benchmark.en.md"
           printf '\n[Исходный вывод Go benchmark](benchmark.txt)\n' >> "$target/benchmark.ru.md"
-          cp "$target/benchmark.md" "$target/README.md"
+          git -C "$target" rm -f --ignore-unmatch benchmark.md
           git -C "$target" config user.name github-actions[bot]
           git -C "$target" config user.email 41898282+github-actions[bot]@users.noreply.github.com
-          git -C "$target" add README.md benchmark*.md benchmark.txt
+          git -C "$target" add README.md benchmark.en.md benchmark.ru.md benchmark.txt
           if git -C "$target" diff --cached --quiet; then
             exit 0
           fi

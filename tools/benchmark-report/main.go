@@ -856,6 +856,10 @@ func validateBenchmarkCoverage(name string) error {
 }
 
 func reportLanguageLinks(output string) string {
+	switch filepath.Base(output) {
+	case "README.md", "benchmark.en.md", "benchmark.ru.md":
+		return "[简体中文](README.md) | [English](benchmark.en.md) | [Русский](benchmark.ru.md)"
+	}
 	name := strings.TrimSuffix(filepath.Base(output), filepath.Ext(output))
 	name = strings.TrimSuffix(strings.TrimSuffix(strings.TrimSuffix(name, ".zh-CN"), ".en"), ".ru")
 	return fmt.Sprintf("[简体中文](%s.md) | [English](%s.en.md) | [Русский](%s.ru.md)", name, name, name)
