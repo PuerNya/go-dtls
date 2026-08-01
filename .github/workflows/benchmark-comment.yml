@@ -8,7 +8,6 @@ on:
 permissions:
   actions: read
   contents: read
-  issues: write
   pull-requests: write
 
 jobs:
@@ -29,7 +28,12 @@ jobs:
               run_id: context.payload.workflow_run.id,
               per_page: 100,
             })
-            const found = artifacts.some(artifact => artifact.name === 'benchmark-output' && !artifact.expired)
+            const matching = artifacts.filter(artifact => artifact.name === 'benchmark-output' && !artifact.expired)
+            const validSize = matching.length === 1 && Number.isSafeInteger(matching[0].size_in_bytes) && matching[0].size_in_bytes >= 0
+            const found = validSize && matching[0].size_in_bytes <= 67108864
+            if (matching.length > 1 || (matching.length === 1 && !found)) {
+              core.setFailed('benchmark artifact is duplicated or exceeds 64 MiB')
+            }
             const pull = await github.rest.pulls.get({
               ...context.repo,
               pull_number: context.payload.workflow_run.pull_requests[0].number,
@@ -58,7 +62,16 @@ jobs:
         shell: bash
         run: |
           set -euo pipefail
+          expected=$'README.md\nbenchmark-base.txt\nbenchmark-comparison.md\nbenchmark-head.txt\nbenchmark.en.md\nbenchmark.ru.md\nbenchmark.txt\nperformance-gate-status.txt'
+          actual="$(find report -mindepth 1 -maxdepth 1 -type f -printf '%f\n' | sort)"
+          test "$actual" = "$expected"
+          test "$(find report -mindepth 1 -maxdepth 1 ! -type f -print -quit)" = ""
+          test "$(find report -type f -printf '%s\n' | awk '{ total += $1 } END { print total + 0 }')" -le 67108864
+          test "$(find report -type f -size +16777216c -print -quit)" = ""
           test "$(stat -c %s report/benchmark.txt)" -le 10485760
+          test "$(stat -c %s report/benchmark-base.txt)" -le 8388608
+          test "$(stat -c %s report/benchmark-head.txt)" -le 8388608
+          test "$(stat -c %s report/performance-gate-status.txt)" -le 16
           go run ./tools/benchmark-report \
             -input report/benchmark.txt \
             -output report/comment.md \
@@ -84,6 +97,7 @@ jobs:
             cat report/comparison.md >> report/comment.md
           fi
       - name: Update pull request comment
+        if: always()
         uses: actions/github-script@v9
         env:
           REPORT_PATH: report/comment.md

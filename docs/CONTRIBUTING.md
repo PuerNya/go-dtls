@@ -99,6 +99,8 @@ benchmark workflow 使用本次解析的精确 wolfSSL SHA，在性能测试前�
 
 benchmark workflow 在 `master` push 后更新独立的 `benchmark-results` 分支；定时检查仅在 go-dtls 或 wolfSSL 的 `master` SHA 变化，且该 go-dtls SHA 没有 benchmark 正在排队或运行时触发并发布。pull request 只更新对应 PR 页面上的结果评论，不写入 `master` 或结果分支。不要手工维护 README 中的性能数字。
 
+所有执行 pull request 代码的 checkout 都必须设置 `persist-credentials: false`，并在运行仓库代码前确认本地 Git 配置和 origin URL 不含 workflow token。PR benchmark job 只读；只有可信的 `workflow_run` 评论 job 拥有 PR 写权限。不可信 benchmark artifact 必须唯一、受大小限制且只含预期的普通文件，并由默认分支上的报告器重新解析和转义；任何边界不匹配都必须失败。
+
 新增或重命名任何 benchmark 或子 benchmark 时，必须同步更新 `tools/benchmark-report` 中对应的分类、排序和多语言标签。报告生成器会拒绝任何未被显式覆盖的 benchmark 输出，benchmark workflow 必须通过。
 
 第三方实现未启用或不支持目标扩展时，应明确互通边界，不得把跳过测试表述为通过。

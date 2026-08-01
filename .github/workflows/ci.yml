@@ -18,6 +18,14 @@ jobs:
         check: [lint, test, vet, race]
     steps:
       - uses: actions/checkout@v7
+        with:
+          persist-credentials: false
+      - name: Verify checkout credentials are not persisted
+        if: github.event_name == 'pull_request'
+        shell: bash
+        run: |
+          ! git config --local --get-regexp '^http\..*\.extraheader$'
+          ! git remote get-url origin | grep -Eq '(x-access-token|github_pat_|gh[opsu]_)'
       - uses: actions/setup-go@v7
         with:
           go-version-file: go.mod

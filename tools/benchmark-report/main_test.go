@@ -108,6 +108,14 @@ func TestParseReportRejectsUncoveredBenchmark(t *testing.T) {
 	}
 }
 
+func TestMarkdownTextEscapesArtifactInput(t *testing.T) {
+	const input = "<img src=x onerror=alert(1)> | `value` &"
+	const want = "&lt;img src=x onerror=alert(1)> &#124; &#96;value&#96; &amp;"
+	if got := markdownText(input); got != want {
+		t.Fatalf("markdownText(%q) = %q, want %q", input, got, want)
+	}
+}
+
 func TestCompareReports(t *testing.T) {
 	baselineInput := `commit: base
 BenchmarkConnectionHandshakeLifecycle-1 100 100 ns/op 1000 B/op 10 allocs/op

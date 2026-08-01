@@ -99,6 +99,8 @@ The benchmark workflow uses the exact wolfSSL SHA resolved for the run and execu
 
 The benchmark workflow updates the separate `benchmark-results` branch after a push to `master`. The scheduled check triggers and publishes only when the go-dtls or wolfSSL `master` SHA changed and no benchmark for that go-dtls SHA is queued or running. A pull request only updates its benchmark comment and never writes to `master` or the results branch. Do not maintain performance numbers manually in README files.
 
+Every checkout that executes pull request code must set `persist-credentials: false` and verify that neither the local Git configuration nor the origin URL contains the workflow token before repository code runs. The PR benchmark job is read-only; PR write permission exists only in the trusted `workflow_run` comment job. An untrusted benchmark artifact must be unique, size-bounded, contain only the expected regular files, and be reparsed and escaped by the report generator from the default branch; any boundary mismatch must fail.
+
 Adding or renaming any benchmark or sub-benchmark requires updating its category, order, and multilingual labels in `tools/benchmark-report`. The report generator rejects benchmark output without explicit coverage, and the benchmark workflow must pass.
 
 When a third-party implementation does not enable or support the target extension, state the interoperability boundary explicitly. Do not report a skipped test as passing.
