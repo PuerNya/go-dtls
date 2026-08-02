@@ -222,6 +222,7 @@ jobs:
             -commit "$(git rev-parse HEAD)"
             -generated "$(date -u +%Y-%m-%dT%H:%M:%SZ)"
             -wolfssl "$WOLFSSL_COMMIT (Linux Release static)"
+            -require-current-wolfssl-skip-verification="${{ github.event_name == 'pull_request' }}"
           )
           "$tool" "${common[@]}" -language zh-CN -output README.md
           "$tool" "${common[@]}" -language en -output benchmark.en.md

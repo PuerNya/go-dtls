@@ -116,7 +116,9 @@ go test -run TestInteropWolfSSL -v -count=10
 
 wolfSSL 支持目标功能时，还必须增加并运行真实 UDP 专项 benchmark，覆盖 go-dtls -> go-dtls、go-dtls -> wolfSSL、wolfSSL -> go-dtls 和 wolfSSL -> wolfSSL。将对端 commit/构建配置、workload、计时边界、五轮中位数及能力限制作为 pull request 验证证据；跨实现 benchmark 数据不写入 README。
 
-正式四向 benchmark 使用 `go test -json`。每个适用 workload 的四个方向都必须产生五轮结果，或匹配按完整 wolfSSL SHA 登记的精确 skip 原因与证据；SHA 更新、能力恢复、原因变化、未知 skip、缺失方向或样本不足都会使报告生成和 workflow 失败。允许的对端限制必须显示在报告中。
+正式四向 benchmark 使用 `go test -json`。每个适用 workload 的四个方向都必须产生五轮结果，或匹配登记的精确 skip 原因与证据；能力恢复、原因变化、未知 skip、缺失方向或样本不足都会使报告生成失败。允许的对端限制必须显示在报告中，并记录最后实际验证该限制的完整 wolfSSL SHA。
+
+提交 pull request 前，必须先解析 wolfSSL `master` 的最新完整 SHA，使用与 workflow 相同的构建选项，并设置 `GO_DTLS_PROBE_WOLFSSL_SKIPS=1` 逐一真实运行所有人工 skip 方向。能力恢复时删除对应 skip；限制仍存在时核对原因和证据，并把每个条目的 `verifiedCommit` 更新为本次 SHA。PR workflow 会解析最新 wolfSSL SHA，并拒绝任何仍指向旧 SHA 的人工 skip；`master` push、定时和发布不会只因 wolfSSL 后续更新而失败。
 
 benchmark workflow 使用本次解析的精确 wolfSSL SHA，在性能测试前执行完整互通矩阵：pull request 运行一轮，`master` push、定时和手动触发运行十轮；任一非预期失败都会阻止报告和发布。wolfSSL 构建 cache 在矩阵前保存，因此测试失败不会触发下次重复编译。
 

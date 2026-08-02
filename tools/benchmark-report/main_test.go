@@ -3,6 +3,8 @@ package main
 import (
 	"bytes"
 	"encoding/json"
+	"os"
+	"path/filepath"
 	"strings"
 	"testing"
 )
@@ -441,10 +443,8 @@ func TestValidateRealUDPMatrix(t *testing.T) {
 	if workloads := expectedRealUDPWorkloads(); len(workloads) != 15 {
 		t.Fatalf("real UDP workloads = %d, want 15", len(workloads))
 	}
-	for _, commit := range []string{previousReviewedWolfSSLCommit, reviewedWolfSSLCommit} {
-		if allowances := realUDPSkipAllowlists[commit]; len(allowances) != 4 {
-			t.Fatalf("real UDP skip allowances for %s = %d, want 4", commit, len(allowances))
-		}
+	if len(realUDPSkipAllowances) != 4 {
+		t.Fatalf("real UDP skip allowances = %d, want 4", len(realUDPSkipAllowances))
 	}
 	report := completeRealUDPReport()
 	if err := report.validateRealUDPMatrix(); err != nil {
@@ -459,6 +459,88 @@ func TestValidateRealUDPMatrix(t *testing.T) {
 	}
 	if !strings.Contains(output.String(), "不支持: wolfSSL 服务端无法完成该 DTLS 1.3 hybrid 握手") {
 		t.Fatalf("report does not expose the allowlisted reason:\n%s", output.String())
+	}
+	if !strings.Contains(output.String(), "该限制最后验证于 wolfSSL commit "+reviewedWolfSSLCommit) {
+		t.Fatalf("report does not expose the last verified wolfSSL commit:\n%s", output.String())
+	}
+	for language, want := range map[string]string{
+		"en": "last verified against wolfSSL commit " + reviewedWolfSSLCommit,
+		"ru": "последнее подтверждение для wolfSSL commit " + reviewedWolfSSLCommit,
+	} {
+		output.Reset()
+		if err := writeReport(&output, report, "", "", "", reportLanguages[language], ""); err != nil {
+			t.Fatal(err)
+		}
+		if !strings.Contains(output.String(), want) {
+			t.Fatalf("%s report does not expose the last verified wolfSSL commit:\n%s", language, output.String())
+		}
+	}
+}
+
+func TestReadReportFileAppliesWolfSSLMetadataBeforeMatrixValidation(t *testing.T) {
+	const futureCommit = "0000000000000000000000000000000000000000"
+	path := filepath.Join(t.TempDir(), "real-udp.json")
+	file, err := os.Create(path) // #nosec G304 -- path is inside the test-owned temporary directory.
+	if err != nil {
+		t.Fatal(err)
+	}
+	encoder := json.NewEncoder(file)
+	for _, workload := range expectedRealUDPWorkloads() {
+		for _, direction := range realUDPDirectionPaths {
+			name := workload + "/" + direction
+			if allowance, ok := realUDPSkipAllowances[name]; ok {
+				if err = encoder.Encode(goTestEvent{Action: "output", Test: name, Output: "    interop_test.go:1: " + allowance.output + "\n"}); err == nil {
+					err = encoder.Encode(goTestEvent{Action: "skip", Test: name})
+				}
+			} else {
+				result := name + "-2"
+				for range realUDPMatrixSamples {
+					if err = encoder.Encode(goTestEvent{Action: "output", Test: result, Output: result + "\t"}); err == nil {
+						err = encoder.Encode(goTestEvent{Action: "output", Output: "1 100 ns/op 10 B/op 1 allocs/op\n"})
+					}
+					if err != nil {
+						break
+					}
+				}
+			}
+			if err != nil {
+				_ = file.Close()
+				t.Fatal(err)
+			}
+		}
+	}
+	if err = file.Close(); err != nil {
+		t.Fatal(err)
+	}
+
+	report, err := readReportFile(path, futureCommit+" (future build)")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(report.benchmarks) != len(expectedRealUDPWorkloads())*len(realUDPDirectionPaths) {
+		t.Fatalf("matrix entries = %d, want %d", len(report.benchmarks), len(expectedRealUDPWorkloads())*len(realUDPDirectionPaths))
+	}
+	unsupported := 0
+	for _, item := range report.benchmarks {
+		if item.unsupported[0] != "" {
+			unsupported++
+			if !strings.Contains(item.unsupported[0], reviewedWolfSSLCommit) {
+				t.Fatalf("unsupported reason omitted last verified commit: %q", item.unsupported[0])
+			}
+		}
+	}
+	if unsupported != len(realUDPSkipAllowances) {
+		t.Fatalf("unsupported entries = %d, want %d", unsupported, len(realUDPSkipAllowances))
+	}
+}
+
+func TestReadReportFileRejectsConflictingWolfSSLMetadata(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "benchmark.txt")
+	if err := os.WriteFile(path, []byte("wolfssl: "+reviewedWolfSSLCommit+" (input build)\nBenchmarkProtectedRecordSeal-2 1 100 ns/op\n"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := readReportFile(path, strings.Repeat("0", 40)+" (explicit build)"); err == nil || !strings.Contains(err.Error(), "does not match explicit value") {
+		t.Fatalf("conflicting wolfSSL metadata error = %v", err)
 	}
 }
 
@@ -491,11 +573,60 @@ func TestValidateRealUDPMatrixRejectsChangedSkipReason(t *testing.T) {
 	}
 }
 
-func TestValidateRealUDPMatrixRejectsNewWolfSSLCommit(t *testing.T) {
+func TestValidateRealUDPMatrixAcceptsNewWolfSSLCommit(t *testing.T) {
 	report := completeRealUDPReport()
 	report.wolfSSL = "0000000000000000000000000000000000000000 (Linux Release static)"
-	if err := report.validateRealUDPMatrix(); err == nil || !strings.Contains(err.Error(), "no reviewed real UDP skip allowlist") {
-		t.Fatalf("new wolfSSL commit error = %v", err)
+	if err := report.validateRealUDPMatrix(); err != nil {
+		t.Fatalf("new wolfSSL commit: %v", err)
+	}
+}
+
+func TestValidateCurrentWolfSSLSkipVerification(t *testing.T) {
+	report := completeRealUDPReport()
+	if err := report.validateCurrentWolfSSLSkipVerification(); err != nil {
+		t.Fatalf("current wolfSSL skip verification: %v", err)
+	}
+
+	const name = "BenchmarkWolfSSLFeatureRealUDP/EarlyData/GoClient/WolfSSLServer"
+	original := realUDPSkipAllowances[name]
+	allowance := original
+	allowance.verifiedCommit = "0000000000000000000000000000000000000000"
+	realUDPSkipAllowances[name] = allowance
+	t.Cleanup(func() {
+		realUDPSkipAllowances[name] = original
+	})
+	if err := report.validateCurrentWolfSSLSkipVerification(); err == nil || !strings.Contains(err.Error(), "was last verified against wolfSSL commit") {
+		t.Fatalf("stale wolfSSL skip verification error = %v", err)
+	}
+}
+
+func TestValidateRealUDPMatrixRejectsMalformedWolfSSLCommit(t *testing.T) {
+	report := completeRealUDPReport()
+	report.wolfSSL = "not-a-commit (Linux Release static)"
+	if err := report.validateRealUDPMatrix(); err == nil || !strings.Contains(err.Error(), "is not a full SHA") {
+		t.Fatalf("malformed wolfSSL commit error = %v", err)
+	}
+}
+
+func TestValidateRealUDPMatrixRejectsMissingWolfSSLMetadata(t *testing.T) {
+	report := completeRealUDPReport()
+	report.wolfSSL = ""
+	if err := report.validateRealUDPMatrix(); err == nil || !strings.Contains(err.Error(), "has no wolfSSL metadata") {
+		t.Fatalf("missing wolfSSL metadata error = %v", err)
+	}
+}
+
+func TestValidateRealUDPMatrixRejectsIncompleteSkipAllowance(t *testing.T) {
+	const name = "BenchmarkWolfSSLFeatureRealUDP/EarlyData/GoClient/WolfSSLServer"
+	original := realUDPSkipAllowances[name]
+	allowance := original
+	allowance.verifiedCommit = "short"
+	realUDPSkipAllowances[name] = allowance
+	t.Cleanup(func() {
+		realUDPSkipAllowances[name] = original
+	})
+	if err := completeRealUDPReport().validateRealUDPMatrix(); err == nil || !strings.Contains(err.Error(), "is incomplete") {
+		t.Fatalf("incomplete allowance error = %v", err)
 	}
 }
 
@@ -518,11 +649,10 @@ func completeRealUDPReport() *report {
 		realUDPSkips:   make(map[string]string),
 		realUDPSamples: make(map[string]int),
 	}
-	allowances := realUDPSkipAllowlists[reviewedWolfSSLCommit]
 	for _, workload := range expectedRealUDPWorkloads() {
 		for _, direction := range realUDPDirectionPaths {
 			name := workload + "/" + direction
-			if allowance, ok := allowances[name]; ok {
+			if allowance, ok := realUDPSkipAllowances[name]; ok {
 				report.realUDPSkips[name] = allowance.output
 				report.realUDPSamples[name] = realUDPSkipSamples
 				continue

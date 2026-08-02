@@ -1105,6 +1105,7 @@ func BenchmarkHybridKeyExchangeRealUDP(b *testing.B) {
 
 func benchmarkWolfSSLFeatureDirections(b *testing.B, root, serverPath, clientPath string, feature wolfSSLBenchmarkFeature) {
 	b.Helper()
+	probeSkips := os.Getenv("GO_DTLS_PROBE_WOLFSSL_SKIPS") == "1"
 	batch := feature.batch
 	if batch == 0 {
 		batch = wolfSSLBenchmarkBatch
@@ -1118,11 +1119,15 @@ func benchmarkWolfSSLFeatureDirections(b *testing.B, root, serverPath, clientPat
 		waitForGoBenchmarkServer(b, done)
 	})
 	b.Run("GoClient/WolfSSLServer", func(b *testing.B) {
-		if feature.goClientWolfServerUnsupported != "" {
+		if feature.goClientWolfServerUnsupported != "" && !probeSkips {
 			b.Skip(feature.goClientWolfServerUnsupported)
 		}
+		probeFeature := feature
+		if probeSkips && feature.earlyData && feature.goClientWolfServerUnsupported != "" {
+			probeFeature.wolfServerOutput = append(append([]string(nil), feature.wolfServerOutput...), "Early Data Client message: benchmark early data")
+		}
 		connections := b.N * batch
-		clientConfig, _ := feature.configs()
+		clientConfig, _ := probeFeature.configs()
 		port := unusedUDPPort(b)
 		var server *exec.Cmd
 		var output *lockedBuffer
@@ -1133,16 +1138,16 @@ func benchmarkWolfSSLFeatureDirections(b *testing.B, root, serverPath, clientPat
 			}
 		}()
 		startServer := func() {
-			server, output, done = startWolfSSLBenchmarkServer(b, root, serverPath, port, 1, feature)
+			server, output, done = startWolfSSLBenchmarkServer(b, root, serverPath, port, 1, probeFeature)
 		}
 		waitServer := func() {
-			waitForWolfSSLBenchmarkServer(b, done, output, feature.wolfServerOutput)
+			waitForWolfSSLBenchmarkServer(b, done, output, probeFeature.wolfServerOutput)
 			server = nil
 		}
-		benchmarkGoClient(b, fmt.Sprintf("127.0.0.1:%d", port), clientConfig, feature, connections, true, startServer, waitServer)
+		benchmarkGoClient(b, fmt.Sprintf("127.0.0.1:%d", port), clientConfig, probeFeature, connections, true, startServer, waitServer)
 	})
 	b.Run("WolfSSLClient/GoServer", func(b *testing.B) {
-		if feature.wolfClientGoServerUnsupported != "" {
+		if feature.wolfClientGoServerUnsupported != "" && !probeSkips {
 			b.Skip(feature.wolfClientGoServerUnsupported)
 		}
 		connections := b.N * batch
@@ -1153,15 +1158,19 @@ func benchmarkWolfSSLFeatureDirections(b *testing.B, root, serverPath, clientPat
 		waitForGoBenchmarkServer(b, done)
 	})
 	b.Run("WolfSSLClient/WolfSSLServer", func(b *testing.B) {
-		if feature.wolfClientWolfServerUnsupported != "" {
+		if feature.wolfClientWolfServerUnsupported != "" && !probeSkips {
 			b.Skip(feature.wolfClientWolfServerUnsupported)
+		}
+		probeFeature := feature
+		if probeSkips && feature.earlyData && feature.wolfClientWolfServerUnsupported != "" {
+			probeFeature.wolfServerOutput = append(append([]string(nil), feature.wolfServerOutput...), "Early Data Client message: A drop of info")
 		}
 		connections := b.N * batch
 		port := unusedUDPPort(b)
-		server, output, done := startWolfSSLBenchmarkServer(b, root, serverPath, port, connections, feature)
+		server, output, done := startWolfSSLBenchmarkServer(b, root, serverPath, port, connections, probeFeature)
 		defer func() { _ = server.Process.Kill() }()
-		benchmarkWolfSSLClient(b, root, clientPath, port, connections, feature)
-		waitForWolfSSLBenchmarkServer(b, done, output, feature.wolfServerOutput)
+		benchmarkWolfSSLClient(b, root, clientPath, port, connections, probeFeature)
+		waitForWolfSSLBenchmarkServer(b, done, output, probeFeature.wolfServerOutput)
 	})
 }
 

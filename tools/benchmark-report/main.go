@@ -2,6 +2,7 @@ package main
 
 import (
 	"bufio"
+	"encoding/hex"
 	"encoding/json"
 	"errors"
 	"flag"
@@ -109,19 +110,19 @@ var realUDPDirectionPaths = [...]string{
 }
 
 const (
-	realUDPMatrixSamples          = 5
-	realUDPSkipSamples            = 1
-	previousReviewedWolfSSLCommit = "6502cdd34cab185217b44821d2bcba77383ebebe"
-	reviewedWolfSSLCommit         = "7a8aae3e40138d19c640ae5bc0bc4e8f2998c22d"
+	realUDPMatrixSamples  = 5
+	realUDPSkipSamples    = 1
+	reviewedWolfSSLCommit = "7a8aae3e40138d19c640ae5bc0bc4e8f2998c22d"
 )
 
 type realUDPSkipAllowance struct {
-	output   string
-	reason   [3]string
-	evidence string
+	output         string
+	reason         [3]string
+	evidence       string
+	verifiedCommit string
 }
 
-var reviewedRealUDPSkipAllowances = map[string]realUDPSkipAllowance{
+var realUDPSkipAllowances = map[string]realUDPSkipAllowance{
 	"BenchmarkWolfSSLFeatureRealUDP/MutualTLSSessionResumption/WolfSSLClient/GoServer": {
 		output: "wolfSSL client cannot parse the go-dtls mTLS session ticket",
 		reason: [3]string{
@@ -129,7 +130,8 @@ var reviewedRealUDPSkipAllowances = map[string]realUDPSkipAllowance{
 			"wolfSSL 客户端无法解析 go-dtls 的 mTLS session ticket",
 			"Клиент wolfSSL не может разобрать mTLS session ticket от go-dtls",
 		},
-		evidence: "TestInteropWolfSSLClientMutualTLSSessionResumption: wolfSSL_connect resume error -328, malformed buffer input error",
+		evidence:       "TestInteropWolfSSLClientMutualTLSSessionResumption: wolfSSL_connect resume error -328, malformed buffer input error",
+		verifiedCommit: reviewedWolfSSLCommit,
 	},
 	"BenchmarkWolfSSLFeatureRealUDP/EarlyData/GoClient/WolfSSLServer": {
 		output: "wolfSSL server rejects go-dtls 0-RTT after HelloRetryRequest",
@@ -138,7 +140,8 @@ var reviewedRealUDPSkipAllowances = map[string]realUDPSkipAllowance{
 			"wolfSSL 服务端在 HelloRetryRequest 后拒绝 go-dtls 0-RTT",
 			"Сервер wolfSSL отклоняет 0-RTT go-dtls после HelloRetryRequest",
 		},
-		evidence: "TestInteropWolfSSLServerEarlyData: wolfSSL server rejects 0-RTT after its DTLS HelloRetryRequest",
+		evidence:       "TestInteropWolfSSLServerEarlyData: wolfSSL server rejects 0-RTT after its DTLS HelloRetryRequest",
+		verifiedCommit: reviewedWolfSSLCommit,
 	},
 	"BenchmarkWolfSSLFeatureRealUDP/EarlyData/WolfSSLClient/WolfSSLServer": {
 		output: "wolfSSL server rejects wolfSSL client 0-RTT after HelloRetryRequest",
@@ -147,7 +150,8 @@ var reviewedRealUDPSkipAllowances = map[string]realUDPSkipAllowance{
 			"wolfSSL 服务端在 HelloRetryRequest 后拒绝 wolfSSL 客户端 0-RTT",
 			"Сервер wolfSSL отклоняет 0-RTT клиента wolfSSL после HelloRetryRequest",
 		},
-		evidence: "wolfSSL 5.9.2 client/server output: Early Data was not sent",
+		evidence:       "wolfSSL 5.9.2 client/server output: Early Data was not sent",
+		verifiedCommit: reviewedWolfSSLCommit,
 	},
 	"BenchmarkHybridKeyExchangeRealUDP/SecP384r1MLKEM1024/GoClient/WolfSSLServer": {
 		output: "wolfSSL server does not complete this DTLS 1.3 hybrid handshake",
@@ -156,13 +160,9 @@ var reviewedRealUDPSkipAllowances = map[string]realUDPSkipAllowance{
 			"wolfSSL 服务端无法完成该 DTLS 1.3 hybrid 握手",
 			"Сервер wolfSSL не завершает это гибридное рукопожатие DTLS 1.3",
 		},
-		evidence: "TestInteropWolfSSLServerHybridKeyExchange/SecP384r1MLKEM1024",
+		evidence:       "TestInteropWolfSSLServerHybridKeyExchange/SecP384r1MLKEM1024",
+		verifiedCommit: reviewedWolfSSLCommit,
 	},
-}
-
-var realUDPSkipAllowlists = map[string]map[string]realUDPSkipAllowance{
-	previousReviewedWolfSSLCommit: reviewedRealUDPSkipAllowances,
-	reviewedWolfSSLCommit:         reviewedRealUDPSkipAllowances,
 }
 
 var reportLanguages = map[string]reportLanguage{
@@ -570,6 +570,7 @@ func main() {
 	timeRegressionPercent := flag.Float64("time-regression-percent", 5, "paired median time regression that fails the gate")
 	allowWorkloadChange := flag.Bool("allow-workload-change", false, "allow benchmark workload source changes")
 	failOnRegression := flag.Bool("fail-on-regression", true, "exit unsuccessfully when the comparison fails")
+	requireCurrentWolfSSLSkipVerification := flag.Bool("require-current-wolfssl-skip-verification", false, "require every real UDP skip to be verified against the report's wolfSSL commit")
 	flag.Parse()
 	if *output == "" {
 		flag.Usage()
@@ -584,11 +585,11 @@ func main() {
 			flag.Usage()
 			os.Exit(2)
 		}
-		baselineReport, err := readReportFile(*baseline)
+		baselineReport, err := readReportFile(*baseline, "")
 		if err != nil {
 			fatal(err)
 		}
-		candidateReport, err := readReportFile(*candidate)
+		candidateReport, err := readReportFile(*candidate, "")
 		if err != nil {
 			fatal(err)
 		}
@@ -609,9 +610,14 @@ func main() {
 		os.Exit(2)
 	}
 
-	result, err := readReportFile(*input)
+	result, err := readReportFile(*input, *wolfSSL)
 	if err != nil {
 		fatal(err)
+	}
+	if *requireCurrentWolfSSLSkipVerification {
+		if err = result.validateCurrentWolfSSLSkipVerification(); err != nil {
+			fatal(err)
+		}
 	}
 
 	out, err := os.Create(*output) // #nosec G304 -- path is an explicit local command argument.
@@ -632,7 +638,7 @@ func main() {
 	}
 }
 
-func readReportFile(path string) (*report, error) {
+func readReportFile(path, wolfSSL string) (*report, error) {
 	in, err := os.Open(path) // #nosec G304 -- path is an explicit local command argument.
 	if err != nil {
 		return nil, err
@@ -644,6 +650,12 @@ func readReportFile(path string) (*report, error) {
 	}
 	if closeErr != nil {
 		return nil, closeErr
+	}
+	if wolfSSL != "" {
+		if result.wolfSSL != "" && result.wolfSSL != wolfSSL {
+			return nil, fmt.Errorf("wolfSSL metadata %q does not match explicit value %q", result.wolfSSL, wolfSSL)
+		}
+		result.wolfSSL = wolfSSL
 	}
 	if err = result.validateRealUDPMatrix(); err != nil {
 		return nil, err
@@ -812,16 +824,17 @@ func isRealUDPBenchmark(name string) bool {
 
 func (r *report) validateRealUDPMatrix() error {
 	if r.wolfSSL == "" {
+		if r.realUDPJSON {
+			return errors.New("structured real UDP matrix has no wolfSSL metadata")
+		}
 		return nil
 	}
 	fields := strings.Fields(r.wolfSSL)
 	if len(fields) == 0 {
 		return errors.New("wolfSSL metadata has no commit")
 	}
-	commit := fields[0]
-	allowances, ok := realUDPSkipAllowlists[commit]
-	if !ok {
-		return fmt.Errorf("wolfSSL commit %q has no reviewed real UDP skip allowlist", commit)
+	if !isFullCommit(fields[0]) {
+		return fmt.Errorf("wolfSSL metadata commit %q is not a full SHA", fields[0])
 	}
 	if !r.realUDPJSON {
 		return errors.New("wolfSSL benchmark report has no structured real UDP matrix")
@@ -834,11 +847,11 @@ func (r *report) validateRealUDPMatrix() error {
 			expected[workload+"/"+direction] = struct{}{}
 		}
 	}
-	for name, allowance := range allowances {
+	for name, allowance := range realUDPSkipAllowances {
 		if _, ok := expected[name]; !ok {
 			return fmt.Errorf("real UDP skip allowlist contains unknown direction %q", name)
 		}
-		if allowance.output == "" || allowance.evidence == "" || allowance.reason[0] == "" || allowance.reason[1] == "" || allowance.reason[2] == "" {
+		if allowance.output == "" || allowance.evidence == "" || !isFullCommit(allowance.verifiedCommit) || allowance.reason[0] == "" || allowance.reason[1] == "" || allowance.reason[2] == "" {
 			return fmt.Errorf("real UDP skip allowlist entry %q is incomplete", name)
 		}
 	}
@@ -868,7 +881,7 @@ func (r *report) validateRealUDPMatrix() error {
 			name := workload + "/" + direction
 			item, hasResult := results[name]
 			reason, skipped := r.realUDPSkips[name]
-			allowance, allowed := allowances[name]
+			allowance, allowed := realUDPSkipAllowances[name]
 			if hasResult && skipped {
 				return fmt.Errorf("real UDP direction %q produced both a result and a skip", name)
 			}
@@ -902,6 +915,27 @@ func (r *report) validateRealUDPMatrix() error {
 	return nil
 }
 
+func (r *report) validateCurrentWolfSSLSkipVerification() error {
+	fields := strings.Fields(r.wolfSSL)
+	if len(fields) == 0 {
+		return errors.New("wolfSSL metadata has no commit")
+	}
+	for name, allowance := range realUDPSkipAllowances {
+		if allowance.verifiedCommit != fields[0] {
+			return fmt.Errorf("real UDP skip allowance %q was last verified against wolfSSL commit %q, want current commit %q", name, allowance.verifiedCommit, fields[0])
+		}
+	}
+	return nil
+}
+
+func isFullCommit(commit string) bool {
+	if len(commit) != 40 {
+		return false
+	}
+	_, err := hex.DecodeString(commit)
+	return err == nil
+}
+
 func realUDPBenchmarkName(name string) string {
 	if index := strings.LastIndexByte(name, '-'); index >= 0 {
 		if _, err := strconv.ParseUint(name[index+1:], 10, 64); err == nil {
@@ -925,7 +959,11 @@ func expectedRealUDPWorkloads() []string {
 }
 
 func (r *report) addUnsupportedRealUDP(name string, allowance realUDPSkipAllowance) {
-	item := &benchmark{name: name, samples: r.realUDPSamples[name], byUnit: make(map[string]*metric), unsupported: allowance.reason}
+	reason := allowance.reason
+	reason[0] += "; last verified against wolfSSL commit " + allowance.verifiedCommit
+	reason[1] += "；该限制最后验证于 wolfSSL commit " + allowance.verifiedCommit
+	reason[2] += "; последнее подтверждение для wolfSSL commit " + allowance.verifiedCommit
+	item := &benchmark{name: name, samples: r.realUDPSamples[name], byUnit: make(map[string]*metric), unsupported: reason}
 	r.byName[name] = item
 	r.benchmarks = append(r.benchmarks, item)
 }
