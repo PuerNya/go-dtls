@@ -2,10 +2,10 @@
 
 [简体中文](README.md) | [English](benchmark.en.md) | [Русский](benchmark.ru.md)
 
-- Commit: `bdf1290d8aa1edc71ac136266046d72816d5ae14`
-- Generated: `2026-10-02T03:10:01Z`
-- Go: `go version go1.26.8 linux/amd64`
-- Platform: `linux/amd64, AMD EPYC 7763 64-Core Processor`
+- Commit: `cbf2e3ffed88e32107fe483dc45b3833bd409f48`
+- Generated: `2026-10-02T09:28:40Z`
+- Go: `go version go1.27.1 linux/amd64`
+- Platform: `linux/amd64, INTEL(R) XEON(R) PLATINUM 8573C`
 - wolfSSL: `c707096f6d6bfde11d895257af6c171461f569a8 (Linux Release static)`
 
 181 results, grouped by workload and ordered by feature, then benchmark name. Values are medians of the samples emitted by the final benchmark run.
@@ -30,24 +30,24 @@ Workload-specific connection metrics are preferred over the Go harness time. Mem
 
 | Benchmark | Samples | Median time | Harness memory | Harness allocations |
 | --- | :---: | :---: | :---: | :---: |
-| Certificate-authenticated full handshake / AES-128-GCM | 5 | 558.095 us/op | 94505 B/op | 688 allocs/op |
-| Full mTLS handshake | 5 | 820.718 us/op | 108518 B/op | 865 allocs/op |
-| mTLS session resumption handshake | 5 | 416.477 us/op | 116107 B/op | 805 allocs/op |
-| Multi-certificate mTLS selection by CA and OID filters | 5 | 1.068 ms/op | 116428 B/op | 1040 allocs/op |
-| Multi-certificate post-handshake authentication selection | 5 | 1.451 ms/op | 135128 B/op | 1334 allocs/op |
-| Full handshake + 4 acknowledged session tickets | 5 | 659.277 us/op | 113731 B/op | 912 allocs/op |
-| Full mTLS handshake + session ticket / GREASE disabled | 5 | 890.907 us/op | 117769 B/op | 937 allocs/op |
-| Full mTLS handshake + session ticket / GREASE enabled | 5 | 895.45 us/op | 117769 B/op | 937 allocs/op |
-| Direct external PSK handshake | 5 | 353.439 us/op | 98141 B/op | 724 allocs/op |
-| Full server-certificate handshake / uncompressed certificate | 5 | 1.024 ms/op | 126178 B/op | 970 allocs/op |
-| zlib-compressed server-certificate handshake | 5 | 1.019 ms/op | 118539 B/op | 949 allocs/op |
-| Full mTLS handshake / uncompressed certificates | 5 | 1.709 ms/op | 165286 B/op | 1397 allocs/op |
-| zlib-compressed mTLS handshake | 5 | 1.723 ms/op | 153122 B/op | 1358 allocs/op |
-| ECH handshake / direct (no HRR) | 5 | 943.562 us/op | 143818 B/op | 1188 allocs/op |
-| ECH handshake / via HRR | 5 | 960.834 us/op | 146594 B/op | 1209 allocs/op |
-| Post-quantum hybrid key exchange / X25519MLKEM768 | 5 | 879.652 us/op | 142340 B/op | 720 allocs/op |
-| Post-quantum hybrid key exchange / SecP256r1MLKEM768 | 5 | 824.299 us/op | 145540 B/op | 750 allocs/op |
-| Post-quantum hybrid key exchange / SecP384r1MLKEM1024 | 5 | 2.048 ms/op | 170982 B/op | 768 allocs/op |
+| Certificate-authenticated full handshake / AES-128-GCM | 5 | 474.749 us/op | 94505 B/op | 688 allocs/op |
+| Full mTLS handshake | 5 | 721.434 us/op | 108519 B/op | 865 allocs/op |
+| mTLS session resumption handshake | 5 | 388.415 us/op | 116062 B/op | 804 allocs/op |
+| Multi-certificate mTLS selection by CA and OID filters | 5 | 927.693 us/op | 116149 B/op | 1038 allocs/op |
+| Multi-certificate post-handshake authentication selection | 5 | 1.241 ms/op | 135145 B/op | 1334 allocs/op |
+| Full handshake + 4 acknowledged session tickets | 5 | 565.563 us/op | 113728 B/op | 912 allocs/op |
+| Full mTLS handshake + session ticket / GREASE disabled | 5 | 764.427 us/op | 117769 B/op | 937 allocs/op |
+| Full mTLS handshake + session ticket / GREASE enabled | 5 | 780.842 us/op | 117769 B/op | 937 allocs/op |
+| Direct external PSK handshake | 5 | 320.461 us/op | 98142 B/op | 724 allocs/op |
+| Full server-certificate handshake / uncompressed certificate | 5 | 918.913 us/op | 126177 B/op | 970 allocs/op |
+| zlib-compressed server-certificate handshake | 5 | 910.967 us/op | 118537 B/op | 949 allocs/op |
+| Full mTLS handshake / uncompressed certificates | 5 | 1.487 ms/op | 165283 B/op | 1397 allocs/op |
+| zlib-compressed mTLS handshake | 5 | 1.484 ms/op | 153121 B/op | 1358 allocs/op |
+| ECH handshake / direct (no HRR) | 5 | 858.214 us/op | 143819 B/op | 1188 allocs/op |
+| ECH handshake / via HRR | 5 | 874.443 us/op | 146595 B/op | 1209 allocs/op |
+| Post-quantum hybrid key exchange / X25519MLKEM768 | 5 | 773.474 us/op | 142339 B/op | 720 allocs/op |
+| Post-quantum hybrid key exchange / SecP256r1MLKEM768 | 5 | 735.612 us/op | 145539 B/op | 750 allocs/op |
+| Post-quantum hybrid key exchange / SecP384r1MLKEM1024 | 5 | 1.869 ms/op | 170980 B/op | 768 allocs/op |
 
 <a id="section-real-udp-interoperability"></a>
 ## Real UDP interoperability
@@ -59,21 +59,21 @@ Median time is measured by the go-dtls client; `ms/conn` means one complete conn
 
 | Benchmark | Samples | Median time | Harness memory | Harness allocations |
 | --- | :---: | :---: | :---: | :---: |
-| Certificate-authenticated full handshake / AES-128-GCM | 5 | 1.889 ms/conn | 2410368 B/op | 20795 allocs/op |
-| 1-RTT application-data round trip | 5 | 1.953 ms/conn | 2419040 B/op | 21115 allocs/op |
-| Full mTLS handshake | 5 | 3.325 ms/conn | 3085520 B/op | 28767 allocs/op |
-| GREASE compatibility / full mTLS handshake + session ticket | 5 | 4.588 ms/conn | 3580520 B/op | 30779 allocs/op |
-| Certificate-authenticated full handshake / AES-128-CCM | 5 | 1.927 ms/conn | 2899440 B/op | 24725 allocs/op |
-| Direct external PSK handshake | 5 | 0.5056 ms/conn | 1659104 B/op | 14233 allocs/op |
-| CID + 1-RTT application-data round trip | 5 | 1.903 ms/conn | 2430328 B/op | 21912 allocs/op |
-| KeyUpdate + 1-RTT application-data round trip | 5 | 2.013 ms/conn | 2587728 B/op | 22428 allocs/op |
-| PHA + 1-RTT application-data round trip | 5 | 4.967 ms/conn | 3880584 B/op | 38872 allocs/op |
-| Session resumption handshake | 5 | 0.5632 ms/conn | 4293640 B/op | 37039 allocs/op |
-| mTLS session resumption handshake | 5 | 0.6476 ms/conn | 6302568 B/op | 48611 allocs/op |
-| 0-RTT + 1-RTT application-data round trip | 5 | 0.6094 ms/conn | 279896 B/op | 1848 allocs/op |
-| Post-quantum hybrid key exchange / X25519MLKEM768 | 5 | 2.243 ms/conn | 3281832 B/op | 21118 allocs/op |
-| Post-quantum hybrid key exchange / SecP256r1MLKEM768 | 5 | 2.214 ms/conn | 3320872 B/op | 21438 allocs/op |
-| Post-quantum hybrid key exchange / SecP384r1MLKEM1024 | 5 | 3.401 ms/conn | 3816552 B/op | 21798 allocs/op |
+| Certificate-authenticated full handshake / AES-128-GCM | 5 | 1.434 ms/conn | 2410368 B/op | 20795 allocs/op |
+| 1-RTT application-data round trip | 5 | 1.436 ms/conn | 2419040 B/op | 21115 allocs/op |
+| Full mTLS handshake | 5 | 2.525 ms/conn | 3086264 B/op | 28776 allocs/op |
+| GREASE compatibility / full mTLS handshake + session ticket | 5 | 3.773 ms/conn | 3578824 B/op | 30786 allocs/op |
+| Certificate-authenticated full handshake / AES-128-CCM | 5 | 1.443 ms/conn | 2899440 B/op | 24725 allocs/op |
+| Direct external PSK handshake | 5 | 0.3373 ms/conn | 1659104 B/op | 14233 allocs/op |
+| CID + 1-RTT application-data round trip | 5 | 1.412 ms/conn | 2430336 B/op | 21913 allocs/op |
+| KeyUpdate + 1-RTT application-data round trip | 5 | 1.499 ms/conn | 2587728 B/op | 22428 allocs/op |
+| PHA + 1-RTT application-data round trip | 5 | 3.888 ms/conn | 3878976 B/op | 38876 allocs/op |
+| Session resumption handshake | 5 | 0.4129 ms/conn | 4293592 B/op | 37025 allocs/op |
+| mTLS session resumption handshake | 5 | 0.4891 ms/conn | 6303560 B/op | 48624 allocs/op |
+| 0-RTT + 1-RTT application-data round trip | 5 | 0.4555 ms/conn | 279896 B/op | 1848 allocs/op |
+| Post-quantum hybrid key exchange / X25519MLKEM768 | 5 | 1.751 ms/conn | 3281832 B/op | 21118 allocs/op |
+| Post-quantum hybrid key exchange / SecP256r1MLKEM768 | 5 | 1.723 ms/conn | 3320872 B/op | 21438 allocs/op |
+| Post-quantum hybrid key exchange / SecP384r1MLKEM1024 | 5 | 2.834 ms/conn | 3816552 B/op | 21798 allocs/op |
 
 <a id="real-udp-go-dtls-client-wolfssl-server"></a>
 ### go-dtls client -> wolfSSL server
@@ -82,20 +82,20 @@ Median time is measured by the go-dtls client; `ms/conn` means one complete conn
 
 | Benchmark | Samples | Median time | Harness memory | Harness allocations |
 | --- | :---: | :---: | :---: | :---: |
-| Certificate-authenticated full handshake / AES-128-GCM | 5 | 4.696 ms/conn | 1157904 B/op | 10562 allocs/op |
-| 1-RTT application-data round trip | 5 | 4.83 ms/conn | 1176624 B/op | 10822 allocs/op |
-| Full mTLS handshake | 5 | 6.22 ms/conn | 1311024 B/op | 11342 allocs/op |
-| GREASE compatibility / full mTLS handshake + session ticket | 5 | 6.185 ms/conn | 1311024 B/op | 11342 allocs/op |
-| Certificate-authenticated full handshake / AES-128-CCM | 5 | 4.653 ms/conn | 1396304 B/op | 12122 allocs/op |
-| Direct external PSK handshake | 5 | 0.9581 ms/conn | 784944 B/op | 6702 allocs/op |
-| CID + 1-RTT application-data round trip | 5 | 4.643 ms/conn | 1165104 B/op | 11122 allocs/op |
-| KeyUpdate + 1-RTT application-data round trip | 5 | 4.826 ms/conn | 1412624 B/op | 12162 allocs/op |
-| PHA + 1-RTT application-data round trip | 5 | 6.087 ms/conn | 1370512 B/op | 12184 allocs/op |
-| Session resumption handshake | 5 | 1.067 ms/conn | 2069744 B/op | 18002 allocs/op |
-| mTLS session resumption handshake | 5 | 1.111 ms/conn | 2228304 B/op | 18822 allocs/op |
+| Certificate-authenticated full handshake / AES-128-GCM | 5 | 3.708 ms/conn | 1157904 B/op | 10562 allocs/op |
+| 1-RTT application-data round trip | 5 | 3.794 ms/conn | 1176624 B/op | 10822 allocs/op |
+| Full mTLS handshake | 5 | 4.821 ms/conn | 1311024 B/op | 11342 allocs/op |
+| GREASE compatibility / full mTLS handshake + session ticket | 5 | 4.853 ms/conn | 1311024 B/op | 11342 allocs/op |
+| Certificate-authenticated full handshake / AES-128-CCM | 5 | 3.669 ms/conn | 1396304 B/op | 12122 allocs/op |
+| Direct external PSK handshake | 5 | 0.8656 ms/conn | 784944 B/op | 6702 allocs/op |
+| CID + 1-RTT application-data round trip | 5 | 3.689 ms/conn | 1165104 B/op | 11122 allocs/op |
+| KeyUpdate + 1-RTT application-data round trip | 5 | 3.871 ms/conn | 1412624 B/op | 12162 allocs/op |
+| PHA + 1-RTT application-data round trip | 5 | 4.854 ms/conn | 1381776 B/op | 12195 allocs/op |
+| Session resumption handshake | 5 | 0.904 ms/conn | 2069744 B/op | 18002 allocs/op |
+| mTLS session resumption handshake | 5 | 0.9045 ms/conn | 2228304 B/op | 18822 allocs/op |
 | 0-RTT + 1-RTT application-data round trip | - | Unsupported: wolfSSL server rejects go-dtls 0-RTT after HelloRetryRequest; last verified against wolfSSL commit 7a8aae3e40138d19c640ae5bc0bc4e8f2998c22d | - | - |
-| Post-quantum hybrid key exchange / X25519MLKEM768 | 5 | 4.781 ms/conn | 1829424 B/op | 10762 allocs/op |
-| Post-quantum hybrid key exchange / SecP256r1MLKEM768 | 5 | 5.792 ms/conn | 1841904 B/op | 10882 allocs/op |
+| Post-quantum hybrid key exchange / X25519MLKEM768 | 5 | 3.954 ms/conn | 1829440 B/op | 10762 allocs/op |
+| Post-quantum hybrid key exchange / SecP256r1MLKEM768 | 5 | 4.851 ms/conn | 1841904 B/op | 10882 allocs/op |
 | Post-quantum hybrid key exchange / SecP384r1MLKEM1024 | - | Unsupported: wolfSSL server does not complete this DTLS 1.3 hybrid handshake; last verified against wolfSSL commit 7a8aae3e40138d19c640ae5bc0bc4e8f2998c22d | - | - |
 
 <a id="real-udp-wolfssl-client-go-dtls-server"></a>
@@ -105,21 +105,21 @@ Median time is measured by the wolfSSL client; `ms/conn` means one connection, w
 
 | Benchmark | Samples | Median time | Harness memory | Harness allocations |
 | --- | :---: | :---: | :---: | :---: |
-| Certificate-authenticated full handshake / AES-128-GCM | 5 | 2.234 ms/conn | 1229024 B/op | 8975 allocs/op |
-| 1-RTT application-data round trip | 5 | 4.821 ms/conn | 1733464 B/op | 10465 allocs/op |
-| Full mTLS handshake | 5 | 5.828 ms/conn | 1666280 B/op | 14428 allocs/op |
-| GREASE compatibility / full mTLS handshake + session ticket | 5 | 5.883 ms/conn | 1869392 B/op | 14945 allocs/op |
-| Certificate-authenticated full handshake / AES-128-CCM | 5 | 2.161 ms/conn | 1293984 B/op | 9895 allocs/op |
-| Direct external PSK handshake | 5 | 0.808 ms/conn | 900752 B/op | 7195 allocs/op |
-| CID + 1-RTT application-data round trip | 5 | 4.87 ms/conn | 1745328 B/op | 11025 allocs/op |
-| KeyUpdate + 1-RTT application-data round trip | 5 | 4.886 ms/conn | 1908984 B/op | 12105 allocs/op |
-| PHA + 1-RTT application-data round trip | 5 | 12.38 ms/conn | 2640016 B/op | 22178 allocs/op |
-| Session resumption handshake | 5 | 1009 ms/pair | 2774104 B/op | 19425 allocs/op |
+| Certificate-authenticated full handshake / AES-128-GCM | 5 | 1.76 ms/conn | 1229024 B/op | 8975 allocs/op |
+| 1-RTT application-data round trip | 5 | 3.997 ms/conn | 1733464 B/op | 10465 allocs/op |
+| Full mTLS handshake | 5 | 4.533 ms/conn | 1665784 B/op | 14422 allocs/op |
+| GREASE compatibility / full mTLS handshake + session ticket | 5 | 4.516 ms/conn | 1868928 B/op | 14939 allocs/op |
+| Certificate-authenticated full handshake / AES-128-CCM | 5 | 1.691 ms/conn | 1293984 B/op | 9895 allocs/op |
+| Direct external PSK handshake | 5 | 0.57 ms/conn | 900752 B/op | 7195 allocs/op |
+| CID + 1-RTT application-data round trip | 5 | 4.022 ms/conn | 1745336 B/op | 11026 allocs/op |
+| KeyUpdate + 1-RTT application-data round trip | 5 | 4.12 ms/conn | 1908984 B/op | 12105 allocs/op |
+| PHA + 1-RTT application-data round trip | 5 | 10.43 ms/conn | 2640264 B/op | 22178 allocs/op |
+| Session resumption handshake | 5 | 1007 ms/pair | 2774104 B/op | 19425 allocs/op |
 | mTLS session resumption handshake | - | Unsupported: wolfSSL client cannot parse the go-dtls mTLS session ticket; last verified against wolfSSL commit 7a8aae3e40138d19c640ae5bc0bc4e8f2998c22d | - | - |
-| 0-RTT + 1-RTT application-data round trip | 5 | 1008 ms/pair | 201928 B/op | 961 allocs/op |
-| Post-quantum hybrid key exchange / X25519MLKEM768 | 5 | 2.36 ms/conn | 1476032 B/op | 9455 allocs/op |
-| Post-quantum hybrid key exchange / SecP256r1MLKEM768 | 5 | 3.421 ms/conn | 1496192 B/op | 9595 allocs/op |
-| Post-quantum hybrid key exchange / SecP384r1MLKEM1024 | 5 | 6.487 ms/conn | 1655072 B/op | 9775 allocs/op |
+| 0-RTT + 1-RTT application-data round trip | 5 | 1007 ms/pair | 201928 B/op | 961 allocs/op |
+| Post-quantum hybrid key exchange / X25519MLKEM768 | 5 | 1.949 ms/conn | 1476032 B/op | 9455 allocs/op |
+| Post-quantum hybrid key exchange / SecP256r1MLKEM768 | 5 | 2.859 ms/conn | 1496192 B/op | 9595 allocs/op |
+| Post-quantum hybrid key exchange / SecP384r1MLKEM1024 | 5 | 5.422 ms/conn | 1655072 B/op | 9775 allocs/op |
 
 <a id="real-udp-wolfssl-client-wolfssl-server"></a>
 ### wolfSSL client -> wolfSSL server
@@ -128,147 +128,147 @@ Median time is measured by the wolfSSL client; `ms/conn` means one connection, w
 
 | Benchmark | Samples | Median time | Harness memory | Harness allocations |
 | --- | :---: | :---: | :---: | :---: |
-| Certificate-authenticated full handshake / AES-128-GCM | 5 | 4.303 ms/conn | 34904 B/op | 53 allocs/op |
-| 1-RTT application-data round trip | 5 | 7.685 ms/conn | 543560 B/op | 1185 allocs/op |
-| Full mTLS handshake | 5 | 8.243 ms/conn | 34872 B/op | 53 allocs/op |
-| GREASE compatibility / full mTLS handshake + session ticket | 5 | 7.968 ms/conn | 34872 B/op | 53 allocs/op |
-| Certificate-authenticated full handshake / AES-128-CCM | 5 | 4.3 ms/conn | 34904 B/op | 53 allocs/op |
-| Direct external PSK handshake | 5 | 0.926 ms/conn | 34952 B/op | 53 allocs/op |
-| CID + 1-RTT application-data round trip | 5 | 7.964 ms/conn | 554632 B/op | 1186 allocs/op |
-| KeyUpdate + 1-RTT application-data round trip | 5 | 7.559 ms/conn | 543808 B/op | 1183 allocs/op |
-| PHA + 1-RTT application-data round trip | 5 | 11.22 ms/conn | 551680 B/op | 1184 allocs/op |
-| Session resumption handshake | 5 | 1012 ms/pair | 558472 B/op | 1186 allocs/op |
-| mTLS session resumption handshake | 5 | 1016 ms/pair | 557832 B/op | 1186 allocs/op |
+| Certificate-authenticated full handshake / AES-128-GCM | 5 | 3.491 ms/conn | 34904 B/op | 53 allocs/op |
+| 1-RTT application-data round trip | 5 | 6.03 ms/conn | 543488 B/op | 1183 allocs/op |
+| Full mTLS handshake | 5 | 6.154 ms/conn | 34944 B/op | 55 allocs/op |
+| GREASE compatibility / full mTLS handshake + session ticket | 5 | 6.166 ms/conn | 34872 B/op | 53 allocs/op |
+| Certificate-authenticated full handshake / AES-128-CCM | 5 | 3.49 ms/conn | 34904 B/op | 53 allocs/op |
+| Direct external PSK handshake | 5 | 0.785 ms/conn | 34952 B/op | 53 allocs/op |
+| CID + 1-RTT application-data round trip | 5 | 6.222 ms/conn | 554584 B/op | 1185 allocs/op |
+| KeyUpdate + 1-RTT application-data round trip | 5 | 6.314 ms/conn | 543808 B/op | 1183 allocs/op |
+| PHA + 1-RTT application-data round trip | 5 | 9.484 ms/conn | 551680 B/op | 1184 allocs/op |
+| Session resumption handshake | 5 | 1010 ms/pair | 558400 B/op | 1184 allocs/op |
+| mTLS session resumption handshake | 5 | 1013 ms/pair | 557760 B/op | 1184 allocs/op |
 | 0-RTT + 1-RTT application-data round trip | - | Unsupported: wolfSSL server rejects wolfSSL client 0-RTT after HelloRetryRequest; last verified against wolfSSL commit 7a8aae3e40138d19c640ae5bc0bc4e8f2998c22d | - | - |
-| Post-quantum hybrid key exchange / X25519MLKEM768 | 5 | 4.457 ms/conn | 34888 B/op | 53 allocs/op |
-| Post-quantum hybrid key exchange / SecP256r1MLKEM768 | 5 | 6.719 ms/conn | 34888 B/op | 53 allocs/op |
-| Post-quantum hybrid key exchange / SecP384r1MLKEM1024 | 5 | 11.51 ms/conn | 34888 B/op | 53 allocs/op |
+| Post-quantum hybrid key exchange / X25519MLKEM768 | 5 | 3.61 ms/conn | 34960 B/op | 55 allocs/op |
+| Post-quantum hybrid key exchange / SecP256r1MLKEM768 | 5 | 5.337 ms/conn | 34888 B/op | 53 allocs/op |
+| Post-quantum hybrid key exchange / SecP384r1MLKEM1024 | 5 | 9.246 ms/conn | 34912 B/op | 54 allocs/op |
 
 <a id="section-record-layer-and-reliability"></a>
 ## Record layer and reliability
 
 | Benchmark | Samples | Median time | Throughput | Harness memory | Harness allocations |
 | --- | :---: | :---: | :---: | :---: | :---: |
-| Plain ACK build / Empty | 5 | 39.74 ns/op | - | 16 B/op | 1 allocs/op |
-| Plain ACK build / Single | 5 | 51.02 ns/op | - | 32 B/op | 1 allocs/op |
-| Plain ACK build / Sorted64 | 5 | 539.9 ns/op | - | 1152 B/op | 1 allocs/op |
-| Build Plain Flight | 5 | 2.537 us/op | 1614.78 MB/s | 5040 B/op | 9 allocs/op |
-| Protected ACK build / Reversed64 | 5 | 1.774 us/op | - | 2200 B/op | 3 allocs/op |
-| Protected ACK build / Single | 5 | 217.3 ns/op | - | 72 B/op | 2 allocs/op |
-| Protected ACK build / Single Reuse | 5 | 177.5 ns/op | - | 48 B/op | 1 allocs/op |
-| Protected ACK build / Sorted64 | 5 | 1.006 us/op | - | 1176 B/op | 2 allocs/op |
-| Build Protected Flight | 5 | 3.956 us/op | 1035.38 MB/s | 5616 B/op | 6 allocs/op |
-| Combine Flights | 5 | 392.1 ns/op | - | 624 B/op | 4 allocs/op |
-| Flight First Refresh | 5 | 114.5 ns/op | - | 0 B/op | 0 allocs/op |
-| Flight Initial History Batch | 5 | 366.7 ns/op | - | 480 B/op | 1 allocs/op |
-| Flight Pending Indices / Allocated | 5 | 78.91 ns/op | - | 80 B/op | 1 allocs/op |
-| Flight Pending Indices / Reuse Window | 5 | 43.18 ns/op | - | 0 B/op | 0 allocs/op |
-| Flight Wire Window / Pending | 5 | 45.97 ns/op | - | 0 B/op | 0 allocs/op |
-| Flight Wire Window / Retransmit | 5 | 40.48 ns/op | - | 0 B/op | 0 allocs/op |
-| Inbox / Single fragment | 5 | 562.7 ns/op | 2132.7 MB/s | 1312 B/op | 2 allocs/op |
-| Inbox / Fragment batch | 5 | 505 ns/op | 2376.27 MB/s | 1280 B/op | 1 allocs/op |
-| Inbox / Fragment reuse | 5 | 536.8 ns/op | 2235.37 MB/s | 1280 B/op | 1 allocs/op |
-| Handshake Reassembly | 5 | 26.915 us/op | 2434.9 MB/s | 73856 B/op | 3 allocs/op |
-| Handshake Reassembly Single Fragment | 5 | 472.5 ns/op | 2539.95 MB/s | 1280 B/op | 1 allocs/op |
-| Parse ACK / Owned | 5 | 28.22 ns/op | - | 16 B/op | 1 allocs/op |
-| Parse ACK / Reuse Single | 5 | 4.362 ns/op | - | 0 B/op | 0 allocs/op |
-| Protected Record CID / Round Trip | 5 | 2.73 us/op | 439.63 MB/s | 3840 B/op | 3 allocs/op |
-| Protected Record CID / Seal | 5 | 990.6 ns/op | 1211.36 MB/s | 1280 B/op | 1 allocs/op |
-| Reject unauthenticated record | 5 | 11.54 ns/op | - | 0 B/op | 0 allocs/op |
-| Record round trip | 5 | 3.065 us/op | 391.47 MB/s | 3840 B/op | 3 allocs/op |
-| Protected Record Round Trip In Place | 5 | 1.551 us/op | 773.57 MB/s | 1280 B/op | 1 allocs/op |
-| Record round trip / AES-128-CCM | 5 | 7.985 us/op | 150.28 MB/s | 6240 B/op | 12 allocs/op |
-| Record round trip / AES-128-GCM | 5 | 2.663 us/op | 450.61 MB/s | 3840 B/op | 3 allocs/op |
-| Record round trip / AES-256-GCM | 5 | 2.661 us/op | 451.01 MB/s | 3840 B/op | 3 allocs/op |
-| Record round trip / ChaCha20-Poly1305 | 5 | 3.611 us/op | 332.31 MB/s | 3840 B/op | 3 allocs/op |
-| Record seal | 5 | 1.06 us/op | 1132.43 MB/s | 1280 B/op | 1 allocs/op |
-| Record seal / AES-128-CCM | 5 | 3.39 us/op | 353.99 MB/s | 1840 B/op | 5 allocs/op |
-| Record seal / AES-128-GCM | 5 | 1.074 us/op | 1117.62 MB/s | 1280 B/op | 1 allocs/op |
-| Record seal / AES-256-GCM | 5 | 1.187 us/op | 1011.2 MB/s | 1280 B/op | 1 allocs/op |
-| Record seal / ChaCha20-Poly1305 | 5 | 1.483 us/op | 808.91 MB/s | 1280 B/op | 1 allocs/op |
+| Plain ACK build / Empty | 5 | 42.5 ns/op | - | 16 B/op | 1 allocs/op |
+| Plain ACK build / Single | 5 | 59.1 ns/op | - | 32 B/op | 1 allocs/op |
+| Plain ACK build / Sorted64 | 5 | 655.6 ns/op | - | 1152 B/op | 1 allocs/op |
+| Build Plain Flight | 5 | 2.88 us/op | 1422.26 MB/s | 5040 B/op | 9 allocs/op |
+| Protected ACK build / Reversed64 | 5 | 2.409 us/op | - | 2200 B/op | 3 allocs/op |
+| Protected ACK build / Single | 5 | 211 ns/op | - | 72 B/op | 2 allocs/op |
+| Protected ACK build / Single Reuse | 5 | 175.8 ns/op | - | 48 B/op | 1 allocs/op |
+| Protected ACK build / Sorted64 | 5 | 1.325 us/op | - | 1176 B/op | 2 allocs/op |
+| Build Protected Flight | 5 | 4.276 us/op | 957.94 MB/s | 5616 B/op | 6 allocs/op |
+| Combine Flights | 5 | 441.8 ns/op | - | 624 B/op | 4 allocs/op |
+| Flight First Refresh | 5 | 124.6 ns/op | - | 0 B/op | 0 allocs/op |
+| Flight Initial History Batch | 5 | 451 ns/op | - | 480 B/op | 1 allocs/op |
+| Flight Pending Indices / Allocated | 5 | 87.18 ns/op | - | 80 B/op | 1 allocs/op |
+| Flight Pending Indices / Reuse Window | 5 | 29.2 ns/op | - | 0 B/op | 0 allocs/op |
+| Flight Wire Window / Pending | 5 | 48.88 ns/op | - | 0 B/op | 0 allocs/op |
+| Flight Wire Window / Retransmit | 5 | 27.21 ns/op | - | 0 B/op | 0 allocs/op |
+| Inbox / Single fragment | 5 | 550.6 ns/op | 2179.5 MB/s | 1312 B/op | 2 allocs/op |
+| Inbox / Fragment batch | 5 | 513.9 ns/op | 2335 MB/s | 1280 B/op | 1 allocs/op |
+| Inbox / Fragment reuse | 5 | 520.1 ns/op | 2307.2 MB/s | 1280 B/op | 1 allocs/op |
+| Handshake Reassembly | 5 | 25.833 us/op | 2536.93 MB/s | 73856 B/op | 3 allocs/op |
+| Handshake Reassembly Single Fragment | 5 | 483.9 ns/op | 2479.72 MB/s | 1280 B/op | 1 allocs/op |
+| Parse ACK / Owned | 5 | 31.04 ns/op | - | 16 B/op | 1 allocs/op |
+| Parse ACK / Reuse Single | 5 | 4.124 ns/op | - | 0 B/op | 0 allocs/op |
+| Protected Record CID / Round Trip | 5 | 3.359 us/op | 357.29 MB/s | 3840 B/op | 3 allocs/op |
+| Protected Record CID / Seal | 5 | 1.176 us/op | 1020.73 MB/s | 1280 B/op | 1 allocs/op |
+| Reject unauthenticated record | 5 | 12.25 ns/op | - | 0 B/op | 0 allocs/op |
+| Record round trip | 5 | 4.127 us/op | 290.79 MB/s | 3840 B/op | 3 allocs/op |
+| Protected Record Round Trip In Place | 5 | 1.71 us/op | 701.89 MB/s | 1280 B/op | 1 allocs/op |
+| Record round trip / AES-128-CCM | 5 | 8.998 us/op | 133.37 MB/s | 6240 B/op | 12 allocs/op |
+| Record round trip / AES-128-GCM | 5 | 3.472 us/op | 345.63 MB/s | 3840 B/op | 3 allocs/op |
+| Record round trip / AES-256-GCM | 5 | 3.568 us/op | 336.32 MB/s | 3840 B/op | 3 allocs/op |
+| Record round trip / ChaCha20-Poly1305 | 5 | 4.853 us/op | 247.27 MB/s | 3840 B/op | 3 allocs/op |
+| Record seal | 5 | 1.381 us/op | 869.03 MB/s | 1280 B/op | 1 allocs/op |
+| Record seal / AES-128-CCM | 5 | 3.49 us/op | 343.82 MB/s | 1840 B/op | 5 allocs/op |
+| Record seal / AES-128-GCM | 5 | 1.329 us/op | 903.24 MB/s | 1280 B/op | 1 allocs/op |
+| Record seal / AES-256-GCM | 5 | 1.409 us/op | 851.83 MB/s | 1280 B/op | 1 allocs/op |
+| Record seal / ChaCha20-Poly1305 | 5 | 1.929 us/op | 622.19 MB/s | 1280 B/op | 1 allocs/op |
 
 <a id="section-key-schedule-and-cryptography"></a>
 ## Key schedule and cryptography
 
 | Benchmark | Samples | Median time | Harness memory | Harness allocations |
 | --- | :---: | :---: | :---: | :---: |
-| Calculate PSK Binder / AES-128-GCM | 5 | 2.727 us/op | 1952 B/op | 21 allocs/op |
-| Calculate PSK Binder / AES-256-GCM | 5 | 6.237 us/op | 3248 B/op | 21 allocs/op |
-| Derive Traffic Keys / AES-128-GCM | 5 | 1.523 us/op | 976 B/op | 9 allocs/op |
-| Derive Traffic Keys / AES-256-GCM | 5 | 3.472 us/op | 1520 B/op | 9 allocs/op |
-| Derive Traffic Keys Into / AES-128-GCM | 5 | 1.475 us/op | 928 B/op | 8 allocs/op |
-| Derive Traffic Keys Into / AES-256-GCM | 5 | 3.413 us/op | 1440 B/op | 8 allocs/op |
-| Empty Transcript Hash / AES-128-GCM | 5 | 1.248 ns/op | 0 B/op | 0 allocs/op |
-| Empty Transcript Hash / AES-256-GCM | 5 | 0.936 ns/op | 0 B/op | 0 allocs/op |
-| Finished Verify Data / AES-128-GCM | 5 | 1.368 us/op | 992 B/op | 11 allocs/op |
-| Finished Verify Data / AES-256-GCM | 5 | 3.122 us/op | 1648 B/op | 11 allocs/op |
-| Install Application Keys / AES-128-GCM | 5 | 7.194 us/op | 7488 B/op | 34 allocs/op |
-| Install Application Keys / AES-256-GCM | 5 | 11.563 us/op | 8544 B/op | 34 allocs/op |
-| Key Schedule Derivation / AES-128-GCM | 5 | 7.003 us/op | 5184 B/op | 48 allocs/op |
-| Key Schedule Derivation / AES-256-GCM | 5 | 15.814 us/op | 8224 B/op | 48 allocs/op |
-| Key derivation / AES-128-GCM / Early Traffic | 5 | 680.1 ns/op | 480 B/op | 5 allocs/op |
-| Key derivation / AES-128-GCM / Exporter | 5 | 1.94 us/op | 1408 B/op | 15 allocs/op |
-| Key derivation / AES-128-GCM / Exporter Zero | 5 | 8.901 ns/op | 0 B/op | 0 allocs/op |
-| Key derivation / AES-128-GCM / Resumption PSK | 5 | 766.3 ns/op | 512 B/op | 6 allocs/op |
-| Key derivation / AES-128-GCM / Traffic Update | 5 | 713.9 ns/op | 512 B/op | 6 allocs/op |
-| Key derivation / AES-256-GCM / Early Traffic | 5 | 1.691 us/op | 800 B/op | 5 allocs/op |
-| Key derivation / AES-256-GCM / Exporter | 5 | 4.437 us/op | 2384 B/op | 15 allocs/op |
-| Key derivation / AES-256-GCM / Exporter Zero | 5 | 8.905 ns/op | 0 B/op | 0 allocs/op |
-| Key derivation / AES-256-GCM / Resumption PSK | 5 | 1.71 us/op | 848 B/op | 6 allocs/op |
-| Key derivation / AES-256-GCM / Traffic Update | 5 | 1.719 us/op | 848 B/op | 6 allocs/op |
-| New Record Cipher / AES-128-CCM | 5 | 2.244 us/op | 2520 B/op | 13 allocs/op |
-| New Record Cipher / AES-128-GCM | 5 | 2.62 us/op | 3264 B/op | 13 allocs/op |
-| New Record Cipher / AES-256-GCM | 5 | 4.595 us/op | 3776 B/op | 13 allocs/op |
-| New Record Cipher / ChaCha20-Poly1305 | 5 | 1.859 us/op | 1528 B/op | 12 allocs/op |
-| Receive KeyUpdate / AES-128-GCM | 5 | 4.189 us/op | 3776 B/op | 19 allocs/op |
-| Receive KeyUpdate / AES-256-GCM | 5 | 7.118 us/op | 4624 B/op | 19 allocs/op |
-| Send KeyUpdate / AES-128-GCM | 5 | 3.796 us/op | 3792 B/op | 19 allocs/op |
-| Send KeyUpdate / AES-256-GCM | 5 | 7.104 us/op | 4624 B/op | 19 allocs/op |
-| Transcript Clone / AES-128-GCM | 5 | 312 ns/op | 288 B/op | 4 allocs/op |
-| Transcript Clone / AES-256-GCM | 5 | 594.9 ns/op | 496 B/op | 4 allocs/op |
-| Transcript Sum / AES-128-GCM / Owned | 5 | 109.1 ns/op | 32 B/op | 1 allocs/op |
-| Transcript Sum / AES-128-GCM / Reuse | 5 | 79.46 ns/op | 0 B/op | 0 allocs/op |
-| Transcript Sum / AES-256-GCM / Owned | 5 | 280.6 ns/op | 48 B/op | 1 allocs/op |
-| Transcript Sum / AES-256-GCM / Reuse | 5 | 235 ns/op | 0 B/op | 0 allocs/op |
+| Calculate PSK Binder / AES-128-GCM | 5 | 2.764 us/op | 1952 B/op | 21 allocs/op |
+| Calculate PSK Binder / AES-256-GCM | 5 | 6.982 us/op | 3248 B/op | 21 allocs/op |
+| Derive Traffic Keys / AES-128-GCM | 5 | 1.634 us/op | 976 B/op | 9 allocs/op |
+| Derive Traffic Keys / AES-256-GCM | 5 | 3.772 us/op | 1520 B/op | 9 allocs/op |
+| Derive Traffic Keys Into / AES-128-GCM | 5 | 1.561 us/op | 928 B/op | 8 allocs/op |
+| Derive Traffic Keys Into / AES-256-GCM | 5 | 3.705 us/op | 1440 B/op | 8 allocs/op |
+| Empty Transcript Hash / AES-128-GCM | 5 | 1.222 ns/op | 0 B/op | 0 allocs/op |
+| Empty Transcript Hash / AES-256-GCM | 5 | 1.233 ns/op | 0 B/op | 0 allocs/op |
+| Finished Verify Data / AES-128-GCM | 5 | 1.399 us/op | 992 B/op | 11 allocs/op |
+| Finished Verify Data / AES-256-GCM | 5 | 3.505 us/op | 1648 B/op | 11 allocs/op |
+| Install Application Keys / AES-128-GCM | 5 | 6.155 us/op | 7488 B/op | 34 allocs/op |
+| Install Application Keys / AES-256-GCM | 5 | 10.452 us/op | 8544 B/op | 34 allocs/op |
+| Key Schedule Derivation / AES-128-GCM | 5 | 7.421 us/op | 5184 B/op | 48 allocs/op |
+| Key Schedule Derivation / AES-256-GCM | 5 | 17.591 us/op | 8224 B/op | 48 allocs/op |
+| Key derivation / AES-128-GCM / Early Traffic | 5 | 695.7 ns/op | 480 B/op | 5 allocs/op |
+| Key derivation / AES-128-GCM / Exporter | 5 | 2.095 us/op | 1408 B/op | 15 allocs/op |
+| Key derivation / AES-128-GCM / Exporter Zero | 5 | 19.64 ns/op | 0 B/op | 0 allocs/op |
+| Key derivation / AES-128-GCM / Resumption PSK | 5 | 810.4 ns/op | 512 B/op | 6 allocs/op |
+| Key derivation / AES-128-GCM / Traffic Update | 5 | 749.9 ns/op | 512 B/op | 6 allocs/op |
+| Key derivation / AES-256-GCM / Early Traffic | 5 | 1.836 us/op | 800 B/op | 5 allocs/op |
+| Key derivation / AES-256-GCM / Exporter | 5 | 4.455 us/op | 2384 B/op | 15 allocs/op |
+| Key derivation / AES-256-GCM / Exporter Zero | 5 | 19.65 ns/op | 0 B/op | 0 allocs/op |
+| Key derivation / AES-256-GCM / Resumption PSK | 5 | 1.756 us/op | 848 B/op | 6 allocs/op |
+| Key derivation / AES-256-GCM / Traffic Update | 5 | 1.881 us/op | 848 B/op | 6 allocs/op |
+| New Record Cipher / AES-128-CCM | 5 | 2.496 us/op | 2520 B/op | 13 allocs/op |
+| New Record Cipher / AES-128-GCM | 5 | 2.731 us/op | 3264 B/op | 13 allocs/op |
+| New Record Cipher / AES-256-GCM | 5 | 5.194 us/op | 3776 B/op | 13 allocs/op |
+| New Record Cipher / ChaCha20-Poly1305 | 5 | 1.962 us/op | 1528 B/op | 12 allocs/op |
+| Receive KeyUpdate / AES-128-GCM | 5 | 3.754 us/op | 3776 B/op | 19 allocs/op |
+| Receive KeyUpdate / AES-256-GCM | 5 | 6.875 us/op | 4624 B/op | 19 allocs/op |
+| Send KeyUpdate / AES-128-GCM | 5 | 3.6 us/op | 3792 B/op | 19 allocs/op |
+| Send KeyUpdate / AES-256-GCM | 5 | 6.644 us/op | 4624 B/op | 19 allocs/op |
+| Transcript Clone / AES-128-GCM | 5 | 368.3 ns/op | 288 B/op | 4 allocs/op |
+| Transcript Clone / AES-256-GCM | 5 | 698.1 ns/op | 496 B/op | 4 allocs/op |
+| Transcript Sum / AES-128-GCM / Owned | 5 | 130.9 ns/op | 32 B/op | 1 allocs/op |
+| Transcript Sum / AES-128-GCM / Reuse | 5 | 81.93 ns/op | 0 B/op | 0 allocs/op |
+| Transcript Sum / AES-256-GCM / Owned | 5 | 328.1 ns/op | 48 B/op | 1 allocs/op |
+| Transcript Sum / AES-256-GCM / Reuse | 5 | 263.7 ns/op | 0 B/op | 0 allocs/op |
 
 <a id="section-wire-encoding-and-parsing"></a>
 ## Wire encoding and parsing
 
 | Benchmark | Samples | Median time | Harness memory | Harness allocations |
 | --- | :---: | :---: | :---: | :---: |
-| Marshal Extensions | 5 | 357.6 ns/op | 128 B/op | 1 allocs/op |
-| Handshake marshal / Certificate | 5 | 569.3 ns/op | 1152 B/op | 1 allocs/op |
-| Handshake marshal / Certificate Verify | 5 | 53.91 ns/op | 80 B/op | 1 allocs/op |
-| Handshake marshal / Client Hello | 5 | 543.3 ns/op | 424 B/op | 8 allocs/op |
-| Handshake marshal / Hello Retry Request | 5 | 86.97 ns/op | 128 B/op | 1 allocs/op |
-| Handshake marshal / New Connection ID | 5 | 46.96 ns/op | 32 B/op | 1 allocs/op |
-| Handshake marshal / New Session Ticket | 5 | 71.37 ns/op | 96 B/op | 1 allocs/op |
-| Handshake marshal / Resumption Client Hello | 5 | 754.5 ns/op | 744 B/op | 9 allocs/op |
-| Handshake marshal / Server Hello | 5 | 87.78 ns/op | 112 B/op | 1 allocs/op |
-| Handshake marshal / Session Ticket State | 5 | 72.58 ns/op | 80 B/op | 1 allocs/op |
-| Parse Extensions / Ordered View | 5 | 65.58 ns/op | 0 B/op | 0 allocs/op |
-| Parse Extensions / Owned | 5 | 660.8 ns/op | 472 B/op | 8 allocs/op |
-| Parse Extensions / View | 5 | 430.1 ns/op | 336 B/op | 2 allocs/op |
-| Parse Handshake Fragment / Reuse Single | 5 | 13.41 ns/op | 0 B/op | 0 allocs/op |
-| Parse Handshake Fragment / View | 5 | 60.94 ns/op | 48 B/op | 1 allocs/op |
-| Key share parse / 1 key share / Owned | 5 | 104 ns/op | 64 B/op | 2 allocs/op |
-| Key share parse / 1 key share / View | 5 | 67.7 ns/op | 32 B/op | 1 allocs/op |
-| Key share parse / 1 key share / View Into | 5 | 28.31 ns/op | 0 B/op | 0 allocs/op |
-| Key share parse / 4 key shares / Owned | 5 | 305.9 ns/op | 256 B/op | 5 allocs/op |
-| Key share parse / 4 key shares / View | 5 | 160.5 ns/op | 128 B/op | 1 allocs/op |
-| Key share parse / 4 key shares / View Into | 5 | 77.65 ns/op | 0 B/op | 0 allocs/op |
-| Key share parse / 9 key shares / Owned | 5 | 1.162 us/op | 824 B/op | 14 allocs/op |
-| Key share parse / 9 key shares / View | 5 | 838.9 ns/op | 536 B/op | 5 allocs/op |
-| Key share parse / 9 key shares / View Into | 5 | 824.3 ns/op | 536 B/op | 5 allocs/op |
-| Parse Plain Record / Reuse Single | 5 | 12.79 ns/op | 0 B/op | 0 allocs/op |
-| Parse Plain Record / View | 5 | 61.08 ns/op | 48 B/op | 1 allocs/op |
+| Marshal Extensions | 5 | 340.9 ns/op | 128 B/op | 1 allocs/op |
+| Handshake marshal / Certificate | 5 | 564.6 ns/op | 1152 B/op | 1 allocs/op |
+| Handshake marshal / Certificate Verify | 5 | 49.9 ns/op | 80 B/op | 1 allocs/op |
+| Handshake marshal / Client Hello | 5 | 494.6 ns/op | 424 B/op | 8 allocs/op |
+| Handshake marshal / Hello Retry Request | 5 | 83.44 ns/op | 128 B/op | 1 allocs/op |
+| Handshake marshal / New Connection ID | 5 | 44.29 ns/op | 32 B/op | 1 allocs/op |
+| Handshake marshal / New Session Ticket | 5 | 67.81 ns/op | 96 B/op | 1 allocs/op |
+| Handshake marshal / Resumption Client Hello | 5 | 697 ns/op | 744 B/op | 9 allocs/op |
+| Handshake marshal / Server Hello | 5 | 86.78 ns/op | 112 B/op | 1 allocs/op |
+| Handshake marshal / Session Ticket State | 5 | 66.63 ns/op | 80 B/op | 1 allocs/op |
+| Parse Extensions / Ordered View | 5 | 57 ns/op | 0 B/op | 0 allocs/op |
+| Parse Extensions / Owned | 5 | 708.8 ns/op | 472 B/op | 8 allocs/op |
+| Parse Extensions / View | 5 | 421.6 ns/op | 336 B/op | 2 allocs/op |
+| Parse Handshake Fragment / Reuse Single | 5 | 12.1 ns/op | 0 B/op | 0 allocs/op |
+| Parse Handshake Fragment / View | 5 | 65.52 ns/op | 48 B/op | 1 allocs/op |
+| Key share parse / 1 key share / Owned | 5 | 102.4 ns/op | 64 B/op | 2 allocs/op |
+| Key share parse / 1 key share / View | 5 | 61.32 ns/op | 32 B/op | 1 allocs/op |
+| Key share parse / 1 key share / View Into | 5 | 23.91 ns/op | 0 B/op | 0 allocs/op |
+| Key share parse / 4 key shares / Owned | 5 | 310.5 ns/op | 256 B/op | 5 allocs/op |
+| Key share parse / 4 key shares / View | 5 | 189.6 ns/op | 128 B/op | 1 allocs/op |
+| Key share parse / 4 key shares / View Into | 5 | 73.31 ns/op | 0 B/op | 0 allocs/op |
+| Key share parse / 9 key shares / Owned | 5 | 1.336 us/op | 824 B/op | 14 allocs/op |
+| Key share parse / 9 key shares / View | 5 | 910.8 ns/op | 536 B/op | 5 allocs/op |
+| Key share parse / 9 key shares / View Into | 5 | 831.9 ns/op | 536 B/op | 5 allocs/op |
+| Parse Plain Record / Reuse Single | 5 | 11.13 ns/op | 0 B/op | 0 allocs/op |
+| Parse Plain Record / View | 5 | 67.09 ns/op | 48 B/op | 1 allocs/op |
 
 <a id="section-certificate-compression"></a>
 ## Certificate compression
 
 | Benchmark | Samples | Median time | Harness memory | Harness allocations |
 | --- | :---: | :---: | :---: | :---: |
-| Compress | 5 | 6.823 us/op | 336 B/op | 4 allocs/op |
-| Decompress | 5 | 6.395 us/op | 4248 B/op | 6 allocs/op |
+| Compress | 5 | 4.91 us/op | 176 B/op | 3 allocs/op |
+| Decompress | 5 | 6.867 us/op | 4248 B/op | 6 allocs/op |
 
 [Raw Go benchmark output](benchmark.txt)
