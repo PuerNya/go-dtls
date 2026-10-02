@@ -539,6 +539,34 @@ func TestEndToEndCertificateHandshake(t *testing.T) {
 	_ = right.Close()
 }
 
+// TestEndToEndServerCertificateEntryExtension pins the relaxed CertificateEntry
+// path against a real handshake rather than only the codec. The server attaches
+// an unrequested status_request extension to its leaf entry through
+// testServerCertificateEntryExtensions; a client that still aborted on
+// unsolicited CertificateEntry extensions would fail the handshake here.
+func TestEndToEndServerCertificateEntryExtension(t *testing.T) {
+	certificate, roots := testServerCertificate(t)
+	testServerCertificateEntryExtensions = map[uint16][]byte{extStatusRequest: {0x01, 0x00, 0x00}}
+	t.Cleanup(func() { testServerCertificateEntryExtensions = nil })
+
+	left, right := memoryDatagramPair()
+	client := Client(left, &Config{RootCAs: roots, ServerName: "server.test", HandshakeTimeout: 5 * time.Second})
+	server := Server(right, &Config{Certificates: []tls.Certificate{certificate}, HandshakeTimeout: 5 * time.Second})
+	serverErr := make(chan error, 1)
+	go func() { serverErr <- server.Handshake() }()
+	if err := client.Handshake(); err != nil {
+		t.Fatalf("client rejected an ignored CertificateEntry extension: %v", err)
+	}
+	if err := <-serverErr; err != nil {
+		t.Fatal(err)
+	}
+	if !client.ConnectionState().HandshakeComplete {
+		t.Fatal("handshake did not complete")
+	}
+	_ = left.Close()
+	_ = right.Close()
+}
+
 func TestCertificateVerificationFailureSendsUnknownCA(t *testing.T) {
 	certificate, _ := testServerCertificate(t)
 	left, right := memoryDatagramPair()

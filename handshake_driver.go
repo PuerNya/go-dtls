@@ -22,6 +22,12 @@ const (
 
 type serverHandshakeStage uint8
 
+// testServerCertificateEntryExtensions, when non-nil, is attached to the first
+// certificate entry the server sends. It exists so tests can exercise the
+// receive path for CertificateEntry extensions against a real handshake; it is
+// always nil in production and is never set by anything but a test.
+var testServerCertificateEntryExtensions map[uint16][]byte
+
 const (
 	serverExpectEncryptedExtensions serverHandshakeStage = iota
 	serverExpectCertificateRequestOrCertificate
@@ -1891,8 +1897,12 @@ func (c *Conn) serverHandshake() error {
 	}
 	if !usingPSK {
 		certMsg := &certificateMessage{}
-		for _, der := range cert.Certificate {
-			certMsg.certificates = append(certMsg.certificates, certificateEntry{data: der})
+		for i, der := range cert.Certificate {
+			entry := certificateEntry{data: der}
+			if i == 0 && testServerCertificateEntryExtensions != nil {
+				entry.extensions = testServerCertificateEntryExtensions
+			}
+			certMsg.certificates = append(certMsg.certificates, entry)
 		}
 		certBody, err := certMsg.marshal()
 		if err != nil {
