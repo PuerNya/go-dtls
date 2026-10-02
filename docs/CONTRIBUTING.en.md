@@ -6,7 +6,7 @@ Thank you for contributing to `go-dtls`. Changes must preserve DTLS 1.3 datagram
 
 ## Development Environment
 
-- Go 1.26 or later.
+- Go 1.27 or later.
 - golangci-lint v2.12.2, matching CI.
 - Windows race tests require Zig 0.17 and a working CGO toolchain.
 - When a change affects a feature supported by wolfSSL, wolfSSL interoperability tests and focused benchmarks are required; other changes do not require wolfSSL.

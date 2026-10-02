@@ -30,7 +30,7 @@ DTLS 是不可靠报文协议，不是 TLS 字节流：
 
 | 项目 | 要求 |
 | --- | --- |
-| Go | 最低 Go 1.26；自动 benchmark 使用的具体 Go、平台和 CPU 记录在最新报告中 |
+| Go | 最低 Go 1.27；自动 benchmark 使用的具体 Go、平台和 CPU 记录在最新报告中 |
 | Transport | `udp`、`udp4` 或 `udp6`；不接受 TCP |
 | Windows race | 仓库脚本需要 Zig 0.17 和可用的 CGO 工具链 |
 | wolfSSL 互通测试 | 可选；需要设置 `WOLFSSL_ROOT` 指向兼容的 wolfSSL 源码/构建目录 |

@@ -30,7 +30,7 @@ DTLS is an unreliable datagram protocol, not a TLS byte stream:
 
 | Item | Requirement |
 | --- | --- |
-| Go | Go 1.26 or later; the exact Go version, platform, and CPU used by automation are recorded in the latest report |
+| Go | Go 1.27 or later; the exact Go version, platform, and CPU used by automation are recorded in the latest report |
 | Transport | `udp`, `udp4`, or `udp6`; TCP is not accepted |
 | Windows race | The repository script requires Zig 0.17 and a working CGO toolchain |
 | wolfSSL interoperability tests | Optional; set `WOLFSSL_ROOT` to a compatible wolfSSL source/build directory |

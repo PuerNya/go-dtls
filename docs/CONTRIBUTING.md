@@ -6,7 +6,7 @@
 
 ## 开发环境
 
-- Go 1.26 或更高版本。
+- Go 1.27 或更高版本。
 - golangci-lint v2.12.2，与 CI 使用的版本一致。
 - Windows race 测试需要 Zig 0.17 和可用的 CGO 工具链。
 - 变更涉及 wolfSSL 已支持的功能时，wolfSSL 互通测试和专项 benchmark 是必需门禁；其他变更可不安装 wolfSSL。

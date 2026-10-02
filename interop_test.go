@@ -981,12 +981,12 @@ func BenchmarkWolfSSLFeatureRealUDP(b *testing.B) {
 
 	baseConfigs := func() (*Config, *Config) {
 		return &Config{
-				InsecureSkipVerify: true, ServerName: "127.0.0.1", CipherSuites: []uint16{TLS_AES_128_GCM_SHA256},
-				SessionTicketsDisabled: true, HandshakeTimeout: 5 * time.Second,
-			}, &Config{
-				Certificates: []tls.Certificate{serverCertificate}, CipherSuites: []uint16{TLS_AES_128_GCM_SHA256},
-				SessionTicketsDisabled: true, HandshakeTimeout: 5 * time.Second,
-			}
+			InsecureSkipVerify: true, ServerName: "127.0.0.1", CipherSuites: []uint16{TLS_AES_128_GCM_SHA256},
+			SessionTicketsDisabled: true, HandshakeTimeout: 5 * time.Second,
+		}, &Config{
+			Certificates: []tls.Certificate{serverCertificate}, CipherSuites: []uint16{TLS_AES_128_GCM_SHA256},
+			SessionTicketsDisabled: true, HandshakeTimeout: 5 * time.Second,
+		}
 	}
 	mutualTLSConfigs := func(resume bool) func() (*Config, *Config) {
 		return func() (*Config, *Config) {
@@ -1085,12 +1085,12 @@ func BenchmarkHybridKeyExchangeRealUDP(b *testing.B) {
 			name: test.name,
 			configs: func() (*Config, *Config) {
 				return &Config{
-						InsecureSkipVerify: true, ServerName: "127.0.0.1", CurvePreferences: []tls.CurveID{test.group}, MTU: 4096,
-						SessionTicketsDisabled: true, HandshakeTimeout: 5 * time.Second,
-					}, &Config{
-						Certificates: []tls.Certificate{certificate}, CurvePreferences: []tls.CurveID{test.group},
-						SessionTicketsDisabled: true, HandshakeTimeout: 5 * time.Second,
-					}
+					InsecureSkipVerify: true, ServerName: "127.0.0.1", CurvePreferences: []tls.CurveID{test.group}, MTU: 4096,
+					SessionTicketsDisabled: true, HandshakeTimeout: 5 * time.Second,
+				}, &Config{
+					Certificates: []tls.Certificate{certificate}, CurvePreferences: []tls.CurveID{test.group},
+					SessionTicketsDisabled: true, HandshakeTimeout: 5 * time.Second,
+				}
 			},
 			wolfClientArgs: []string{"--pqc", test.name}, wolfServerArgs: []string{"--pqc", test.name},
 		}
