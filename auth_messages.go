@@ -207,15 +207,79 @@ func validateEarlyDataSelection(accepted bool, selectedIdentity *uint16) error {
 	return nil
 }
 
+// certificateEntryExtensionVerdict is the CertificateEntry extension
+// classification computed once while parsing, so the entry never needs a
+// per-entry extension map on the receive path.
+type certificateEntryExtensionVerdict uint8
+
+const (
+	// certificateEntryExtensionsClean means the entry has no extensions, or
+	// only extensions that ignoredCertificateEntryExtension allows.
+	certificateEntryExtensionsClean certificateEntryExtensionVerdict = iota
+	// certificateEntryExtensionsRecognized means a recognized extension type
+	// appeared in CertificateEntry, where RFC 9846 does not permit it.
+	certificateEntryExtensionsRecognized
+	// certificateEntryExtensionsUnsolicited means an unknown extension this
+	// client did not request appeared and is not on the ignore list.
+	certificateEntryExtensionsUnsolicited
+)
+
 type certificateEntry struct {
-	data                 []byte
-	extensions           map[uint16][]byte
-	peerExtensionType    uint16
-	peerExtensionPresent bool
+	data       []byte
+	extensions map[uint16][]byte
+	// peerVerdict is populated by parseCertificateMessage; entries built
+	// locally for sending leave it zero and use extensions instead.
+	peerVerdict certificateEntryExtensionVerdict
 }
 type certificateMessage struct {
 	requestContext []byte
 	certificates   []certificateEntry
+}
+
+// ignoredCertificateEntryExtension reports whether a CertificateEntry
+// extension carries only supplementary data this client never requests and
+// can therefore be skipped. status_request and signed_certificate_timestamp
+// are authenticated with the rest of the Certificate message, are not
+// negotiated by this package, and are ignored by crypto/tls, wolfSSL, and
+// OpenSSL clients when present; aborting on them would break interoperability
+// with servers that staple unconditionally without any security benefit.
+func ignoredCertificateEntryExtension(typ uint16) bool {
+	return typ == extStatusRequest || typ == extSCT
+}
+
+// classifyCertificateEntryExtension maps one CertificateEntry extension type
+// to its verdict. Recognized-but-misplaced wins over unsolicited so the RFC
+// 9846 §4.2 illegal_parameter rule is reported even when both kinds appear.
+func classifyCertificateEntryExtension(typ uint16) certificateEntryExtensionVerdict {
+	switch {
+	case knownExtensionType(typ):
+		return certificateEntryExtensionsRecognized
+	case ignoredCertificateEntryExtension(typ):
+		return certificateEntryExtensionsClean
+	default:
+		return certificateEntryExtensionsUnsolicited
+	}
+}
+
+func mergeCertificateEntryVerdict(current, next certificateEntryExtensionVerdict) certificateEntryExtensionVerdict {
+	if next == certificateEntryExtensionsRecognized || current == certificateEntryExtensionsRecognized {
+		return certificateEntryExtensionsRecognized
+	}
+	if next == certificateEntryExtensionsUnsolicited {
+		return certificateEntryExtensionsUnsolicited
+	}
+	return current
+}
+
+func certificateEntryVerdictError(verdict certificateEntryExtensionVerdict) error {
+	switch verdict {
+	case certificateEntryExtensionsRecognized:
+		return alertError(alertIllegalParameter, &ProtocolError{"recognized extension is not permitted in CertificateEntry"})
+	case certificateEntryExtensionsUnsolicited:
+		return alertError(alertUnsupportedExtension, &ProtocolError{"unsolicited CertificateEntry extension"})
+	default:
+		return nil
+	}
 }
 
 func validateCertificateMessage(message *certificateMessage, expectedContext []byte) error {
@@ -223,17 +287,12 @@ func validateCertificateMessage(message *certificateMessage, expectedContext []b
 		return alertError(alertIllegalParameter, &ProtocolError{"Certificate request context mismatch"})
 	}
 	for _, certificate := range message.certificates {
-		if certificate.peerExtensionPresent {
-			if knownExtensionType(certificate.peerExtensionType) {
-				return alertError(alertIllegalParameter, &ProtocolError{"recognized extension is not permitted in CertificateEntry"})
-			}
-			return alertError(alertUnsupportedExtension, &ProtocolError{"unsolicited CertificateEntry extension"})
-		}
+		verdict := certificate.peerVerdict
 		for typ := range certificate.extensions {
-			if knownExtensionType(typ) {
-				return alertError(alertIllegalParameter, &ProtocolError{"recognized extension is not permitted in CertificateEntry"})
-			}
-			return alertError(alertUnsupportedExtension, &ProtocolError{"unsolicited CertificateEntry extension"})
+			verdict = mergeCertificateEntryVerdict(verdict, classifyCertificateEntryExtension(typ))
+		}
+		if err := certificateEntryVerdictError(verdict); err != nil {
+			return err
 		}
 	}
 	return nil
@@ -302,9 +361,8 @@ func parseCertificateMessage(b []byte, maxSize int) (*certificateMessage, error)
 			return nil, err
 		}
 		entry := certificateEntry{data: append([]byte(nil), data...)}
-		if len(exts) > 0 {
-			entry.peerExtensionType = exts[0].typ
-			entry.peerExtensionPresent = true
+		for i := range exts {
+			entry.peerVerdict = mergeCertificateEntryVerdict(entry.peerVerdict, classifyCertificateEntryExtension(exts[i].typ))
 		}
 		m.certificates = append(m.certificates, entry)
 	}

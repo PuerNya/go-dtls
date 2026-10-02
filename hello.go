@@ -9,11 +9,13 @@ import (
 const (
 	extServerName              uint16 = 0
 	extMaxFragmentLength       uint16 = 1
+	extStatusRequest           uint16 = 5
 	extSupportedGroups         uint16 = 10
 	extSupportedVersions       uint16 = 43
 	extKeyShare                uint16 = 51
 	extSignatureAlgorithms     uint16 = 13
 	extALPN                    uint16 = 16
+	extSCT                     uint16 = 18
 	extPadding                 uint16 = 21
 	extCompressCertificate     uint16 = 27
 	extRecordSizeLimit         uint16 = 28
