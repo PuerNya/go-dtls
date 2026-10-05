@@ -180,7 +180,7 @@ func validateDistinguishedName(data []byte) error {
 	var name pkix.RDNSequence
 	rest, err := asn1.Unmarshal(data, &name)
 	if err != nil || len(rest) != 0 {
-		return &ProtocolError{"malformed certificate authority distinguished name"}
+		return alertError(alertDecodeError, &ProtocolError{"malformed certificate authority distinguished name"})
 	}
 	return nil
 }
@@ -211,7 +211,7 @@ func validateOIDFilters(filters []CertificateOIDFilter) error {
 		}
 		for j := range i {
 			if filters[j].OID.Equal(filter.OID) {
-				return &ProtocolError{"duplicate oid_filters OID"}
+				return alertError(alertIllegalParameter, &ProtocolError{"duplicate oid_filters OID"})
 			}
 		}
 		if err = validateOIDFilterValues(filter); err != nil {
@@ -268,13 +268,13 @@ func validateOIDFilterValues(filter CertificateOIDFilter) error {
 		var usage asn1.BitString
 		rest, err := asn1.Unmarshal(filter.Values, &usage)
 		if err != nil || len(rest) != 0 {
-			return &ProtocolError{"malformed Key Usage oid_filter"}
+			return alertError(alertDecodeError, &ProtocolError{"malformed Key Usage oid_filter"})
 		}
 	case filter.OID.Equal(oidExtensionExtendedKeyUsage):
 		var usages []asn1.ObjectIdentifier
 		rest, err := asn1.Unmarshal(filter.Values, &usages)
 		if err != nil || len(rest) != 0 {
-			return &ProtocolError{"malformed Extended Key Usage oid_filter"}
+			return alertError(alertDecodeError, &ProtocolError{"malformed Extended Key Usage oid_filter"})
 		}
 		for _, usage := range usages {
 			if usage.Equal(oidAnyExtendedKeyUsage) {

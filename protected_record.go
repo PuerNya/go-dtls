@@ -329,7 +329,7 @@ func recordCipherMatchesUnifiedEpoch(cipher *recordCipher, first byte) bool {
 
 func (c *recordCipher) openRecord(datagram []byte, inPlace bool) (content []byte, contentType uint8, consumed int, err error) {
 	if len(datagram) < 2 {
-		return nil, 0, 0, &ProtocolError{"truncated unified record header"}
+		return nil, 0, 0, alertError(alertDecodeError, &ProtocolError{"truncated unified record header"})
 	}
 	first := datagram[0]
 	if first&0xe0 != unifiedHeaderFixed {
@@ -362,7 +362,7 @@ func (c *recordCipher) openRecord(datagram []byte, inPlace bool) (content []byte
 		headerLen += 2
 	}
 	if len(datagram) < headerLen {
-		return nil, 0, 0, &ProtocolError{"truncated unified record header"}
+		return nil, 0, 0, alertError(alertDecodeError, &ProtocolError{"truncated unified record header"})
 	}
 	n := len(datagram) - headerLen
 	if first&unifiedHeaderLength != 0 {

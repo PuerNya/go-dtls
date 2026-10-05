@@ -414,7 +414,7 @@ func (c *Conn) processPostHandshakeAuthMessageLocked(state *postHandshakeAuthSta
 		c.mu.Unlock()
 		return nil
 	default:
-		return &ProtocolError{"unexpected post-handshake authentication message"}
+		return alertError(alertUnexpectedMessage, &ProtocolError{"unexpected post-handshake authentication message"})
 	}
 }
 

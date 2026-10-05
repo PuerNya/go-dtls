@@ -157,11 +157,11 @@ func parseACK(b []byte) ([]recordNumber, error) {
 
 func parseACKInto(b []byte, dst []recordNumber) ([]recordNumber, error) {
 	if len(b) < 2 {
-		return nil, &ProtocolError{"truncated ACK"}
+		return nil, alertError(alertDecodeError, &ProtocolError{"truncated ACK"})
 	}
 	n := int(binary.BigEndian.Uint16(b[:2]))
 	if n%16 != 0 || n != len(b)-2 {
-		return nil, &ProtocolError{"malformed ACK vector length"}
+		return nil, alertError(alertDecodeError, &ProtocolError{"malformed ACK vector length"})
 	}
 	count := n / 16
 	if count == 0 {

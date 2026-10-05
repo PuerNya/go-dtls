@@ -34,7 +34,7 @@ func (m *encryptedExtensions) marshal() ([]byte, error) {
 		return nil, &ProtocolError{"invalid record_size_limit"}
 	}
 	if _, duplicate := m.extensions[extRecordSizeLimit]; duplicate {
-		return nil, &ProtocolError{"duplicate record_size_limit extension"}
+		return nil, alertError(alertIllegalParameter, &ProtocolError{"duplicate record_size_limit extension"})
 	}
 	var limit [2]byte
 	binary.BigEndian.PutUint16(limit[:], m.recordSizeLimit)

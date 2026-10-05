@@ -6,6 +6,8 @@ import (
 	"crypto/hmac"
 	"crypto/tls"
 	"crypto/x509"
+	"errors"
+	"fmt"
 	"net"
 	"sync"
 	"testing"
@@ -182,6 +184,77 @@ func TestSessionTicketProtectionTamperAndExpiry(t *testing.T) {
 	now = now.Add(61 * time.Second)
 	if _, err = protector.open(ticket); err == nil {
 		t.Fatal("accepted an expired ticket")
+	}
+}
+
+// TestSessionTicketStateClientCertificateVectorOverflow pins that a client
+// authentication state too large for the ticket's 16-bit certificate vector is
+// reported as a 16-bit vectorOverflowError and still resolves to the wrapped
+// *ProtocolError, which is what the caller relies on to skip the optional
+// ticket without failing an already-completed handshake.
+func TestSessionTicketStateClientCertificateVectorOverflow(t *testing.T) {
+	leaf := &x509.Certificate{Raw: bytes.Repeat([]byte{0x31}, 256)}
+	state := &sessionTicketState{
+		createdAt: 1700000000, lifetime: 3600, suite: TLS_AES_128_GCM_SHA256,
+		psk: bytes.Repeat([]byte{0x42}, 32), serverName: "server.test", protocol: "coap",
+		clientAuthAt: 1699999990,
+		// 300 * (3 + 256) = 77,700 bytes, past the 65,535-byte vector limit.
+		peerCertificates: repeatCertificate(leaf, 300),
+		verifiedChains:   [][]*x509.Certificate{{leaf}},
+	}
+	_, err := state.marshal()
+	if err == nil {
+		t.Fatal("marshaled a client certificate state larger than the vector limit")
+	}
+	var overflow *vectorOverflowError
+	if !errors.As(err, &overflow) {
+		t.Fatalf("err=%v, want a *vectorOverflowError", err)
+	}
+	if overflow.bits != 16 {
+		t.Fatalf("overflow bits=%d, want 16", overflow.bits)
+	}
+	var protocol *ProtocolError
+	if !errors.As(err, &protocol) {
+		t.Fatalf("err=%v does not resolve to *ProtocolError", err)
+	}
+	if !clientCertificateTicketOverflow(err) {
+		t.Fatal("clientCertificateTicketOverflow rejected the 16-bit overflow it must accept")
+	}
+	// A state that fits must still marshal successfully.
+	state.peerCertificates = repeatCertificate(leaf, 1)
+	if _, err = state.marshal(); err != nil {
+		t.Fatalf("small client certificate state failed to marshal: %v", err)
+	}
+}
+
+func repeatCertificate(certificate *x509.Certificate, count int) []*x509.Certificate {
+	certificates := make([]*x509.Certificate, count)
+	for i := range certificates {
+		certificates[i] = certificate
+	}
+	return certificates
+}
+
+// TestClientCertificateTicketOverflowClassification pins that only a 16-bit
+// vector overflow is treated as "the optional client certificate ticket does
+// not fit"; every other failure must propagate.
+func TestClientCertificateTicketOverflowClassification(t *testing.T) {
+	tests := []struct {
+		name string
+		err  error
+		want bool
+	}{
+		{"nil", nil, false},
+		{"8-bit overflow", &vectorOverflowError{bits: 8, err: &ProtocolError{"8-bit vector overflow"}}, false},
+		{"24-bit overflow", &vectorOverflowError{bits: 24, err: &ProtocolError{"24-bit vector overflow"}}, false},
+		{"16-bit overflow", &vectorOverflowError{bits: 16, err: &ProtocolError{"16-bit vector overflow"}}, true},
+		{"wrapped 16-bit overflow", fmt.Errorf("seal failed: %w", &vectorOverflowError{bits: 16, err: &ProtocolError{"16-bit vector overflow"}}), true},
+		{"bare protocol error", &ProtocolError{"invalid session ticket state"}, false},
+	}
+	for _, test := range tests {
+		if got := clientCertificateTicketOverflow(test.err); got != test.want {
+			t.Fatalf("%s: got %v, want %v", test.name, got, test.want)
+		}
 	}
 }
 

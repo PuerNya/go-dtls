@@ -6,7 +6,6 @@ import (
 	"fmt"
 	"io"
 	"net"
-	"strings"
 )
 
 const (
@@ -59,6 +58,12 @@ func alertError(description uint8, err error) error {
 	return &localAlertError{description: description, err: err}
 }
 
+// protocolAlert returns the fatal alert that corresponds to err. An error
+// produced by alertError carries its alert explicitly; any other protocol
+// error maps to illegal_parameter, the catch-all assigned by RFC 8446 §6.2 for
+// a peer message that violates the protocol without a more specific alert.
+// Classification is deliberately based on the error's type, never on the text
+// of its Reason, so rewording a diagnostic cannot change the alert sent.
 func protocolAlert(err error) (uint8, bool) {
 	var local *localAlertError
 	if errors.As(err, &local) {
@@ -67,17 +72,6 @@ func protocolAlert(err error) (uint8, bool) {
 	var protocol *ProtocolError
 	if !errors.As(err, &protocol) {
 		return 0, false
-	}
-	reason := strings.ToLower(protocol.Reason)
-	for _, marker := range []string{"unexpected", " before ", "duplicate", "omitted"} {
-		if strings.Contains(reason, marker) {
-			return alertUnexpectedMessage, true
-		}
-	}
-	for _, marker := range []string{"truncated", "malformed", "decode", "invalid record length", "invalid handshake fragment"} {
-		if strings.Contains(reason, marker) {
-			return alertDecodeError, true
-		}
 	}
 	return alertIllegalParameter, true
 }

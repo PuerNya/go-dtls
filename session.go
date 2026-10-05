@@ -1122,6 +1122,15 @@ func verifyClientHelloPSKBinderAtWithLabel(body []byte, suite *cipherSuite, psk 
 	return nil
 }
 
+// clientCertificateTicketOverflow reports whether err is the overflow of a
+// session ticket's 16-bit client-certificate vector. Such a ticket cannot carry
+// the authenticated client state, so the optional NewSessionTicket is skipped
+// rather than failing a handshake that has already completed.
+func clientCertificateTicketOverflow(err error) bool {
+	var overflow *vectorOverflowError
+	return errors.As(err, &overflow) && overflow.bits == 16
+}
+
 func (c *Conn) sendNewSessionTickets(schedule *keySchedule, suite *cipherSuite, count uint8, serverName, protocol string, clientAuthAt int64, peerCertificates []*x509.Certificate, verifiedChains [][]*x509.Certificate, external *externalPSKSelection) error {
 	if c.config.SessionTicketsDisabled || count == 0 {
 		return nil
@@ -1165,8 +1174,10 @@ func (c *Conn) sendNewSessionTickets(schedule *keySchedule, suite *cipherSuite, 
 		}
 		ticket, sealErr := protector.seal(ticketState)
 		if sealErr != nil {
-			var protocolErr *ProtocolError
-			if len(peerCertificates) > 0 && errors.As(sealErr, &protocolErr) && protocolErr.Reason == "16-bit vector overflow" {
+			// A client certificate state that does not fit the ticket's 16-bit
+			// certificate vector makes this optional ticket unavailable; it
+			// must not fail a handshake that has already completed.
+			if len(peerCertificates) > 0 && clientCertificateTicketOverflow(sealErr) {
 				return nil
 			}
 			return sealErr

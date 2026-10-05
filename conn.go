@@ -6,10 +6,8 @@ import (
 	"errors"
 	"io"
 	"net"
-	"strings"
 	"sync"
 	"sync/atomic"
-	"syscall"
 	"time"
 )
 
@@ -357,11 +355,14 @@ func (c *Conn) RecordOverhead() int {
 	return c.sendCipher.headerLen16() + c.sendCipher.aead.Overhead() + 1
 }
 
+// isMessageTooLong reports whether err is the platform failure for a datagram
+// that the transport could not send because it exceeded a network limit. The
+// platform-specific errno is supplied by isMessageTooLongErrno.
 func isMessageTooLong(err error) bool {
 	if err == nil {
 		return false
 	}
-	return errors.Is(err, ErrDatagramTooLarge) || errors.Is(err, syscall.EMSGSIZE) || errors.Is(err, syscall.Errno(10040)) || strings.Contains(strings.ToLower(err.Error()), "message too long")
+	return errors.Is(err, ErrDatagramTooLarge) || isMessageTooLongErrno(err)
 }
 
 func normalizeDatagramWriteError(err error, addr net.Addr) error {

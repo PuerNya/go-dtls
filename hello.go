@@ -160,7 +160,7 @@ func (w *wireBuilder) u8(v int) {
 		return
 	}
 	if v < 0 || v > 255 {
-		w.err = &ProtocolError{"8-bit vector overflow"}
+		w.err = &vectorOverflowError{bits: 8, err: &ProtocolError{"8-bit vector overflow"}}
 		return
 	}
 	w.b = append(w.b, byte(v))
@@ -170,7 +170,7 @@ func (w *wireBuilder) u16(v int) {
 		return
 	}
 	if v < 0 || v > 65535 {
-		w.err = &ProtocolError{"16-bit vector overflow"}
+		w.err = &vectorOverflowError{bits: 16, err: &ProtocolError{"16-bit vector overflow"}}
 		return
 	}
 	w.b = append(w.b, byte(v>>8), byte(v))
@@ -180,7 +180,7 @@ func (w *wireBuilder) u24(v int) {
 		return
 	}
 	if v < 0 || v >= 1<<24 {
-		w.err = &ProtocolError{"24-bit vector overflow"}
+		w.err = &vectorOverflowError{bits: 24, err: &ProtocolError{"24-bit vector overflow"}}
 		return
 	}
 	w.b = append(w.b, byte(v>>16), byte(v>>8), byte(v))
@@ -244,7 +244,7 @@ func (w *wireBuilder) endVector16(start int) {
 	length := len(w.b) - start - 2
 	if length > 65535 {
 		w.b = w.b[:start]
-		w.err = &ProtocolError{"16-bit vector overflow"}
+		w.err = &vectorOverflowError{bits: 16, err: &ProtocolError{"16-bit vector overflow"}}
 		return
 	}
 	binary.BigEndian.PutUint16(w.b[start:start+2], uint16(length))
@@ -270,7 +270,7 @@ func (w *wireBuilder) endVector24(start int) {
 	length := len(w.b) - start - 3
 	if length >= 1<<24 {
 		w.b = w.b[:start]
-		w.err = &ProtocolError{"24-bit vector overflow"}
+		w.err = &vectorOverflowError{bits: 24, err: &ProtocolError{"24-bit vector overflow"}}
 		return
 	}
 	putUint24(w.b[start:start+3], uint32(length))
@@ -287,7 +287,7 @@ func (p *wireParser) take(n int) []byte {
 		return nil
 	}
 	if n < 0 || n > len(p.b)-p.off {
-		p.err = &ProtocolError{"truncated handshake message"}
+		p.err = alertError(alertDecodeError, &ProtocolError{"truncated handshake message"})
 		return nil
 	}
 	v := p.b[p.off : p.off+n]

@@ -26,7 +26,7 @@ func marshalHandshakeFragmentInto(dst []byte, f handshakeFragment) error {
 		return err
 	}
 	if len(dst) != handshakeHeaderLen+len(f.body) {
-		return &ProtocolError{"invalid handshake fragment destination length"}
+		return alertError(alertDecodeError, &ProtocolError{"invalid handshake fragment destination length"})
 	}
 	putHandshakeFragment(dst, f)
 	return nil
@@ -34,7 +34,7 @@ func marshalHandshakeFragmentInto(dst []byte, f handshakeFragment) error {
 
 func validateHandshakeFragment(f handshakeFragment) error {
 	if f.length >= 1<<24 || f.offset >= 1<<24 || uint64(f.offset)+uint64(len(f.body)) > uint64(f.length) {
-		return &ProtocolError{"invalid handshake fragment bounds"}
+		return alertError(alertDecodeError, &ProtocolError{"invalid handshake fragment bounds"})
 	}
 	return nil
 }
@@ -67,11 +67,11 @@ func parseHandshakeFragmentsMode(b []byte, copyBody bool, dst []handshakeFragmen
 	out := dst[:0]
 	for len(b) > 0 {
 		if len(b) < handshakeHeaderLen {
-			return nil, &ProtocolError{"truncated handshake fragment header"}
+			return nil, alertError(alertDecodeError, &ProtocolError{"truncated handshake fragment header"})
 		}
 		l, off, n := getUint24(b[1:4]), getUint24(b[6:9]), getUint24(b[9:12])
 		if uint64(off)+uint64(n) > uint64(l) || int(n) > len(b)-handshakeHeaderLen {
-			return nil, &ProtocolError{"invalid handshake fragment"}
+			return nil, alertError(alertDecodeError, &ProtocolError{"invalid handshake fragment"})
 		}
 		var body []byte
 		if n > 0 {

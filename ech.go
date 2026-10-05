@@ -343,7 +343,7 @@ func extractRawClientHelloExtensions(body []byte) ([]rawClientHelloExtension, er
 			return nil, extensions.err
 		}
 		if _, duplicate := seen[typ]; duplicate {
-			return nil, &ProtocolError{"duplicate ClientHello extension"}
+			return nil, alertError(alertIllegalParameter, &ProtocolError{"duplicate ClientHello extension"})
 		}
 		seen[typ] = struct{}{}
 		out = append(out, rawClientHelloExtension{typ: typ, value: value, valueOffset: vectorOffset + 2 + extensions.off - len(value)})

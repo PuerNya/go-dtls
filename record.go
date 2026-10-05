@@ -81,14 +81,14 @@ func parsePlainRecordsMode(datagram []byte, copyPayload bool, dst []record) ([]r
 	out := dst[:0]
 	for len(datagram) != 0 {
 		if len(datagram) < plainRecordHeaderLen {
-			return nil, &ProtocolError{"truncated record header"}
+			return nil, alertError(alertDecodeError, &ProtocolError{"truncated record header"})
 		}
 		if !validPlainContentType(datagram[0]) {
 			return nil, &ProtocolError{"invalid DTLS 1.3 plaintext content type"}
 		}
 		n := int(binary.BigEndian.Uint16(datagram[11:13]))
 		if n > maxRecordContent || len(datagram) < plainRecordHeaderLen+n {
-			return nil, &ProtocolError{"invalid record length"}
+			return nil, alertError(alertDecodeError, &ProtocolError{"invalid record length"})
 		}
 		epoch := binary.BigEndian.Uint16(datagram[3:5])
 		if epoch != 0 {

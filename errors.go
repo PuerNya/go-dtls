@@ -25,6 +25,19 @@ type ProtocolError struct {
 
 func (e *ProtocolError) Error() string { return "dtls13: protocol error: " + e.Reason }
 
+// vectorOverflowError reports that a length-prefixed wire vector does not fit
+// the width it was written with. It wraps a [ProtocolError] so callers that
+// classify by error type still see the protocol failure, while callers that
+// must react to one specific width can match this type instead of comparing
+// diagnostic text.
+type vectorOverflowError struct {
+	bits int
+	err  error
+}
+
+func (e *vectorOverflowError) Error() string { return e.err.Error() }
+func (e *vectorOverflowError) Unwrap() error { return e.err }
+
 var (
 	// ErrDatagramTooLarge indicates that an application datagram exceeds the
 	// current path MTU or the DTLS record size limit. A transport can still

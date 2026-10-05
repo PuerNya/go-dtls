@@ -1189,7 +1189,7 @@ func (c *Conn) clientHandshake() error {
 					return &ProtocolError{"server requested a certificate in a PSK handshake"}
 				}
 				if certificateRequest != nil {
-					return &ProtocolError{"duplicate CertificateRequest"}
+					return alertError(alertUnexpectedMessage, &ProtocolError{"duplicate CertificateRequest"})
 				}
 				certificateRequest, certificateRequestCompressionAlgorithms, err = parseCertificateRequestWithCompression(message.body)
 				if err != nil {
@@ -1201,7 +1201,7 @@ func (c *Conn) clientHandshake() error {
 				_ = transcript.add(message.typ, message.sequence, message.body)
 			case handshakeTypeCertificateVerify:
 				if len(peerCerts) == 0 {
-					return &ProtocolError{"CertificateVerify before Certificate"}
+					return alertError(alertUnexpectedMessage, &ProtocolError{"CertificateVerify before Certificate"})
 				}
 				cv, parseErr := parseCertificateVerify(message.body)
 				if parseErr != nil {
@@ -1236,7 +1236,7 @@ func (c *Conn) clientHandshake() error {
 				serverFinishedSequence = message.sequence
 				finished = true
 			default:
-				return &ProtocolError{"unexpected server handshake message"}
+				return alertError(alertUnexpectedMessage, &ProtocolError{"unexpected server handshake message"})
 			}
 		}
 	}
@@ -1981,7 +1981,7 @@ func (c *Conn) serverHandshake() error {
 			switch message.typ {
 			case handshakeTypeCertificate, handshakeTypeCompressedCertificate:
 				if clientStage != clientExpectCertificate {
-					return &ProtocolError{"unexpected client Certificate"}
+					return alertError(alertUnexpectedMessage, &ProtocolError{"unexpected client Certificate"})
 				}
 				certMessage, parseErr := parseCertificateHandshakeMessage(message.typ, message.body, clientCertificateCompressionAlgorithms, c.config.MaxHandshakeMessage)
 				if parseErr != nil {
@@ -2033,14 +2033,14 @@ func (c *Conn) serverHandshake() error {
 				}
 				clientFinishedSequence = message.sequence
 				if !usingPSK && c.config.ClientAuth != tls.NoClientCert && !sawClientCertificate {
-					return &ProtocolError{"client omitted Certificate message"}
+					return alertError(alertUnexpectedMessage, &ProtocolError{"client omitted Certificate message"})
 				}
 				required := !usingPSK && (c.config.ClientAuth == tls.RequireAnyClientCert || c.config.ClientAuth == tls.RequireAndVerifyClientCert)
 				if required && len(clientCerts) == 0 {
 					return alertError(alertCertificateRequired, &ProtocolError{"client certificate is required"})
 				}
 				if !usingPSK && len(clientCerts) > 0 && !verifiedClientSignature {
-					return &ProtocolError{"client omitted CertificateVerify"}
+					return alertError(alertUnexpectedMessage, &ProtocolError{"client omitted CertificateVerify"})
 				}
 				verify, parseErr := parseFinished(message.body, suite.hash.Size())
 				if parseErr != nil {
@@ -2053,7 +2053,7 @@ func (c *Conn) serverHandshake() error {
 				clientStage = clientHandshakeComplete
 				clientDone = true
 			default:
-				return &ProtocolError{"unexpected client handshake message"}
+				return alertError(alertUnexpectedMessage, &ProtocolError{"unexpected client handshake message"})
 			}
 		}
 	}

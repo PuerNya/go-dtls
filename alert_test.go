@@ -39,15 +39,19 @@ func TestUnknownAlertLevelIsAnErrorAlert(t *testing.T) {
 	}
 }
 
+// TestProtocolAlertClassification pins the rule that the alert comes from the
+// error's type and explicit alert, never from the wording of its Reason.
 func TestProtocolAlertClassification(t *testing.T) {
 	tests := []struct {
 		err  error
 		want uint8
 		ok   bool
 	}{
-		{&ProtocolError{"unexpected handshake message"}, alertUnexpectedMessage, true},
-		{&ProtocolError{"truncated handshake fragment header"}, alertDecodeError, true},
+		{alertError(alertUnexpectedMessage, &ProtocolError{"unexpected handshake message"}), alertUnexpectedMessage, true},
+		{alertError(alertDecodeError, &ProtocolError{"truncated handshake fragment header"}), alertDecodeError, true},
 		{&ProtocolError{"server selected an unoffered cipher suite"}, alertIllegalParameter, true},
+		{&ProtocolError{"unexpected handshake message"}, alertIllegalParameter, true},
+		{&ProtocolError{"truncated handshake fragment header"}, alertIllegalParameter, true},
 		{alertError(alertTooManyCIDsRequest, &ProtocolError{"too many"}), alertTooManyCIDsRequest, true},
 		{alertError(alertDecryptError, errors.New("bad signature")), alertDecryptError, true},
 		{errors.New("network failure"), 0, false},
@@ -60,6 +64,46 @@ func TestProtocolAlertClassification(t *testing.T) {
 	}
 }
 
+// TestVectorOverflowErrorKeepsProtocolClassification pins the invariant that
+// makes vectorOverflowError safe to use: wrapping does not hide the underlying
+// protocol failure from type-based classification, and the width of the
+// overflowed vector survives for callers that must react to one width.
+func TestVectorOverflowErrorKeepsProtocolClassification(t *testing.T) {
+	for _, bits := range []int{8, 16, 24} {
+		wrapped := &vectorOverflowError{bits: bits, err: &ProtocolError{"vector overflow"}}
+		var protocol *ProtocolError
+		if !errors.As(wrapped, &protocol) {
+			t.Fatalf("bits=%d: errors.As did not resolve the wrapped *ProtocolError", bits)
+		}
+		var overflow *vectorOverflowError
+		if !errors.As(wrapped, &overflow) || overflow.bits != bits {
+			t.Fatalf("bits=%d: errors.As did not resolve the overflow width", bits)
+		}
+		want := alertIllegalParameter
+		if got, ok := protocolAlert(wrapped); !ok || got != want {
+			t.Fatalf("bits=%d: protocolAlert=(%d,%v), want (%d,true)", bits, got, ok, want)
+		}
+	}
+}
+
+// TestProtocolAlertIgnoresReasonWording guards the property the classifier was
+// rewritten to provide: rewording a diagnostic must not change the wire alert.
+func TestProtocolAlertIgnoresReasonWording(t *testing.T) {
+	for _, reason := range []string{
+		"unexpected handshake message",
+		"truncated handshake fragment header",
+		"duplicate ClientHello extension",
+		"malformed certificate entry",
+		"invalid record length",
+		"the peer omitted CertificateVerify",
+		"",
+	} {
+		if got, ok := protocolAlert(&ProtocolError{reason}); !ok || got != alertIllegalParameter {
+			t.Fatalf("protocolAlert(%q)=(%d,%v), want (%d,true)", reason, got, ok, alertIllegalParameter)
+		}
+	}
+}
+
 func TestOutboundAlertClassification(t *testing.T) {
 	tests := []struct {
 		err  error
@@ -68,7 +112,8 @@ func TestOutboundAlertClassification(t *testing.T) {
 	}{
 		{nil, 0, false},
 		{errors.New("local callback failed"), alertGeneralError, true},
-		{&ProtocolError{"unexpected handshake message"}, alertUnexpectedMessage, true},
+		{alertError(alertUnexpectedMessage, &ProtocolError{"unexpected handshake message"}), alertUnexpectedMessage, true},
+		{&ProtocolError{"unexpected handshake message"}, alertIllegalParameter, true},
 		{AlertError(alertIllegalParameter), 0, false},
 		{io.EOF, 0, false},
 		{context.Canceled, 0, false},

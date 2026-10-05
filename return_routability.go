@@ -31,7 +31,7 @@ func (m returnRoutabilityMessage) marshal() ([returnRoutabilityMessageLen]byte, 
 func parseReturnRoutabilityMessage(wire []byte) (returnRoutabilityMessage, bool, error) {
 	var message returnRoutabilityMessage
 	if len(wire) == 0 {
-		return message, false, &ProtocolError{"truncated return routability message"}
+		return message, false, alertError(alertDecodeError, &ProtocolError{"truncated return routability message"})
 	}
 	message.typ = wire[0]
 	if message.typ > returnRoutabilityPathDrop {
