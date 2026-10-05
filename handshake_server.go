@@ -590,8 +590,8 @@ func (c *Conn) serverSendFlight(s *serverHandshakeState) error {
 		certMsg := &certificateMessage{}
 		for i, der := range s.cert.Certificate {
 			entry := certificateEntry{data: der}
-			if i == 0 && testServerCertificateEntryExtensions != nil {
-				entry.extensions = testServerCertificateEntryExtensions
+			if i == 0 && c.config.serverCertificateEntryExtensions != nil {
+				entry.extensions = c.config.serverCertificateEntryExtensions
 			}
 			certMsg.certificates = append(certMsg.certificates, entry)
 		}

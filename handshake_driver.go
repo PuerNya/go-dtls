@@ -18,12 +18,6 @@ const (
 
 type serverHandshakeStage uint8
 
-// testServerCertificateEntryExtensions, when non-nil, is attached to the first
-// certificate entry the server sends. It exists so tests can exercise the
-// receive path for CertificateEntry extensions against a real handshake; it is
-// always nil in production and is never set by anything but a test.
-var testServerCertificateEntryExtensions map[uint16][]byte
-
 const (
 	serverExpectEncryptedExtensions serverHandshakeStage = iota
 	serverExpectCertificateRequestOrCertificate

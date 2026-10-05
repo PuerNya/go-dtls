@@ -304,6 +304,14 @@ type Config struct {
 	MaxConnectionIDs int
 
 	state *configState
+
+	// serverCertificateEntryExtensions, when non-nil, is attached to the first
+	// certificate entry a server sends. It exists so tests can exercise the
+	// receive path for CertificateEntry extensions against a real handshake.
+	// It is unexported, always nil in production, and only ever set by a test;
+	// it lives on Config rather than as a package-level variable so tests that
+	// set it cannot race each other.
+	serverCertificateEntryExtensions map[uint16][]byte
 }
 
 type configState struct {

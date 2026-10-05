@@ -126,61 +126,56 @@ func (s ConnectionState) ExportKeyingMaterial(label string, context []byte, leng
 // performs the handshake. Conn methods synchronize access to protocol state;
 // reads and writes may run concurrently. Concurrent reads are serialized, as
 // are concurrent writes.
+//
+// # Locking
+//
+// Conn has six mutexes plus two sync.Once values. Fields below are grouped
+// under the mutex that guards them; a field is only ever read or written with
+// that mutex held unless its group comment says otherwise. Methods whose name
+// ends in Locked require writeMu to be held by the caller.
+//
+// Acquisition order, outer to inner. A goroutine holding a lock may take only
+// locks that appear later in the same chain; no lock is ever taken while a
+// later one in another chain is held:
+//
+//	dispatchMu  →  writeMu  →  inputMu
+//	                       →  mu
+//	dispatchMu  →  earlyMu
+//	dispatchMu  →  mu
+//	cidGenMu    →  writeMu
+//	readMu      →  inputMu
+//	readMu      →  readerMu
+//
+// dispatchMu serializes datagram dispatch with clearTrafficSecrets and is the
+// sole guard for closure, postHandshakeReassembly, and the completed-peer-flight
+// bounds; the *Locked helpers that read postHandshakeReassembly under writeMu
+// are reached only from dispatch and so are covered transitively.
+//
+// Known gap: the handshake goroutine writes sendCipher, sendingTraffic,
+// receivingTraffic, receiveEpochs, resumptionSuite, resumptionMasterSecret,
+// postHandshakeTranscript, and finishedACKCipher without a lock, relying on the
+// reader goroutine not having started. A Close concurrent with an in-flight
+// handshake races those writes via clearTrafficSecrets. Serializing Close
+// against the handshake is a behavioural change tracked separately.
 type Conn struct {
-	conn                     net.Conn
-	config                   *Config
-	isClient                 bool
-	hasCompletedPeerFlight   bool
-	postHandshakeAuthOffered bool
-	hasCompletedClientAuth   bool
+	// Immutable after construction.
+	conn     net.Conn
+	config   *Config
+	isClient bool
 
-	handshakeOnce                    sync.Once
-	handshakeErr                     error
-	mu                               sync.RWMutex
-	state                            ConnectionState
-	readMu                           sync.Mutex
-	dispatchMu                       sync.Mutex
-	inputOnce                        sync.Once
-	inputMu                          sync.Mutex
-	readNotify                       chan struct{}
-	readErr                          error
-	peerReadClosed                   bool
-	readerMu                         sync.Mutex
-	readerRunning                    bool
-	readerClosed                     bool
-	writeMu                          sync.Mutex
-	applicationDatagrams             []applicationDatagram
-	bufferedApplicationBytes         int
-	sendCipher                       *recordCipher
-	receiveEpochs                    *epochSet
-	closure                          closureState
-	handshakeDeadline                time.Time
-	sendingTraffic                   *sendingTraffic
-	receivingTraffic                 *receivingTraffic
-	finishedACKCipher                *recordCipher
-	finishedFlightStart              uint16
-	finishedMessageSequence          uint16
+	// Guarded by handshakeOnce: written exactly once by HandshakeContext.
+	handshakeOnce     sync.Once
+	handshakeErr      error
+	handshakeDeadline time.Time
+
+	// Set during the handshake, before the reader goroutine starts, and
+	// read-only thereafter; no lock is needed.
+	hasCompletedPeerFlight           bool
 	completedPeerFlightStart         uint16
 	completedPeerFlightEnd           uint16
-	resumptionSuite                  *cipherSuite
-	resumptionMasterSecret           []byte
-	sessionTicketRequest             *sessionTicketRequestState
-	ticketFlight                     *flight
-	postHandshakeReassembly          *reassembler
-	protectedHandshakeRanges         []protectedHandshakeRecordRange
-	recentApplicationRecords         []recordNumber
-	pendingHandshakeApplications     []pendingPostAuthApplication
-	pendingHandshakeApplicationBytes int
-	postHandshakeTranscript          *transcriptHash
-	postHandshakeAuthCounter         atomic.Uint64
-	postHandshakeAuthState           *postHandshakeAuthState
-	clientAuthRequestFlight          *flight
-	clientAuthResponseFlight         *flight
-	lastClientAuthRequestSeq         uint16
-	hasClientAuthRequestSeq          bool
-	completedClientAuthStart         uint16
-	completedClientAuthEnd           uint16
-	sendConnectionID                 []byte
+	postHandshakeAuthOffered         bool
+	finishedFlightStart              uint16
+	finishedMessageSequence          uint16
 	receiveConnectionID              []byte
 	connectionIDNegotiated           bool
 	returnRoutabilityCheckNegotiated bool
@@ -189,6 +184,59 @@ type Conn struct {
 	peerRecordSizeLimit              uint16
 	localCIDUpdatesAllowed           bool
 	peerCIDUpdatesAllowed            bool
+
+	// Guarded by mu.
+	mu    sync.RWMutex
+	state ConnectionState
+
+	// readMu serializes concurrent ReadDatagram calls; it guards no fields.
+	readMu sync.Mutex
+
+	// dispatchMu is held for the whole of dispatchDatagramFrom and of
+	// clearTrafficSecrets. It is the only guard for the fields listed here.
+	dispatchMu              sync.Mutex
+	closure                 closureState
+	postHandshakeReassembly *reassembler
+	receiveEpochs           *epochSet
+	resumptionSuite         *cipherSuite
+	resumptionMasterSecret  []byte
+	sessionTicketRequest    *sessionTicketRequestState
+
+	// Guarded by inputMu. readNotify is created once under inputOnce.
+	inputOnce                sync.Once
+	inputMu                  sync.Mutex
+	readNotify               chan struct{}
+	readErr                  error
+	peerReadClosed           bool
+	applicationDatagrams     []applicationDatagram
+	bufferedApplicationBytes int
+
+	// Guarded by readerMu.
+	readerMu      sync.Mutex
+	readerRunning bool
+	readerClosed  bool
+
+	// Guarded by writeMu.
+	writeMu                          sync.Mutex
+	sendCipher                       *recordCipher
+	sendingTraffic                   *sendingTraffic
+	receivingTraffic                 *receivingTraffic
+	finishedACKCipher                *recordCipher
+	ticketFlight                     *flight
+	protectedHandshakeRanges         []protectedHandshakeRecordRange
+	recentApplicationRecords         []recordNumber
+	pendingHandshakeApplications     []pendingPostAuthApplication
+	pendingHandshakeApplicationBytes int
+	postHandshakeTranscript          *transcriptHash
+	postHandshakeAuthState           *postHandshakeAuthState
+	clientAuthRequestFlight          *flight
+	clientAuthResponseFlight         *flight
+	lastClientAuthRequestSeq         uint16
+	hasClientAuthRequestSeq          bool
+	hasCompletedClientAuth           bool
+	completedClientAuthStart         uint16
+	completedClientAuthEnd           uint16
+	sendConnectionID                 []byte
 	newConnectionIDFlight            *flight
 	requestCIDFlight                 *flight
 	connectionIDRequestOpen          bool
@@ -198,21 +246,28 @@ type Conn struct {
 	hasNewCIDSequence                bool
 	lastRequestCIDSequence           uint16
 	hasRequestCIDSequence            bool
-	cidGenMu                         sync.Mutex
-	earlyMu                          sync.Mutex
-	earlyPending                     []byte
-	earlySignaled                    bool
-	earlyReadDatagrams               [][]byte
-	earlyReadBytes                   int
-	earlyAccepted                    bool
-	earlyDataLimit                   uint32
-	earlySent                        bool
-	earlyRejected                    bool
-	pathMTU                          atomic.Int64
-	plainSendSequence                atomic.Uint64
-	retransmitNanos                  atomic.Int64
-	lastRTTSampleUnixNano            atomic.Int64
 	returnRoutability                *returnRoutabilityState
+
+	// cidGenMu serializes respondToConnectionIDRequest; it guards no fields.
+	cidGenMu sync.Mutex
+
+	// Guarded by earlyMu.
+	earlyMu            sync.Mutex
+	earlyPending       []byte
+	earlySignaled      bool
+	earlyReadDatagrams [][]byte
+	earlyReadBytes     int
+	earlyAccepted      bool
+	earlyDataLimit     uint32
+	earlySent          bool
+	earlyRejected      bool
+
+	// Lock-free atomics.
+	pathMTU                  atomic.Int64
+	plainSendSequence        atomic.Uint64
+	retransmitNanos          atomic.Int64
+	lastRTTSampleUnixNano    atomic.Int64
+	postHandshakeAuthCounter atomic.Uint64
 }
 
 type applicationDatagram struct {
@@ -582,6 +637,12 @@ func (c *Conn) rememberProtectedHandshakeRange(first, last recordNumber) error {
 	return nil
 }
 
+// bufferIncompleteHandshakeApplicationLocked buffers an application record
+// that arrived while a fragmented post-handshake message is still being
+// reassembled, so it can be released in order once the message completes.
+// Requires writeMu. It also reads postHandshakeReassembly, which is guarded by
+// dispatchMu; every caller is reached from dispatchDatagramFrom, so that lock
+// is held as well.
 func (c *Conn) bufferIncompleteHandshakeApplicationLocked(content []byte, number recordNumber, from net.Addr) (bool, error) {
 	if c.postHandshakeReassembly == nil || !c.postHandshakeReassembly.hasIncompleteProtected() {
 		return false, nil
@@ -830,292 +891,33 @@ func (c *Conn) dispatchDatagramFrom(datagram []byte, from net.Addr) error {
 				return err
 			}
 		}
+		var err error
 		switch typ {
 		case recordTypeApplicationData:
-			c.writeMu.Lock()
-			bufferErr := c.rememberApplicationRecordLocked(number)
-			buffered := false
-			if bufferErr == nil {
-				buffered, bufferErr = c.bufferIncompleteHandshakeApplicationLocked(content, number, from)
-			}
-			if bufferErr == nil && !buffered {
-				buffered, bufferErr = c.bufferPostHandshakeAuthApplicationLocked(content, number, from)
-			}
-			c.writeMu.Unlock()
-			if bufferErr != nil {
-				return bufferErr
-			}
-			if buffered {
-				break
-			}
-			if err := c.queueApplicationData(content, from); err != nil {
-				return err
-			}
+			err = c.dispatchApplicationData(content, number, from)
 		case recordTypeAlert:
-			alert, parseErr := parseAlert(content)
-			if parseErr != nil {
-				description, _ := protocolAlert(parseErr)
-				return alertError(description, parseErr)
-			}
-			if alert.isUserCanceled() {
-				break
-			}
-			if alert.isCloseNotify() {
-				c.closure.receive(number)
-				c.inputMu.Lock()
-				c.peerReadClosed = true
-				c.inputMu.Unlock()
-				c.notifyRead()
-				break
-			}
-			return AlertError(alert.description)
+			err = c.dispatchAlert(content, number)
 		case recordTypeACK:
-			var scratch [1]recordNumber
-			numbers, parseErr := parseACKInto(content, scratch[:0])
-			if parseErr != nil {
-				description, _ := protocolAlert(parseErr)
-				return alertError(description, parseErr)
-			}
-			if parseErr = validateACKEpoch(numbers, epoch); parseErr != nil {
-				return parseErr
-			}
-			startKeyUpdateResponse := false
-			c.writeMu.Lock()
-			if c.sendingTraffic != nil {
-				if c.sendingTraffic.processACK(numbers) {
-					c.sendCipher = c.sendingTraffic.cipher
-					if c.keyUpdateResponsePending && c.sendingTraffic.canBeginKeyUpdate() {
-						wire, _, beginErr := c.sendingTraffic.beginKeyUpdate(false)
-						if beginErr != nil {
-							c.writeMu.Unlock()
-							return beginErr
-						}
-						if beginErr = c.writeRecord(wire); beginErr != nil {
-							c.writeMu.Unlock()
-							return beginErr
-						}
-						c.keyUpdateResponsePending = false
-						startKeyUpdateResponse = true
-					} else if c.keyUpdateResponsePending && c.sendingTraffic.cipher.epoch >= maxSendingEpoch {
-						c.keyUpdateResponsePending = false
-					}
-				}
-			}
-			if c.ticketFlight != nil {
-				c.ticketFlight.ack(numbers)
-				if c.ticketFlight.complete() {
-					c.observeFlightRTT(c.ticketFlight)
-					c.ticketFlight = nil
-				} else if err := c.retransmitPartialFlight(c.conn, c.ticketFlight); err != nil {
-					c.writeMu.Unlock()
-					return err
-				}
-			}
-			if c.clientAuthRequestFlight != nil {
-				c.clientAuthRequestFlight.ack(numbers)
-				if c.clientAuthRequestFlight.complete() {
-					c.observeFlightRTT(c.clientAuthRequestFlight)
-					c.clientAuthRequestFlight = nil
-				} else if err := c.retransmitPartialFlight(c.conn, c.clientAuthRequestFlight); err != nil {
-					c.writeMu.Unlock()
-					return err
-				}
-			}
-			if c.clientAuthResponseFlight != nil {
-				c.clientAuthResponseFlight.ack(numbers)
-				if c.clientAuthResponseFlight.complete() {
-					c.observeFlightRTT(c.clientAuthResponseFlight)
-					c.clientAuthResponseFlight = nil
-				} else if err := c.retransmitPartialFlight(c.conn, c.clientAuthResponseFlight); err != nil {
-					c.writeMu.Unlock()
-					return err
-				}
-			}
-			if err := c.processCIDACKsLocked(numbers); err != nil {
-				c.writeMu.Unlock()
-				return err
-			}
-			c.writeMu.Unlock()
-			if startKeyUpdateResponse {
-				go c.startKeyUpdateRetransmission()
-			}
+			err = c.dispatchACK(content, epoch)
 		case recordTypeReturnRoutability:
-			if err := c.handleReturnRoutability(content, from); err != nil {
-				return err
-			}
+			err = c.handleReturnRoutability(content, from)
 		case recordTypeHandshake:
-			var fragmentScratch [1]handshakeFragment
-			fragments, parseErr := parseHandshakeFragmentsViewInto(content, fragmentScratch[:0])
-			if parseErr != nil {
-				return parseErr
-			}
-			for _, fragment := range fragments {
-				if fragment.typ == handshakeTypeKeyUpdate && (len(fragments) != 1 || fragment.offset != 0 || int(fragment.length) != len(fragment.body)) {
-					return alertError(alertUnexpectedMessage, &ProtocolError{"KeyUpdate is not aligned to a record boundary"})
-				}
-			}
-			if epoch == 2 && c.hasCompletedPeerFlight {
-				completedFlightRecord := len(fragments) > 0
-				for _, fragment := range fragments {
-					if fragment.messageSequence < c.completedPeerFlightStart || fragment.messageSequence > c.completedPeerFlightEnd {
-						completedFlightRecord = false
-						break
-					}
-				}
-				if completedFlightRecord {
-					c.writeMu.Lock()
-					var ackScratch [1][]byte
-					acks, _, ackErr := buildACKRecordsInto(ackScratch[:0], []recordNumber{number}, c.currentMTU(), 0, c.sendCipher)
-					if ackErr == nil {
-						for _, wire := range acks {
-							_, _ = c.conn.Write(wire)
-						}
-					}
-					c.writeMu.Unlock()
-				}
-				break
-			}
-			if c.receivingTraffic != nil {
-				for _, fragment := range fragments {
-					if fragment.typ == handshakeTypeCertificateRequest && c.isClient {
-						if err := c.ackProtectedRecord(number); err != nil {
-							return err
-						}
-						if c.postHandshakeReassembly == nil {
-							c.postHandshakeReassembly = newReassemblerWithLimits(c.config.MaxHandshakeMessage, c.config.MaxBufferedHandshakeMessages, c.config.MaxBufferedHandshakeBytes)
-						}
-						body, complete, firstRecord, lastRecord, reassemblyErr := c.postHandshakeReassembly.addProtectedRecord(fragment, number)
-						if reassemblyErr != nil {
-							return reassemblyErr
-						}
-						if complete {
-							if reassemblyErr = c.rememberProtectedHandshakeRange(firstRecord, lastRecord); reassemblyErr != nil {
-								return reassemblyErr
-							}
-							if err := c.processPostHandshakeCertificateRequest(fragment.messageSequence, body); err != nil {
-								return err
-							}
-						}
-						continue
-					}
-					if !c.isClient && (fragment.typ == handshakeTypeCertificate || fragment.typ == handshakeTypeCompressedCertificate || fragment.typ == handshakeTypeCertificateVerify || fragment.typ == handshakeTypeFinished) {
-						if err := c.processPostHandshakeAuthFragment(fragment, number); err != nil {
-							return err
-						}
-						continue
-					}
-					if fragment.typ == handshakeTypeNewSessionTicket && c.isClient {
-						if err := c.ackProtectedRecord(number); err != nil {
-							return err
-						}
-						if c.postHandshakeReassembly == nil {
-							c.postHandshakeReassembly = newReassemblerWithLimits(c.config.MaxHandshakeMessage, c.config.MaxBufferedHandshakeMessages, c.config.MaxBufferedHandshakeBytes)
-						}
-						body, complete, firstRecord, lastRecord, reassemblyErr := c.postHandshakeReassembly.addProtectedRecord(fragment, number)
-						if reassemblyErr != nil {
-							return reassemblyErr
-						}
-						if complete {
-							if reassemblyErr = c.rememberProtectedHandshakeRange(firstRecord, lastRecord); reassemblyErr != nil {
-								return reassemblyErr
-							}
-							if err := c.processNewSessionTicket(fragment.messageSequence, body); err != nil {
-								return err
-							}
-						}
-						continue
-					}
-					if fragment.typ == handshakeTypeNewConnectionID || fragment.typ == handshakeTypeRequestConnectionID {
-						if c.postHandshakeReassembly == nil {
-							c.postHandshakeReassembly = newReassemblerWithLimits(c.config.MaxHandshakeMessage, c.config.MaxBufferedHandshakeMessages, c.config.MaxBufferedHandshakeBytes)
-						}
-						body, complete, firstRecord, lastRecord, reassemblyErr := c.postHandshakeReassembly.addProtectedRecord(fragment, number)
-						if reassemblyErr != nil {
-							return reassemblyErr
-						}
-						var requestCount uint8
-						respond := false
-						if complete {
-							if reassemblyErr = c.rememberProtectedHandshakeRange(firstRecord, lastRecord); reassemblyErr != nil {
-								return reassemblyErr
-							}
-							if fragment.typ == handshakeTypeNewConnectionID {
-								reassemblyErr = c.processNewConnectionID(fragment.messageSequence, body)
-							} else {
-								requestCount, respond, reassemblyErr = c.processRequestConnectionID(fragment.messageSequence, body)
-							}
-							if reassemblyErr != nil {
-								return reassemblyErr
-							}
-						}
-						if err := c.ackProtectedRecord(number); err != nil {
-							return err
-						}
-						if respond {
-							go c.respondToConnectionIDRequest(requestCount)
-						}
-						continue
-					}
-					if fragment.typ == handshakeTypeKeyUpdate && fragment.offset == 0 && int(fragment.length) == len(fragment.body) {
-						startRetransmission := false
-						var responseErr error
-						c.writeMu.Lock()
-						if c.postHandshakeAuthState != nil && c.postHandshakeAuthState.hasResponseEpoch {
-							c.writeMu.Unlock()
-							return alertError(alertUnexpectedMessage, &ProtocolError{"KeyUpdate interleaved with post-handshake authentication response"})
-						}
-						if c.hasIncompleteProtectedHandshakeLocked() {
-							c.writeMu.Unlock()
-							return alertError(alertUnexpectedMessage, &ProtocolError{"KeyUpdate followed an incomplete handshake message"})
-						}
-						message, updated, updateErr := c.receivingTraffic.processKeyUpdate(fragment.messageSequence, fragment.body)
-						if updateErr == nil {
-							var acks [][]byte
-							var ackScratch [1][]byte
-							acks, _, responseErr = buildACKRecordsInto(ackScratch[:0], []recordNumber{number}, c.currentMTU(), 0, c.sendCipher)
-							if responseErr == nil {
-								for _, wire := range acks {
-									if responseErr = c.writeRecord(wire); responseErr != nil {
-										break
-									}
-								}
-							}
-							if responseErr == nil && updated && message.requestUpdate {
-								if c.sendingTraffic.canBeginKeyUpdate() {
-									wire, _, beginErr := c.sendingTraffic.beginKeyUpdate(false)
-									responseErr = beginErr
-									if responseErr == nil {
-										c.sendCipher = c.sendingTraffic.cipher
-										if responseErr = c.writeRecord(wire); responseErr == nil {
-											startRetransmission = true
-										}
-									}
-								} else if c.sendingTraffic.cipher.epoch < maxSendingEpoch {
-									c.keyUpdateResponsePending = true
-								}
-							}
-						}
-						c.writeMu.Unlock()
-						if updateErr != nil {
-							return updateErr
-						}
-						if responseErr != nil {
-							return responseErr
-						}
-						if startRetransmission {
-							c.startKeyUpdateRetransmission()
-						}
-						continue
-					}
-					return alertError(alertUnexpectedMessage, &ProtocolError{"unexpected post-handshake message"})
-				}
-			}
+			err = c.dispatchHandshake(content, number, epoch)
+		}
+		if err != nil {
+			return err
 		}
 		datagram = datagram[consumed:]
 	}
 	return nil
 }
 
+// hasIncompleteProtectedHandshakeLocked reports whether a fragmented
+// post-handshake message or a post-handshake authentication response is still
+// being reassembled, in which case a KeyUpdate must be rejected because it
+// would change the epoch under a message that must not span a key change.
+// Requires writeMu. It also reads postHandshakeReassembly, which is guarded by
+// dispatchMu; its only caller is reached from dispatchDatagramFrom.
 func (c *Conn) hasIncompleteProtectedHandshakeLocked() bool {
 	if c.postHandshakeReassembly != nil && c.postHandshakeReassembly.hasIncompleteProtected() {
 		return true
