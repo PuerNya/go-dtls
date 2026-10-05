@@ -502,6 +502,7 @@ Optional extensions not implemented include RFC 9261 Exported Authenticators and
 The following items do not reduce completion of mandatory RFC 9147 semantics, but users should understand the boundaries:
 
 - This module implements only DTLS 1.3 and provides no DTLS 1.2 fallback; it therefore does not claim full RFC 9325 compliance with the BCP requirement that general-purpose implementations support DTLS 1.2.
+- This module requests no CertificateEntry extensions. Unsolicited extensions, including OCSP `status_request` and SCT, abort the handshake with `unsupported_extension`; recognized extensions in the wrong message produce `illegal_parameter`.
 - Heartbeat record demultiplexing is implemented; the complete Heartbeat protocol is defined by RFC 6520 and is outside RFC 9147 scope.
 - The sender uses the valid one-record-per-UDP-datagram mode and exposes no optional multi-record aggregation API.
 - Concurrent multiple PHA requests are not exposed; the RFC permits but does not require this capability.
@@ -542,7 +543,7 @@ The repository also includes focused benchmarks for cipher suites, ACK, records/
 - RFC 9848/9849 tests cover public configuration vectors, ECHConfig/ECHConfigList, HPKE, Inner/Outer and padding, outer-extension reconstruction, HRR acceptance confirmation and downgrade rejection, authenticated retry configurations, client-certificate suppression, GREASE, resumption, 0-RTT, fragmentation, weak networks, and real UDP.
 - Weak-network tests cover bidirectional loss, delay, reordering, and duplication, including CH/SH/Finished/ACK/HRR/mTLS-resumption combinations.
 - mTLS tests cover full handshakes, PSK resumption, 0-RTT, CA/policy fallback, and renewed-ticket authentication lifetime.
-- RFC 9846 alert tests cover handshake processing, final-ACK waiting, post-handshake reordering, `close_notify`, and local cryptographic failure.
+- RFC 9846 alert tests cover malformed wire data, unexpected handshake messages (including messages after Finished in the same batch), unsolicited CertificateEntry extensions, final-ACK waiting, post-handshake reordering, `close_notify`, and local cryptographic failure.
 - RFC 9853 tests cover RRC messages/state machines, real UDP NAT rebinding, CID updates, weak-network combinations, and connection resource lifecycles.
 - Parser/record fuzzing covers copy and in-place decryption differentials for all four AEADs.
 - Bidirectional real-UDP tests with wolfSSL master `6502cdd` cover HRR, RSA-PSS certificate handshakes, Finished ACK, application data, AES-GCM, AES-128-CCM, direct external PSKs, CID, KeyUpdate, PHA, ordinary session resumption, and all three hybrid groups in the directions supported by the peer. Additional supported directions cover go-dtls-sent RFC 8701 CH/CR/NST GREASE, RFC 9149 non-negotiation fallback, immediate CID switching, mTLS resumption, and Finished retransmission after final-ACK loss, plus wolfSSL-client-initiated 0-RTT. ECH coverage is limited to GREASE fallback because the peer cannot currently complete DTLS accepted-ECH.

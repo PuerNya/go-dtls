@@ -213,8 +213,7 @@ func TestSessionTicketStateClientCertificateVectorOverflow(t *testing.T) {
 	if overflow.bits != 16 {
 		t.Fatalf("overflow bits=%d, want 16", overflow.bits)
 	}
-	var protocol *ProtocolError
-	if !errors.As(err, &protocol) {
+	if _, ok := errors.AsType[*ProtocolError](err); !ok {
 		t.Fatalf("err=%v does not resolve to *ProtocolError", err)
 	}
 	if !clientCertificateTicketOverflow(err) {

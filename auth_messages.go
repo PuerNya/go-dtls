@@ -213,14 +213,12 @@ func validateEarlyDataSelection(accepted bool, selectedIdentity *uint16) error {
 type certificateEntryExtensionVerdict uint8
 
 const (
-	// certificateEntryExtensionsClean means the entry has no extensions, or
-	// only extensions that ignoredCertificateEntryExtension allows.
-	certificateEntryExtensionsClean certificateEntryExtensionVerdict = iota
 	// certificateEntryExtensionsRecognized means a recognized extension type
-	// appeared in CertificateEntry, where RFC 9846 does not permit it.
-	certificateEntryExtensionsRecognized
-	// certificateEntryExtensionsUnsolicited means an unknown extension this
-	// client did not request appeared and is not on the ignore list.
+	// appeared in CertificateEntry, where RFC 9846 does not permit it. Zero
+	// is reserved for entries without extensions.
+	certificateEntryExtensionsRecognized certificateEntryExtensionVerdict = iota + 1
+	// certificateEntryExtensionsUnsolicited means an extension appeared
+	// without a corresponding request from this endpoint.
 	certificateEntryExtensionsUnsolicited
 )
 
@@ -236,29 +234,16 @@ type certificateMessage struct {
 	certificates   []certificateEntry
 }
 
-// ignoredCertificateEntryExtension reports whether a CertificateEntry
-// extension carries only supplementary data this client never requests and
-// can therefore be skipped. status_request and signed_certificate_timestamp
-// are authenticated with the rest of the Certificate message, are not
-// negotiated by this package, and are ignored by crypto/tls, wolfSSL, and
-// OpenSSL clients when present; aborting on them would break interoperability
-// with servers that staple unconditionally without any security benefit.
-func ignoredCertificateEntryExtension(typ uint16) bool {
-	return typ == extStatusRequest || typ == extSCT
-}
-
 // classifyCertificateEntryExtension maps one CertificateEntry extension type
 // to its verdict. Recognized-but-misplaced wins over unsolicited so the RFC
-// 9846 §4.2 illegal_parameter rule is reported even when both kinds appear.
+// 9846 §4.3 illegal_parameter rule is reported even when both kinds appear.
+// This endpoint requests no CertificateEntry extensions, so every other type
+// requires unsupported_extension, including status_request and SCT.
 func classifyCertificateEntryExtension(typ uint16) certificateEntryExtensionVerdict {
-	switch {
-	case knownExtensionType(typ):
+	if knownExtensionType(typ) {
 		return certificateEntryExtensionsRecognized
-	case ignoredCertificateEntryExtension(typ):
-		return certificateEntryExtensionsClean
-	default:
-		return certificateEntryExtensionsUnsolicited
 	}
+	return certificateEntryExtensionsUnsolicited
 }
 
 func mergeCertificateEntryVerdict(current, next certificateEntryExtensionVerdict) certificateEntryExtensionVerdict {
@@ -347,7 +332,7 @@ func parseCertificateMessage(b []byte, maxSize int) (*certificateMessage, error)
 			return nil, q.err
 		}
 		if len(data) == 0 {
-			return nil, &ProtocolError{"empty certificate entry"}
+			return nil, alertError(alertDecodeError, &ProtocolError{"empty certificate entry"})
 		}
 		start := q.off
 		extLen := q.u16()

@@ -330,7 +330,7 @@ func (p *wireParser) done() error {
 		return p.err
 	}
 	if p.off != len(p.b) {
-		return &ProtocolError{"trailing handshake data"}
+		return alertError(alertDecodeError, &ProtocolError{"trailing handshake data"})
 	}
 	return nil
 }

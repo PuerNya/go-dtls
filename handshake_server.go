@@ -141,7 +141,7 @@ func (c *Conn) serverReceiveClientHello(s *serverHandshakeState) error {
 		return err
 	}
 	if messages.len() != 1 || messages.at(0).typ != handshakeTypeClientHello {
-		return &ProtocolError{"expected ClientHello"}
+		return alertError(alertUnexpectedMessage, &ProtocolError{"expected ClientHello"})
 	}
 	s.messages = messages
 	s.helloBody = messages.at(0).body
@@ -329,7 +329,7 @@ func (c *Conn) serverReceiveSecondClientHello(s *serverHandshakeState) error {
 		return err
 	}
 	if messages.len() != 1 || messages.at(0).typ != handshakeTypeClientHello {
-		return &ProtocolError{"expected second ClientHello"}
+		return alertError(alertUnexpectedMessage, &ProtocolError{"expected second ClientHello"})
 	}
 	s.messages = messages
 	secondBody := messages.at(0).body
@@ -644,7 +644,7 @@ func (c *Conn) serverProcessClientFlight(s *serverHandshakeState) error {
 	sawClientCertificate := false
 	verifiedClientSignature := false
 	receiveConn := s.serverFlightConn(c)
-	for {
+	for stage != clientHandshakeComplete {
 		messages, err := c.receiveHandshakeWithRetransmitOnEarly(receiveConn, s.inbox, s.clientCipher, s.serverFlight, s.earlyCipher, c.queueEarlyApplicationData, s.serverCipher)
 		if err != nil {
 			return err
@@ -685,12 +685,16 @@ func (c *Conn) serverProcessClientFlight(s *serverHandshakeState) error {
 				if !s.usingPSK && len(s.clientCerts) > 0 && !verifiedClientSignature {
 					return alertError(alertUnexpectedMessage, &ProtocolError{"client omitted CertificateVerify"})
 				}
-				return c.serverClientFinished(s, message)
+				if err = c.serverClientFinished(s, message); err != nil {
+					return err
+				}
+				stage = clientHandshakeComplete
 			default:
 				return alertError(alertUnexpectedMessage, &ProtocolError{"unexpected client handshake message"})
 			}
 		}
 	}
+	return nil
 }
 
 // serverClientCertificate processes the client Certificate and reports whether
@@ -718,7 +722,7 @@ func (c *Conn) serverClientCertificate(s *serverHandshakeState, message complete
 
 func (c *Conn) serverClientCertificateVerify(s *serverHandshakeState, message completedHandshake) error {
 	if len(s.clientCerts) == 0 {
-		return &ProtocolError{"client CertificateVerify without certificate"}
+		return alertError(alertUnexpectedMessage, &ProtocolError{"client CertificateVerify without certificate"})
 	}
 	cv, err := parseCertificateVerify(message.body)
 	if err != nil {

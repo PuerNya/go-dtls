@@ -539,33 +539,40 @@ func TestEndToEndCertificateHandshake(t *testing.T) {
 	_ = right.Close()
 }
 
-// TestEndToEndServerCertificateEntryExtension pins the relaxed CertificateEntry
-// path against a real handshake rather than only the codec. The server attaches
-// an unrequested status_request extension to its leaf entry through the
-// test-only Config.serverCertificateEntryExtensions field; a client that still
-// aborted on unsolicited CertificateEntry extensions would fail the handshake.
-func TestEndToEndServerCertificateEntryExtension(t *testing.T) {
+func TestEndToEndRejectsUnsolicitedCertificateEntryExtensions(t *testing.T) {
 	certificate, roots := testServerCertificate(t)
-	left, right := memoryDatagramPair()
-	client := Client(left, &Config{RootCAs: roots, ServerName: "server.test", HandshakeTimeout: 5 * time.Second})
-	server := Server(right, &Config{
-		Certificates:                     []tls.Certificate{certificate},
-		HandshakeTimeout:                 5 * time.Second,
-		serverCertificateEntryExtensions: map[uint16][]byte{extStatusRequest: {0x01, 0x00, 0x00}},
-	})
-	serverErr := make(chan error, 1)
-	go func() { serverErr <- server.Handshake() }()
-	if err := client.Handshake(); err != nil {
-		t.Fatalf("client rejected an ignored CertificateEntry extension: %v", err)
+	for _, extension := range []struct {
+		name string
+		typ  uint16
+	}{
+		{"status_request", extStatusRequest},
+		{"sct", extSCT},
+	} {
+		t.Run(extension.name, func(t *testing.T) {
+			left, right := memoryDatagramPair()
+			defer left.Close()
+			defer right.Close()
+			client := Client(left, &Config{RootCAs: roots, ServerName: "server.test", HandshakeTimeout: time.Second})
+			server := Server(right, &Config{
+				Certificates:                     []tls.Certificate{certificate},
+				HandshakeTimeout:                 time.Second,
+				serverCertificateEntryExtensions: map[uint16][]byte{extension.typ: {0}},
+			})
+			serverErr := make(chan error, 1)
+			go func() { serverErr <- server.Handshake() }()
+			err := client.Handshake()
+			peerErr := <-serverErr
+			if description, ok := protocolAlert(err); !ok || description != alertUnsupportedExtension {
+				t.Fatalf("client alert=%d ok=%v err=%v, want unsupported_extension", description, ok, err)
+			}
+			if !errors.Is(peerErr, AlertError(alertUnsupportedExtension)) {
+				t.Fatalf("server received %v, want unsupported_extension", peerErr)
+			}
+			if client.ConnectionState().HandshakeComplete || server.ConnectionState().HandshakeComplete {
+				t.Fatal("handshake completed with an unsolicited CertificateEntry extension")
+			}
+		})
 	}
-	if err := <-serverErr; err != nil {
-		t.Fatal(err)
-	}
-	if !client.ConnectionState().HandshakeComplete {
-		t.Fatal("handshake did not complete")
-	}
-	_ = left.Close()
-	_ = right.Close()
 }
 
 func TestCertificateVerificationFailureSendsUnknownCA(t *testing.T) {
@@ -2618,8 +2625,7 @@ func TestUnexpectedConnectionIDMessageSendsFatalAlert(t *testing.T) {
 		client.inputMu.Lock()
 		readErr := client.readErr
 		client.inputMu.Unlock()
-		var alertErr AlertError
-		if errors.As(readErr, &alertErr) {
+		if alertErr, ok := errors.AsType[AlertError](readErr); ok {
 			if uint8(alertErr) != alertUnexpectedMessage {
 				t.Fatalf("received alert %d, want unexpected_message", alertErr)
 			}

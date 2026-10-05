@@ -7,19 +7,19 @@
 ## 开发环境
 
 - Go 1.27 或更高版本。
-- golangci-lint v2.12.2，与 CI 使用的版本一致。
+- golangci-lint v2.14.0，与 CI 使用的版本一致。
 - Windows race 测试需要 Zig 0.17 和可用的 CGO 工具链。
 - 变更涉及 wolfSSL 已支持的功能时，wolfSSL 互通测试和专项 benchmark 是必需门禁；其他变更可不安装 wolfSSL。
 
 ## 必需检查
 
-所有 Go 源码必须符合 golangci-lint v2.12.2 formatter 配置。每个 commit 和 pull request 都必须通过 format、module、lint、test、shuffle、checkptr、vet 和 race；Linux、macOS 及 CI 使用：
+所有 Go 源码必须符合 golangci-lint v2.14.0 formatter 配置。每个 commit 和 pull request 都必须通过 format、module、lint、test、shuffle、checkptr、vet 和 race；Linux、macOS 及 CI 使用：
 
 ```sh
-go run github.com/golangci/golangci-lint/v2/cmd/golangci-lint@v2.12.2 fmt --diff
+go run github.com/golangci/golangci-lint/v2/cmd/golangci-lint@v2.14.0 fmt --diff
 go mod verify
 go mod tidy -diff
-go run github.com/golangci/golangci-lint/v2/cmd/golangci-lint@v2.12.2 run ./...
+go run github.com/golangci/golangci-lint/v2/cmd/golangci-lint@v2.14.0 run ./...
 go test ./... -count=1
 go test ./... -shuffle=on -count=1
 go test ./... -gcflags=all=-d=checkptr=2 -count=1

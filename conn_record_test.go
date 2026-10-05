@@ -560,8 +560,7 @@ func TestPostHandshakeRetransmissionFailureTerminatesConnection(t *testing.T) {
 		readErr := client.readErr
 		client.inputMu.Unlock()
 		if readErr != nil {
-			var protocol *ProtocolError
-			if !errors.As(readErr, &protocol) {
+			if _, ok := errors.AsType[*ProtocolError](readErr); !ok {
 				t.Fatalf("retransmission failure = %v", readErr)
 			}
 			if client.sendCipher != nil || client.sendingTraffic != nil || client.receivingTraffic != nil {

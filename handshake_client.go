@@ -318,7 +318,7 @@ func (c *Conn) clientReceiveServerHello(s *clientHandshakeState) error {
 		return err
 	}
 	if messages.len() != 1 || messages.at(0).typ != handshakeTypeServerHello {
-		return &ProtocolError{"expected ServerHello"}
+		return alertError(alertUnexpectedMessage, &ProtocolError{"expected ServerHello"})
 	}
 	s.messages = messages
 	s.serverHelloBody = messages.at(0).body
@@ -462,7 +462,7 @@ func (c *Conn) clientHandleHelloRetryRequest(s *clientHandshakeState) error {
 		return err
 	}
 	if s.messages.len() != 1 || s.messages.at(0).typ != handshakeTypeServerHello {
-		return &ProtocolError{"expected ServerHello after HelloRetryRequest"}
+		return alertError(alertUnexpectedMessage, &ProtocolError{"expected ServerHello after HelloRetryRequest"})
 	}
 	s.serverHelloBody = s.messages.at(0).body
 	if isHelloRetryRequestBody(s.serverHelloBody) {
@@ -620,7 +620,7 @@ func (c *Conn) clientProcessServerFlight(s *clientHandshakeState) error {
 	}
 	verifiedServerSignature := false
 	stage := serverExpectEncryptedExtensions
-	for {
+	for stage != serverHandshakeComplete {
 		messages, err := receiveHandshakeMessageWithEarlyBatch(c.conn, s.inbox, s.receiveCipher, nil, nil, nil, s.sendCipher, c.currentMTU(), c)
 		if err != nil {
 			return err
@@ -644,10 +644,7 @@ func (c *Conn) clientProcessServerFlight(s *clientHandshakeState) error {
 				if !s.usingPSK && (len(s.peerCerts) == 0 || !verifiedServerSignature) {
 					return &ProtocolError{"server authentication messages are incomplete"}
 				}
-				if err = c.clientServerFinished(s, message); err != nil {
-					return err
-				}
-				return nil
+				err = c.clientServerFinished(s, message)
 			default:
 				return alertError(alertUnexpectedMessage, &ProtocolError{"unexpected server handshake message"})
 			}
@@ -656,6 +653,7 @@ func (c *Conn) clientProcessServerFlight(s *clientHandshakeState) error {
 			}
 		}
 	}
+	return nil
 }
 
 func (c *Conn) clientEncryptedExtensions(s *clientHandshakeState, message completedHandshake) error {

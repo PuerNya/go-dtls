@@ -7,19 +7,19 @@ Thank you for contributing to `go-dtls`. Changes must preserve DTLS 1.3 datagram
 ## Development Environment
 
 - Go 1.27 or later.
-- golangci-lint v2.12.2, matching CI.
+- golangci-lint v2.14.0, matching CI.
 - Windows race tests require Zig 0.17 and a working CGO toolchain.
 - When a change affects a feature supported by wolfSSL, wolfSSL interoperability tests and focused benchmarks are required; other changes do not require wolfSSL.
 
 ## Required Checks
 
-All Go source must satisfy the golangci-lint v2.12.2 formatter configuration. Every commit and pull request must pass format, module, lint, test, shuffle, checkptr, vet, and race. Linux, macOS, and CI use:
+All Go source must satisfy the golangci-lint v2.14.0 formatter configuration. Every commit and pull request must pass format, module, lint, test, shuffle, checkptr, vet, and race. Linux, macOS, and CI use:
 
 ```sh
-go run github.com/golangci/golangci-lint/v2/cmd/golangci-lint@v2.12.2 fmt --diff
+go run github.com/golangci/golangci-lint/v2/cmd/golangci-lint@v2.14.0 fmt --diff
 go mod verify
 go mod tidy -diff
-go run github.com/golangci/golangci-lint/v2/cmd/golangci-lint@v2.12.2 run ./...
+go run github.com/golangci/golangci-lint/v2/cmd/golangci-lint@v2.14.0 run ./...
 go test ./... -count=1
 go test ./... -shuffle=on -count=1
 go test ./... -gcflags=all=-d=checkptr=2 -count=1

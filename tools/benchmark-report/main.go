@@ -937,9 +937,9 @@ func isFullCommit(commit string) bool {
 }
 
 func realUDPBenchmarkName(name string) string {
-	if index := strings.LastIndexByte(name, '-'); index >= 0 {
-		if _, err := strconv.ParseUint(name[index+1:], 10, 64); err == nil {
-			return name[:index]
+	if before, after, ok := strings.CutLast(name, "-"); ok {
+		if _, err := strconv.ParseUint(after, 10, 64); err == nil {
+			return before
 		}
 	}
 	return name

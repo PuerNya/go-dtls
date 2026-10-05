@@ -38,7 +38,7 @@ func parseReturnRoutabilityMessage(wire []byte) (returnRoutabilityMessage, bool,
 		return message, false, nil
 	}
 	if len(wire) != returnRoutabilityMessageLen {
-		return message, false, &ProtocolError{"invalid return routability message length"}
+		return message, false, alertError(alertDecodeError, &ProtocolError{"invalid return routability message length"})
 	}
 	copy(message.cookie[:], wire[1:])
 	return message, true, nil

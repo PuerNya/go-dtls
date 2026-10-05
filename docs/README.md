@@ -507,6 +507,7 @@ serverConfig.MaxSessionTickets = 4
 以下项目不降低 RFC 9147 强制语义完成度，但使用者应明确其边界：
 
 - 本模块只实现 DTLS 1.3，不提供 DTLS 1.2 回退，因此不声称完整符合 RFC 9325 对通用实现支持 DTLS 1.2 的要求。
+- 本模块不请求 CertificateEntry 扩展；收到未请求的扩展（包括 OCSP `status_request` 和 SCT）时以 `unsupported_extension` 中止握手，已识别但出现在错误消息中的扩展返回 `illegal_parameter`。
 - Heartbeat 的 record demux 已实现；完整 Heartbeat 协议由 RFC 6520 定义，不属于 RFC 9147 范围。
 - 发送端采用一条 record 一个 UDP datagram 的合法模式，未暴露可选的多 record 聚合 API。
 - 未暴露并行多个 PHA 请求；RFC 允许但不要求该能力。
@@ -547,7 +548,7 @@ go test -run '^$' -bench '^BenchmarkProtectedRecord(Seal|RoundTripInPlace)$' -be
 - RFC 9848/9849 测试覆盖公开配置向量、ECHConfig/ECHConfigList、HPKE、Inner/Outer 与 padding、outer extension 重建、HRR accept confirmation 和降级拒绝、认证 retry configs、客户端证书抑制、GREASE、恢复、0-RTT、分片、弱网和真实 UDP。
 - 弱网测试覆盖双向丢包、延迟、乱序和重复，以及 CH/SH/Finished/ACK/HRR/mTLS 恢复组合。
 - mTLS 测试覆盖完整握手、PSK 恢复、0-RTT、CA/策略回退和 ticket 续签认证寿命。
-- RFC 9846 alert 测试覆盖握手、final ACK 等待、握手后乱序、`close_notify` 和本地加密失败。
+- RFC 9846 alert 测试覆盖 wire 格式错误、非预期握手消息（包括同批次 Finished 后的消息）、未请求的 CertificateEntry 扩展、final ACK 等待、握手后乱序、`close_notify` 和本地加密失败。
 - RFC 9853 测试覆盖 RRC message/状态机、真实 UDP NAT rebind、CID 更新、弱网组合和连接资源生命周期。
 - parser/record fuzz 覆盖四套 AEAD 的复制与原地解密差分。
 - wolfSSL master `6502cdd` 双向真实 UDP 互通测试覆盖 HRR、RSA-PSS 证书握手、Finished ACK、应用数据、AES-GCM、AES-128-CCM、direct external PSK、CID、KeyUpdate、PHA、普通 session resumption 和受支持方向的三个 hybrid group；另覆盖本库发出的 RFC 8701 CH/CR/NST GREASE、RFC 9149 未协商回退、immediate CID 切换、mTLS 恢复、丢最终 ACK 后的 Finished 重传，以及 wolfSSL 客户端发起的 0-RTT。ECH 只验证 GREASE 回退；对端当前无法完成 DTLS accepted-ECH。

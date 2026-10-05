@@ -91,8 +91,7 @@ func verifyCertificateChainWithOptions(config *Config, message *certificateMessa
 		verified, err := certs[0].Verify(opts)
 		if err != nil {
 			description := uint8(alertBadCertificate)
-			var unknownAuthority x509.UnknownAuthorityError
-			if errors.As(err, &unknownAuthority) {
+			if _, ok := errors.AsType[x509.UnknownAuthorityError](err); ok {
 				description = alertUnknownCA
 			}
 			return nil, nil, alertError(description, fmt.Errorf("dtls13: verify peer certificate: %w", err))

@@ -129,10 +129,9 @@ func (s ConnectionState) ExportKeyingMaterial(label string, context []byte, leng
 //
 // # Locking
 //
-// Conn has six mutexes plus two sync.Once values. Fields below are grouped
-// under the mutex that guards them; a field is only ever read or written with
-// that mutex held unless its group comment says otherwise. Methods whose name
-// ends in Locked require writeMu to be held by the caller.
+// Fields below are grouped under the mutex that guards them. A field is read
+// or written with that mutex held unless its group comment says otherwise.
+// Methods whose name ends in Locked require writeMu to be held by the caller.
 //
 // Acquisition order, outer to inner. A goroutine holding a lock may take only
 // locks that appear later in the same chain; no lock is ever taken while a
@@ -147,8 +146,8 @@ func (s ConnectionState) ExportKeyingMaterial(label string, context []byte, leng
 //	readMu      →  readerMu
 //
 // dispatchMu serializes datagram dispatch with clearTrafficSecrets and is the
-// sole guard for closure, postHandshakeReassembly, and the completed-peer-flight
-// bounds; the *Locked helpers that read postHandshakeReassembly under writeMu
+// sole guard for closure and postHandshakeReassembly after the handshake;
+// the *Locked helpers that read postHandshakeReassembly under writeMu
 // are reached only from dispatch and so are covered transitively.
 //
 // During the handshake, the handshake goroutine owns protocol state until it
@@ -158,8 +157,10 @@ func (s ConnectionState) ExportKeyingMaterial(label string, context []byte, leng
 type Conn struct {
 	// Immutable after construction.
 	conn     net.Conn
-	config   *Config
 	isClient bool
+
+	// Replaced with its normalized copy by the handshake, then read-only.
+	config *Config
 
 	// Guarded by handshakeOnce: written exactly once by HandshakeContext.
 	handshakeOnce     sync.Once

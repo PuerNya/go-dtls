@@ -23,14 +23,9 @@ func TestCertificateMessageContextAndExtensionValidation(t *testing.T) {
 	}
 }
 
-// TestCertificateEntryExtensionClassification pins the RFC 9846 §4.4.2 and
-// §4.2 handling of CertificateEntry extensions through the real wire path.
-// status_request(5) and signed_certificate_timestamp(18) carry supplementary
-// data this client never requests and are ignored, matching crypto/tls,
-// wolfSSL, and OpenSSL. A recognized extension that RFC 9846 does not permit
-// in CertificateEntry is illegal_parameter, and any other unknown extension
-// is unsupported_extension. Mixed lists are classified over every extension,
-// not only the first one, and illegal_parameter wins when both appear.
+// RFC 9846 §4.3 requires unsupported_extension for unsolicited responses,
+// including status_request and SCT, and illegal_parameter for recognized
+// extensions in the wrong message. Check every entry through the wire parser.
 func TestCertificateEntryExtensionClassification(t *testing.T) {
 	const maxCertificateMessageForTesting = 1 << 16
 	for _, tc := range []struct {
@@ -39,14 +34,15 @@ func TestCertificateEntryExtensionClassification(t *testing.T) {
 		wantAlert  uint8
 		wantErr    bool
 	}{
-		{name: "status_request ignored", extensions: []map[uint16][]byte{{extStatusRequest: {0x01, 0x00, 0x00}}, {}}},
-		{name: "sct ignored", extensions: []map[uint16][]byte{{extSCT: {0x00, 0x00}}, {}}},
-		{name: "status_request and sct together ignored", extensions: []map[uint16][]byte{{extStatusRequest: {0x01}, extSCT: {0x00, 0x00}}, {}}},
-		{name: "ignored extension on non-leaf entry", extensions: []map[uint16][]byte{{}, {extStatusRequest: {0x01}}}},
+		{name: "no extensions", extensions: []map[uint16][]byte{{}, {}}},
+		{name: "unsolicited status_request", extensions: []map[uint16][]byte{{extStatusRequest: {0x01, 0x00, 0x00}}, {}}, wantErr: true, wantAlert: alertUnsupportedExtension},
+		{name: "unsolicited sct", extensions: []map[uint16][]byte{{extSCT: {0x00, 0x00}}, {}}, wantErr: true, wantAlert: alertUnsupportedExtension},
+		{name: "unsolicited status_request and sct", extensions: []map[uint16][]byte{{extStatusRequest: {0x01}, extSCT: {0x00, 0x00}}, {}}, wantErr: true, wantAlert: alertUnsupportedExtension},
+		{name: "unsolicited extension on non-leaf entry", extensions: []map[uint16][]byte{{}, {extStatusRequest: {0x01}}}, wantErr: true, wantAlert: alertUnsupportedExtension},
 		{name: "unknown extension", extensions: []map[uint16][]byte{{0xffa5: {1}}, {}}, wantErr: true, wantAlert: alertUnsupportedExtension},
-		{name: "unknown after ignored", extensions: []map[uint16][]byte{{extStatusRequest: {0x01}, 0xffa5: {1}}, {}}, wantErr: true, wantAlert: alertUnsupportedExtension},
+		{name: "unknown after status_request", extensions: []map[uint16][]byte{{extStatusRequest: {0x01}, 0xffa5: {1}}, {}}, wantErr: true, wantAlert: alertUnsupportedExtension},
 		{name: "recognized extension", extensions: []map[uint16][]byte{{extServerName: {}}, {}}, wantErr: true, wantAlert: alertIllegalParameter},
-		{name: "recognized after ignored", extensions: []map[uint16][]byte{{extStatusRequest: {0x01}, extKeyShare: {}}, {}}, wantErr: true, wantAlert: alertIllegalParameter},
+		{name: "recognized after status_request", extensions: []map[uint16][]byte{{extStatusRequest: {0x01}, extKeyShare: {}}, {}}, wantErr: true, wantAlert: alertIllegalParameter},
 		{name: "recognized wins over unknown", extensions: []map[uint16][]byte{{0xffa5: {1}, extKeyShare: {}}, {}}, wantErr: true, wantAlert: alertIllegalParameter},
 	} {
 		t.Run(tc.name, func(t *testing.T) {

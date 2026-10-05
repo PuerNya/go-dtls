@@ -173,8 +173,7 @@ func TestProtectedRecordReportsAuthenticatedInvalidInnerType(t *testing.T) {
 	sender, receiver := recordCipherPair(t, TLS_AES_128_GCM_SHA256, 3)
 	wire := sealInvalidInnerType(t, sender, recordTypeChangeCipherSpec)
 	_, _, _, err := receiver.open(wire)
-	var authenticatedErr *authenticatedRecordError
-	if !errors.As(err, &authenticatedErr) {
+	if _, ok := errors.AsType[*authenticatedRecordError](err); !ok {
 		t.Fatalf("invalid authenticated inner type returned %v", err)
 	}
 }

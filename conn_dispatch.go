@@ -6,7 +6,7 @@ import "net"
 // delegates to. Every handler runs with dispatchMu held by the caller and owns
 // at most one writeMu critical section. Handlers that must act *after*
 // releasing writeMu (starting a KeyUpdate retransmission timer) are split into
-// a *Locked helper that returns the decision and an unlocked wrapper that acts
+// a helper that acquires writeMu and returns the decision to a wrapper that acts
 // on it, so the lock is never held while a goroutine is started.
 
 // dispatchApplicationData files an application-data record: it is rejected if
@@ -14,7 +14,7 @@ import "net"
 // post-handshake message or a post-handshake auth response is incomplete, and
 // otherwise queued for ReadDatagram.
 func (c *Conn) dispatchApplicationData(content []byte, number recordNumber, from net.Addr) error {
-	buffered, err := c.bufferApplicationRecordLocked(content, number, from)
+	buffered, err := c.bufferApplicationRecord(content, number, from)
 	if err != nil {
 		return err
 	}
@@ -24,11 +24,11 @@ func (c *Conn) dispatchApplicationData(content []byte, number recordNumber, from
 	return c.queueApplicationData(content, from)
 }
 
-// bufferApplicationRecordLocked records the application record for ordering
+// bufferApplicationRecord records the application record for ordering
 // checks and buffers it if a protected handshake message is still in flight.
 // It takes and releases writeMu itself so queueApplicationData can take
 // inputMu without writeMu held.
-func (c *Conn) bufferApplicationRecordLocked(content []byte, number recordNumber, from net.Addr) (bool, error) {
+func (c *Conn) bufferApplicationRecord(content []byte, number recordNumber, from net.Addr) (bool, error) {
 	c.writeMu.Lock()
 	defer c.writeMu.Unlock()
 	if err := c.rememberApplicationRecordLocked(number); err != nil {
@@ -77,7 +77,7 @@ func (c *Conn) dispatchACK(content []byte, epoch uint64) error {
 	if err = validateACKEpoch(numbers, epoch); err != nil {
 		return err
 	}
-	startKeyUpdate, err := c.applyACKLocked(numbers)
+	startKeyUpdate, err := c.applyACK(numbers)
 	if err != nil {
 		return err
 	}
@@ -87,10 +87,10 @@ func (c *Conn) dispatchACK(content []byte, epoch uint64) error {
 	return nil
 }
 
-// applyACKLocked is the writeMu critical section of dispatchACK. It returns
+// applyACK is the writeMu critical section of dispatchACK. It returns
 // whether a deferred KeyUpdate response was just sent and now needs its
 // retransmission timer.
-func (c *Conn) applyACKLocked(numbers []recordNumber) (startKeyUpdate bool, err error) {
+func (c *Conn) applyACK(numbers []recordNumber) (startKeyUpdate bool, err error) {
 	c.writeMu.Lock()
 	defer c.writeMu.Unlock()
 	if c.sendingTraffic != nil && c.sendingTraffic.processACK(numbers) {
@@ -155,7 +155,7 @@ func (c *Conn) dispatchHandshake(content []byte, number recordNumber, epoch uint
 	}
 	if epoch == 2 && c.hasCompletedPeerFlight {
 		if c.isCompletedPeerFlightRetransmit(fragments) {
-			c.ackCompletedPeerFlightRecordLocked(number)
+			c.ackCompletedPeerFlightRecord(number)
 		}
 		return nil
 	}
@@ -184,11 +184,11 @@ func (c *Conn) isCompletedPeerFlightRetransmit(fragments []handshakeFragment) bo
 	return true
 }
 
-// ackCompletedPeerFlightRecordLocked re-acknowledges a record of the peer's
+// ackCompletedPeerFlightRecord re-acknowledges a record of the peer's
 // completed final flight so a peer whose ACK was lost stops retransmitting.
 // Write errors are deliberately ignored: the connection is already up and the
 // peer will simply retransmit again.
-func (c *Conn) ackCompletedPeerFlightRecordLocked(number recordNumber) {
+func (c *Conn) ackCompletedPeerFlightRecord(number recordNumber) {
 	c.writeMu.Lock()
 	defer c.writeMu.Unlock()
 	var ackScratch [1][]byte
@@ -299,7 +299,7 @@ func (c *Conn) dispatchConnectionIDMessage(fragment handshakeFragment, number re
 // KeyUpdate, and, if the peer asked for one, begins our own update. The
 // retransmission timer is started only after writeMu is released.
 func (c *Conn) dispatchKeyUpdate(fragment handshakeFragment, number recordNumber) error {
-	startRetransmission, err := c.processKeyUpdateFragmentLocked(fragment, number)
+	startRetransmission, err := c.processKeyUpdateFragment(fragment, number)
 	if err != nil {
 		return err
 	}
@@ -309,10 +309,10 @@ func (c *Conn) dispatchKeyUpdate(fragment handshakeFragment, number recordNumber
 	return nil
 }
 
-// processKeyUpdateFragmentLocked is the writeMu critical section of
+// processKeyUpdateFragment is the writeMu critical section of
 // dispatchKeyUpdate. It returns whether a KeyUpdate response was sent and
 // needs its retransmission timer.
-func (c *Conn) processKeyUpdateFragmentLocked(fragment handshakeFragment, number recordNumber) (startRetransmission bool, err error) {
+func (c *Conn) processKeyUpdateFragment(fragment handshakeFragment, number recordNumber) (startRetransmission bool, err error) {
 	c.writeMu.Lock()
 	defer c.writeMu.Unlock()
 	if c.postHandshakeAuthState != nil && c.postHandshakeAuthState.hasResponseEpoch {

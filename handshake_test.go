@@ -3,6 +3,7 @@ package dtls13
 import (
 	"bytes"
 	"testing"
+	"time"
 )
 
 func TestHandshakeFragmentRoundTrip(t *testing.T) {
@@ -272,6 +273,120 @@ func TestServerHandshakeMessageOrder(t *testing.T) {
 		}
 		if err == nil {
 			t.Fatalf("accepted invalid server sequence %v", types)
+		}
+	}
+}
+
+func TestHandshakeRejectsWrongHelloMessage(t *testing.T) {
+	for _, role := range []string{"client", "server"} {
+		t.Run(role, func(t *testing.T) {
+			config, err := (&Config{}).normalized()
+			if err != nil {
+				t.Fatal(err)
+			}
+			left, right := memoryDatagramPair()
+			defer left.Close()
+			defer right.Close()
+			deadline := time.Now().Add(time.Second)
+			_ = right.SetDeadline(deadline)
+			flight, _, err := buildPlainFlight([]handshakeMessage{{typ: handshakeTypeFinished, body: []byte{1}}}, config.MTU, 0, 0)
+			if err != nil {
+				t.Fatal(err)
+			}
+			if _, err = left.Write(flight.records[0].wire); err != nil {
+				t.Fatal(err)
+			}
+			conn := &Conn{conn: right, config: config, handshakeDeadline: deadline}
+			if role == "client" {
+				err = conn.clientReceiveServerHello(&clientHandshakeState{})
+			} else {
+				err = conn.serverReceiveClientHello(&serverHandshakeState{preValidationConn: &amplificationConn{Conn: right, guard: &amplificationGuard{}}})
+			}
+			if description, ok := protocolAlert(err); !ok || description != alertUnexpectedMessage {
+				t.Fatalf("wrong Hello message: alert=%d ok=%v err=%v, want unexpected_message", description, ok, err)
+			}
+		})
+	}
+}
+
+func TestHandshakeFlightRejectsMessagesAfterFinished(t *testing.T) {
+	for _, role := range []string{"client", "server"} {
+		for _, trailing := range []struct {
+			name string
+			typ  uint8
+		}{
+			{"none", 0},
+			{"Finished", handshakeTypeFinished},
+			{"CertificateVerify", handshakeTypeCertificateVerify},
+			{"NewSessionTicket", handshakeTypeNewSessionTicket},
+		} {
+			t.Run(role+"/"+trailing.name, func(t *testing.T) {
+				config, err := (&Config{}).normalized()
+				if err != nil {
+					t.Fatal(err)
+				}
+				left, right := memoryDatagramPair()
+				defer left.Close()
+				defer right.Close()
+				deadline := time.Now().Add(time.Second)
+				_ = right.SetDeadline(deadline)
+				conn := &Conn{conn: right, config: config, isClient: role == "client", handshakeDeadline: deadline}
+				suite, _ := cipherSuiteForID(TLS_AES_128_GCM_SHA256)
+				sender, receiver := recordCipherPair(t, suite.id, 2)
+				ackSender, _ := recordCipherPair(t, suite.id, 2)
+				secret := bytes.Repeat([]byte{0x5a}, suite.hash.Size())
+				schedule := &keySchedule{suite: suite, clientHandshakeTraffic: secret, serverHandshakeTraffic: secret}
+				transcript := newTranscriptHash(suite.hash.New())
+				peerTranscript := transcript.clone()
+				var messages []handshakeMessage
+				if conn.isClient {
+					body := []byte{0, 0} // Empty EncryptedExtensions for a PSK handshake.
+					messages = append(messages, handshakeMessage{typ: handshakeTypeEncryptedExtensions, sequence: 0, body: body})
+					_ = peerTranscript.add(handshakeTypeEncryptedExtensions, 0, body)
+				}
+				var digest [maxSupportedHashSize]byte
+				finished := schedule.finishedVerifyData(secret, peerTranscript.sumInto(digest[:0]))
+				messages = append(messages, handshakeMessage{typ: handshakeTypeFinished, sequence: uint16(len(messages)), body: finished})
+				if trailing.typ != 0 {
+					messages = append(messages, handshakeMessage{typ: trailing.typ, sequence: uint16(len(messages)), body: finished})
+				}
+				// Put Finished and its successor in one authenticated record so
+				// the receive loop delivers both in the same batch.
+				var payload []byte
+				for _, message := range messages {
+					fragment, marshalErr := marshalHandshakeFragment(handshakeFragment{typ: message.typ, messageSequence: message.sequence, length: uint32(len(message.body)), body: message.body})
+					if marshalErr != nil {
+						t.Fatal(marshalErr)
+					}
+					payload = append(payload, fragment...)
+				}
+				wire, err := sender.seal(recordTypeHandshake, payload)
+				if err != nil {
+					t.Fatal(err)
+				}
+				if _, err = left.Write(wire); err != nil {
+					t.Fatal(err)
+				}
+				if conn.isClient {
+					err = conn.clientProcessServerFlight(&clientHandshakeState{
+						hello: &clientHello{}, sh: &serverHello{}, suite: suite, usingPSK: true,
+						schedule: schedule, transcript: transcript, receiveCipher: receiver, sendCipher: ackSender,
+						inbox: newHandshakeInbox(0, config.MaxHandshakeMessage, config.MaxBufferedHandshakeMessages, config.MaxBufferedHandshakeBytes),
+					})
+				} else {
+					err = conn.serverProcessClientFlight(&serverHandshakeState{
+						suite: suite, usingPSK: true, hrrUsed: true, schedule: schedule,
+						transcript: transcript, clientCipher: receiver, serverCipher: ackSender,
+					})
+				}
+				if trailing.typ == 0 {
+					if err != nil {
+						t.Fatalf("valid Finished flight: %v", err)
+					}
+				} else if description, ok := protocolAlert(err); !ok || description != alertUnexpectedMessage {
+					t.Fatalf("message after Finished: alert=%d ok=%v err=%v, want unexpected_message", description, ok, err)
+				}
+			})
 		}
 	}
 }

@@ -84,8 +84,7 @@ func (c *Conn) runHandshake(ctx context.Context) (result error) {
 			if c.sendCipher != nil {
 				c.sendFatalAlert(description)
 			} else {
-				var local *localAlertError
-				if errors.As(result, &local) {
+				if _, ok := errors.AsType[*localAlertError](result); ok {
 					c.sendPlainFatalAlert(description)
 				}
 			}

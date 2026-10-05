@@ -71,8 +71,7 @@ func TestProtocolAlertClassification(t *testing.T) {
 func TestVectorOverflowErrorKeepsProtocolClassification(t *testing.T) {
 	for _, bits := range []int{8, 16, 24} {
 		wrapped := &vectorOverflowError{bits: bits, err: &ProtocolError{"vector overflow"}}
-		var protocol *ProtocolError
-		if !errors.As(wrapped, &protocol) {
+		if _, ok := errors.AsType[*ProtocolError](wrapped); !ok {
 			t.Fatalf("bits=%d: errors.As did not resolve the wrapped *ProtocolError", bits)
 		}
 		var overflow *vectorOverflowError
@@ -141,6 +140,12 @@ func TestTLSWireShapeErrorsUseDecodeError(t *testing.T) {
 		{"PSK modes length", func() error { _, err := parsePSKKeyExchangeModes([]byte{0}); return err }},
 		{"empty ALPN list", func() error { _, err := parseALPN([]byte{0, 0}); return err }},
 		{"empty server key share", func() error { _, err := parseKeyShares(nil, false); return err }},
+		{"trailing CertificateVerify data", func() error { _, err := parseCertificateVerify([]byte{8, 7, 0, 0, 1}); return err }},
+		{"empty certificate entry", func() error { _, err := parseCertificateMessage([]byte{0, 0, 0, 5, 0, 0, 0, 0, 0}, 1024); return err }},
+		{"return routability length", func() error {
+			_, _, err := parseReturnRoutabilityMessage([]byte{returnRoutabilityPathChallenge})
+			return err
+		}},
 	}
 	for _, test := range tests {
 		t.Run(test.name, func(t *testing.T) {

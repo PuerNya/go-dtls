@@ -31,7 +31,7 @@ func (s clientHandshakeStage) accept(typ uint8) error {
 		}
 	case handshakeTypeCertificateVerify:
 		if s != clientExpectCertificateVerify {
-			return &ProtocolError{"client CertificateVerify without certificate"}
+			return alertError(alertUnexpectedMessage, &ProtocolError{"client CertificateVerify without certificate"})
 		}
 	case handshakeTypeFinished:
 		if s != clientExpectFinished {

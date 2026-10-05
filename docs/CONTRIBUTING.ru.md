@@ -7,19 +7,19 @@
 ## Среда разработки
 
 - Go 1.27 или новее.
-- golangci-lint v2.12.2 — та же версия, что и в CI.
+- golangci-lint v2.14.0 — та же версия, что и в CI.
 - Для race-тестов Windows нужны Zig 0.17 и рабочая цепочка CGO.
 - Если изменение затрагивает возможность, поддерживаемую wolfSSL, тесты совместимости и специализированные benchmark с wolfSSL обязательны; для остальных изменений wolfSSL не требуется.
 
 ## Обязательные проверки
 
-Все исходные файлы Go должны соответствовать конфигурации formatter в golangci-lint v2.12.2. Каждый commit и pull request обязан пройти format, module, lint, test, shuffle, checkptr, vet и race. В Linux, macOS и CI выполняйте:
+Все исходные файлы Go должны соответствовать конфигурации formatter в golangci-lint v2.14.0. Каждый commit и pull request обязан пройти format, module, lint, test, shuffle, checkptr, vet и race. В Linux, macOS и CI выполняйте:
 
 ```sh
-go run github.com/golangci/golangci-lint/v2/cmd/golangci-lint@v2.12.2 fmt --diff
+go run github.com/golangci/golangci-lint/v2/cmd/golangci-lint@v2.14.0 fmt --diff
 go mod verify
 go mod tidy -diff
-go run github.com/golangci/golangci-lint/v2/cmd/golangci-lint@v2.12.2 run ./...
+go run github.com/golangci/golangci-lint/v2/cmd/golangci-lint@v2.14.0 run ./...
 go test ./... -count=1
 go test ./... -shuffle=on -count=1
 go test ./... -gcflags=all=-d=checkptr=2 -count=1

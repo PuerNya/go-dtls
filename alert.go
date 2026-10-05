@@ -59,18 +59,17 @@ func alertError(description uint8, err error) error {
 }
 
 // protocolAlert returns the fatal alert that corresponds to err. An error
-// produced by alertError carries its alert explicitly; any other protocol
-// error maps to illegal_parameter, the catch-all assigned by RFC 8446 §6.2 for
-// a peer message that violates the protocol without a more specific alert.
+// produced by alertError carries its alert explicitly; an unannotated protocol
+// error defaults to illegal_parameter. Callers must attach more specific
+// alerts, including decode_error for wire syntax and unexpected_message for
+// message ordering, as required by RFC 9846 §6.2.
 // Classification is deliberately based on the error's type, never on the text
 // of its Reason, so rewording a diagnostic cannot change the alert sent.
 func protocolAlert(err error) (uint8, bool) {
-	var local *localAlertError
-	if errors.As(err, &local) {
+	if local, ok := errors.AsType[*localAlertError](err); ok {
 		return local.description, true
 	}
-	var protocol *ProtocolError
-	if !errors.As(err, &protocol) {
+	if _, ok := errors.AsType[*ProtocolError](err); !ok {
 		return 0, false
 	}
 	return alertIllegalParameter, true
