@@ -43,7 +43,8 @@ type wolfSSLInteropOptions struct {
 
 type lockedBuffer struct {
 	mu sync.Mutex
-	bytes.Buffer
+	// Do not promote ReadFrom: io.Copy must use the locked Write method.
+	buffer bytes.Buffer
 }
 
 type dropFinalACKConn struct {
@@ -193,13 +194,40 @@ func (c *dropFinalACKConn) result() (dropped bool, finishedWrites int) {
 func (b *lockedBuffer) Write(p []byte) (int, error) {
 	b.mu.Lock()
 	defer b.mu.Unlock()
-	return b.Buffer.Write(p)
+	return b.buffer.Write(p)
 }
 
 func (b *lockedBuffer) String() string {
 	b.mu.Lock()
 	defer b.mu.Unlock()
-	return b.Buffer.String()
+	return b.buffer.String()
+}
+
+func TestLockedBufferConcurrentCopy(t *testing.T) {
+	var output lockedBuffer
+	reader, writer := io.Pipe()
+	defer reader.Close()
+	defer writer.Close()
+	done := make(chan error, 1)
+	go func() {
+		_, err := io.Copy(&output, reader)
+		done <- err
+	}()
+	for range 100 {
+		if _, err := io.WriteString(writer, "wolfssl\n"); err != nil {
+			t.Fatal(err)
+		}
+		_ = output.String()
+	}
+	if err := writer.Close(); err != nil {
+		t.Fatal(err)
+	}
+	if err := <-done; err != nil {
+		t.Fatal(err)
+	}
+	if got := output.String(); got != strings.Repeat("wolfssl\n", 100) {
+		t.Fatalf("unexpected captured output: %q", got)
+	}
 }
 
 func wolfSSLPaths(t testing.TB) (root, server, client string) {

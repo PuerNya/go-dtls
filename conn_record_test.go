@@ -6,6 +6,7 @@ import (
 	"fmt"
 	"io"
 	"net"
+	"runtime"
 	"syscall"
 	"testing"
 	"time"
@@ -57,10 +58,17 @@ func (c *recordSinkConn) Write(p []byte) (int, error) {
 	return len(p), nil
 }
 
+func testMessageTooLongErrno() syscall.Errno {
+	if runtime.GOOS == "windows" {
+		return syscall.Errno(10040) // Winsock WSAEMSGSIZE, not syscall.EMSGSIZE.
+	}
+	return syscall.EMSGSIZE
+}
+
 func (c *mtuLimitedConn) Write(p []byte) (int, error) {
 	c.writes++
 	if len(p) > c.limit {
-		return 0, syscall.Errno(10040)
+		return 0, testMessageTooLongErrno()
 	}
 	return c.Conn.Write(p)
 }

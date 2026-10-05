@@ -151,12 +151,10 @@ func (s ConnectionState) ExportKeyingMaterial(label string, context []byte, leng
 // bounds; the *Locked helpers that read postHandshakeReassembly under writeMu
 // are reached only from dispatch and so are covered transitively.
 //
-// Known gap: the handshake goroutine writes sendCipher, sendingTraffic,
-// receivingTraffic, receiveEpochs, resumptionSuite, resumptionMasterSecret,
-// postHandshakeTranscript, and finishedACKCipher without a lock, relying on the
-// reader goroutine not having started. A Close concurrent with an in-flight
-// handshake races those writes via clearTrafficSecrets. Serializing Close
-// against the handshake is a behavioural change tracked separately.
+// During the handshake, the handshake goroutine owns protocol state until it
+// clears handshaking under readerMu. Close marks readerClosed under the same
+// lock. If handshaking is set, Close only interrupts the transport; the
+// handshake clears its secrets on exit, before any record reader can start.
 type Conn struct {
 	// Immutable after construction.
 	conn     net.Conn
@@ -215,6 +213,7 @@ type Conn struct {
 	readerMu      sync.Mutex
 	readerRunning bool
 	readerClosed  bool
+	handshaking   bool
 
 	// Guarded by writeMu.
 	writeMu                          sync.Mutex
@@ -515,6 +514,24 @@ func (c *Conn) Handshake() error { return c.HandshakeContext(context.Background(
 // a canceled or failed handshake is not retried. The context must be non-nil.
 func (c *Conn) HandshakeContext(ctx context.Context) error {
 	c.handshakeOnce.Do(func() {
+		c.readerMu.Lock()
+		if c.readerClosed {
+			c.readerMu.Unlock()
+			c.handshakeErr = net.ErrClosed
+			return
+		}
+		c.handshaking = true
+		c.readerMu.Unlock()
+		defer func() {
+			c.readerMu.Lock()
+			c.handshaking = false
+			closed := c.readerClosed
+			c.readerMu.Unlock()
+			if closed {
+				c.handshakeErr = net.ErrClosed
+				c.clearTrafficSecrets(net.ErrClosed)
+			}
+		}()
 		if c.conn == nil {
 			c.handshakeErr = &ConfigError{"nil underlying connection"}
 			return
@@ -1128,8 +1145,21 @@ func (c *Conn) WriteEarlyData(p []byte) (int, error) {
 // Close sends close_notify when application sending keys are available,
 // clears retained traffic, resumption, and exporter secrets, stops background
 // protocol work, and closes the underlying transport. It does not wait for the
-// peer to acknowledge close_notify.
+// peer to acknowledge close_notify. During a handshake it closes the transport
+// immediately without sending an alert or waiting for callbacks; the handshake
+// clears its secrets when it exits and returns net.ErrClosed.
 func (c *Conn) Close() error {
+	c.readerMu.Lock()
+	if c.readerClosed {
+		c.readerMu.Unlock()
+		return net.ErrClosed
+	}
+	c.readerClosed = true
+	handshaking := c.handshaking
+	c.readerMu.Unlock()
+	if handshaking {
+		return c.conn.Close()
+	}
 	c.writeMu.Lock()
 	if c.sendCipher != nil {
 		if body, err := (alertMessage{level: alertLevelWarning, description: alertCloseNotify}).marshal(); err == nil {
@@ -1140,9 +1170,6 @@ func (c *Conn) Close() error {
 	}
 	c.writeMu.Unlock()
 	c.clearTrafficSecrets(net.ErrClosed)
-	c.readerMu.Lock()
-	c.readerClosed = true
-	c.readerMu.Unlock()
 	c.initInput()
 	c.inputMu.Lock()
 	if c.readErr == nil {

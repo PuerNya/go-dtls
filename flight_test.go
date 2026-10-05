@@ -3,7 +3,6 @@ package dtls13
 import (
 	"bytes"
 	"context"
-	"syscall"
 	"testing"
 	"time"
 )
@@ -15,7 +14,7 @@ type mtuFlightWriter struct {
 
 func (w *mtuFlightWriter) Write(p []byte) (int, error) {
 	if len(p) > w.limit {
-		return 0, syscall.Errno(10040)
+		return 0, testMessageTooLongErrno()
 	}
 	w.records = append(w.records, append([]byte(nil), p...))
 	return len(p), nil
