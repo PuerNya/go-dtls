@@ -18,7 +18,7 @@ type reusableUDPClientConn struct {
 func TestListenerConnectionIDBatchRegistrationIsAtomic(t *testing.T) {
 	owner := &packetSession{}
 	other := &packetSession{}
-	listener := &packetListener{cidSessions: map[string]*packetSession{string([]byte{3, 4}): other}}
+	listener := &Listener{cidSessions: map[string]*packetSession{string([]byte{3, 4}): other}}
 	if err := listener.registerSessionCIDs(owner, [][]byte{{1, 2}, {3, 4}}); err == nil {
 		t.Fatal("registered a batch containing another session's CID")
 	}
@@ -825,7 +825,7 @@ func TestListenerReplacesAssociationOnlyAfterNewFinished(t *testing.T) {
 }
 
 func TestListenerRejectsAmbiguousConnectionIDs(t *testing.T) {
-	l := &packetListener{cidSessions: make(map[string]*packetSession), sessions: make(map[string]*packetSession)}
+	l := &Listener{cidSessions: make(map[string]*packetSession), sessions: make(map[string]*packetSession)}
 	first := &packetSession{}
 	second := &packetSession{}
 	if err := l.registerSessionCID(first, []byte{1, 2}); err != nil {
@@ -868,7 +868,7 @@ func TestListenerMixedCIDDatagramDoesNotCrossAssociations(t *testing.T) {
 	mixed := append(append([]byte(nil), recordA...), recordB...)
 
 	sessionA, sessionB := &packetSession{}, &packetSession{}
-	listener := &packetListener{cidSessions: map[string]*packetSession{string(cidA): sessionA, string(cidB): sessionB}}
+	listener := &Listener{cidSessions: map[string]*packetSession{string(cidA): sessionA, string(cidB): sessionB}}
 	if got := listener.sessionForCIDLocked(mixed); got != sessionA {
 		t.Fatalf("mixed datagram routed to %p, want association A %p", got, sessionA)
 	}

@@ -76,14 +76,12 @@ type Listener struct {
 	cidGenMu    sync.Mutex
 }
 
-type packetListener = Listener
-
-func newListener(conn net.PacketConn, config *Config, configErr error) *packetListener {
+func newListener(conn net.PacketConn, config *Config, configErr error) *Listener {
 	capacity := 1
 	if config != nil && config.MaxPendingConnections > 0 {
 		capacity = config.MaxPendingConnections
 	}
-	l := &packetListener{
+	l := &Listener{
 		conn: conn, config: config, configErr: configErr,
 		accept: make(chan *packetSession, capacity), done: make(chan struct{}),
 		sessions: make(map[string]*packetSession), pending: make(map[string]*packetSession), cidSessions: make(map[string]*packetSession),
@@ -101,7 +99,7 @@ func sessionKey(address net.Addr) string {
 	return address.Network() + "\x00" + address.String()
 }
 
-func (l *packetListener) readLoop() {
+func (l *Listener) readLoop() {
 	buffer := make([]byte, 65535)
 	for {
 		n, address, err := l.conn.ReadFrom(buffer)
@@ -194,7 +192,7 @@ func isInitialClientHelloDatagram(datagram []byte, maxMessage int) bool {
 		fragmentLength > 0 && fragmentOffset <= messageLength-fragmentLength && len(fragment) >= 12+fragmentLength
 }
 
-func (l *packetListener) sessionForCIDLocked(datagram []byte) *packetSession {
+func (l *Listener) sessionForCIDLocked(datagram []byte) *packetSession {
 	if len(datagram) < 2 || datagram[0]&unifiedHeaderCID == 0 {
 		return nil
 	}
@@ -206,7 +204,7 @@ func (l *packetListener) sessionForCIDLocked(datagram []byte) *packetSession {
 	return nil
 }
 
-func (l *packetListener) registerSessionCID(session *packetSession, cid []byte) error {
+func (l *Listener) registerSessionCID(session *packetSession, cid []byte) error {
 	session.mu.Lock()
 	session.connectionIDNegotiated = true
 	session.localCID = append([]byte(nil), cid...)
@@ -231,7 +229,7 @@ func (l *packetListener) registerSessionCID(session *packetSession, cid []byte) 
 	return nil
 }
 
-func (l *packetListener) registerSessionCIDs(session *packetSession, cids [][]byte) error {
+func (l *Listener) registerSessionCIDs(session *packetSession, cids [][]byte) error {
 	l.mu.Lock()
 	defer l.mu.Unlock()
 	merged := make([][]byte, 0, len(l.cidSessions)+len(cids))
@@ -258,7 +256,7 @@ func (l *packetListener) registerSessionCIDs(session *packetSession, cids [][]by
 	return nil
 }
 
-func (l *packetListener) unregisterSessionCIDs(session *packetSession, cids [][]byte) {
+func (l *Listener) unregisterSessionCIDs(session *packetSession, cids [][]byte) {
 	l.mu.Lock()
 	defer l.mu.Unlock()
 	for _, cid := range cids {
@@ -269,7 +267,7 @@ func (l *packetListener) unregisterSessionCIDs(session *packetSession, cids [][]
 	}
 }
 
-func (l *packetListener) removeSession(session *packetSession) {
+func (l *Listener) removeSession(session *packetSession) {
 	l.mu.Lock()
 	for key, candidate := range l.sessions {
 		if candidate == session {
@@ -292,7 +290,7 @@ func (l *packetListener) removeSession(session *packetSession) {
 // connectionValidated promotes a pending association only after its Finished
 // has been authenticated. The previous association remains usable until this
 // point, as required by RFC 9147 section 5.11.
-func (l *packetListener) connectionValidated(session *packetSession) {
+func (l *Listener) connectionValidated(session *packetSession) {
 	if session == nil || session.RemoteAddr() == nil {
 		return
 	}
@@ -311,7 +309,7 @@ func (l *packetListener) connectionValidated(session *packetSession) {
 	}
 }
 
-func (l *packetListener) rebindSession(session *packetSession, newAddress net.Addr) {
+func (l *Listener) rebindSession(session *packetSession, newAddress net.Addr) {
 	if session == nil || newAddress == nil {
 		return
 	}
@@ -412,7 +410,7 @@ func (l *Listener) Accept() (*Conn, error) {
 	}
 }
 
-func (l *packetListener) shutdown(err error, closePacketConn bool) {
+func (l *Listener) shutdown(err error, closePacketConn bool) {
 	l.closeOnce.Do(func() {
 		l.mu.Lock()
 		l.closed = true
