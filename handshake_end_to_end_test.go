@@ -4,15 +4,11 @@ import (
 	"bytes"
 	"context"
 	"crypto"
-	"crypto/ed25519"
-	"crypto/rand"
 	"crypto/tls"
 	"crypto/x509"
-	"crypto/x509/pkix"
 	"errors"
 	"fmt"
 	"io"
-	"math/big"
 	"net"
 	"strings"
 	"sync"
@@ -25,11 +21,147 @@ type dropWritesConn struct {
 	mu        sync.Mutex
 	remaining int
 }
-type dropNthWriteConn struct {
+
+// observeRecordsConn inspects outgoing records without changing the sender's
+// cipher or replay state. Writes run in the handshake goroutine or under writeMu.
+type observeRecordsConn struct {
 	net.Conn
-	mu          sync.Mutex
-	count, drop int
+	owner   *Conn
+	observe func(record) (drop bool, err error)
 }
+
+func (c *observeRecordsConn) Write(p []byte) (int, error) {
+	drop := false
+	for remaining := p; len(remaining) > 0; {
+		var r record
+		var consumed int
+		if isUnifiedRecord(remaining) {
+			original := c.owner.sendCipher
+			if !recordCipherMatchesUnifiedEpoch(original, remaining[0]) {
+				original = c.owner.finishedACKCipher
+			}
+			if !recordCipherMatchesUnifiedEpoch(original, remaining[0]) {
+				return 0, fmt.Errorf("no sending cipher for observed record %02x", remaining[0])
+			}
+			cipher := *original
+			cipher.replay = newReplayWindow(64)
+			var err error
+			r.payload, r.typ, consumed, err = cipher.open(remaining)
+			if err != nil {
+				return 0, err
+			}
+			r.epoch, r.sequence = uint16(cipher.epoch), cipher.lastOpened
+		} else {
+			records, err := parsePlainRecords(remaining)
+			if err != nil {
+				return 0, err
+			}
+			r = records[0]
+			consumed = plainRecordHeaderLen + len(r.payload)
+		}
+		discard, err := c.observe(r)
+		if err != nil {
+			return 0, err
+		}
+		drop = drop || discard
+		remaining = remaining[consumed:]
+	}
+	if drop {
+		return len(p), nil
+	}
+	return c.Conn.Write(p)
+}
+
+// handshakeLoss drops a named message or all of its ACKs until that same
+// message is retransmitted after the loss, with a fresh record number.
+type handshakeLoss struct {
+	mu                     sync.Mutex
+	typ                    uint8
+	epoch                  uint64
+	dropACK                bool
+	helloRetryRequest      bool
+	message                *handshakeFragment
+	numbers                map[recordNumber]bool
+	dropped, retransmitted bool
+	acknowledged           bool
+}
+
+func (l *handshakeLoss) observeMessage(r record) (bool, error) {
+	if r.typ != recordTypeHandshake || uint64(r.epoch) != l.epoch {
+		return false, nil
+	}
+	fragments, err := parseHandshakeFragments(r.payload)
+	if err != nil {
+		return false, err
+	}
+	l.mu.Lock()
+	defer l.mu.Unlock()
+	for _, f := range fragments {
+		if f.typ != l.typ || f.offset != 0 {
+			continue
+		}
+		if f.typ == handshakeTypeServerHello {
+			isHRR := len(f.body) >= 34 && bytes.Equal(f.body[2:34], helloRetryRequestRandom[:])
+			if isHRR != l.helloRetryRequest {
+				continue
+			}
+		}
+		if l.message == nil {
+			l.message = &f
+			l.numbers = make(map[recordNumber]bool)
+		}
+		if f.messageSequence != l.message.messageSequence || f.length != l.message.length || !bytes.Equal(f.body, l.message.body) {
+			continue
+		}
+		number := recordNumber{epoch: uint64(r.epoch), sequence: r.sequence}
+		if _, seen := l.numbers[number]; !seen {
+			l.numbers[number] = l.dropped
+			l.retransmitted = l.retransmitted || l.dropped
+		}
+		if !l.dropACK && !l.dropped {
+			l.dropped = true
+			return true, nil
+		}
+	}
+	return false, nil
+}
+
+func (l *handshakeLoss) observeACK(r record) (bool, error) {
+	if r.typ != recordTypeACK {
+		return false, nil
+	}
+	numbers, err := parseACK(r.payload)
+	if err != nil {
+		return false, err
+	}
+	l.mu.Lock()
+	defer l.mu.Unlock()
+	targeted, retransmission := false, false
+	for _, number := range numbers {
+		if afterLoss, known := l.numbers[number]; known {
+			targeted = true
+			retransmission = retransmission || afterLoss
+		}
+	}
+	if l.dropACK && targeted && !retransmission {
+		l.dropped = true
+		return true, nil
+	}
+	if retransmission {
+		l.acknowledged = true
+	}
+	return false, nil
+}
+
+func (l *handshakeLoss) requireRecovery(t *testing.T) {
+	t.Helper()
+	l.mu.Lock()
+	defer l.mu.Unlock()
+	if !l.dropped || !l.retransmitted || (l.epoch != 0 && !l.acknowledged) {
+		t.Fatalf("message %d epoch %d: dropped=%t retransmitted=%t acknowledged=%t", l.typ, l.epoch, l.dropped, l.retransmitted, l.acknowledged)
+	}
+}
+
 type captureWritesConn struct {
 	net.Conn
 	mu     sync.Mutex
@@ -256,6 +388,27 @@ type memoryDatagramConn struct {
 	closeOnce                   sync.Once
 }
 
+func completeHandshakePair(t *testing.T, clientConfig, serverConfig *Config) (*Conn, *Conn) {
+	t.Helper()
+	left, right := memoryDatagramPair()
+	client := Client(left, clientConfig)
+	server := Server(right, serverConfig)
+	handshakePair(t, client, server)
+	return client, server
+}
+
+func handshakePair(t *testing.T, client, server *Conn) {
+	t.Helper()
+	t.Cleanup(func() { _ = client.Close(); _ = server.Close() })
+	serverDone := make(chan error, 1)
+	go func() { serverDone <- server.Handshake() }()
+	clientErr := client.Handshake()
+	serverErr := <-serverDone
+	if clientErr != nil || serverErr != nil {
+		t.Fatalf("handshake failed: client=%v server=%v", clientErr, serverErr)
+	}
+}
+
 func memoryDatagramPair() (net.Conn, net.Conn) {
 	aToB := make(chan []byte, 256)
 	bToA := make(chan []byte, 256)
@@ -332,17 +485,6 @@ func (*timeoutError) Error() string   { return "i/o timeout" }
 func (*timeoutError) Timeout() bool   { return true }
 func (*timeoutError) Temporary() bool { return true }
 
-func (c *dropNthWriteConn) Write(p []byte) (int, error) {
-	c.mu.Lock()
-	c.count++
-	drop := c.count == c.drop
-	c.mu.Unlock()
-	if drop {
-		return len(p), nil
-	}
-	return c.Conn.Write(p)
-}
-
 func (c *captureWritesConn) Write(p []byte) (int, error) {
 	c.mu.Lock()
 	c.writes = append(c.writes, append([]byte(nil), p...))
@@ -400,82 +542,41 @@ func waitForSendEpoch(t *testing.T, conn *Conn, epoch uint64) {
 
 func testServerCertificate(t testing.TB) (tls.Certificate, *x509.CertPool) {
 	t.Helper()
-	pub, key, err := ed25519.GenerateKey(rand.Reader)
-	if err != nil {
-		t.Fatal(err)
-	}
-	now := time.Now()
-	tmpl := &x509.Certificate{SerialNumber: big.NewInt(99), Subject: pkix.Name{CommonName: "server.test"}, DNSNames: []string{"server.test"}, NotBefore: now.Add(-time.Hour), NotAfter: now.Add(time.Hour), KeyUsage: x509.KeyUsageDigitalSignature | x509.KeyUsageCertSign, ExtKeyUsage: []x509.ExtKeyUsage{x509.ExtKeyUsageServerAuth}, IsCA: true, BasicConstraintsValid: true}
-	der, err := x509.CreateCertificate(rand.Reader, tmpl, tmpl, pub, key)
-	if err != nil {
-		t.Fatal(err)
-	}
-	parsed, err := x509.ParseCertificate(der)
-	if err != nil {
-		t.Fatal(err)
-	}
-	pool := x509.NewCertPool()
-	pool.AddCert(parsed)
-	return tls.Certificate{Certificate: [][]byte{der}, PrivateKey: key, Leaf: parsed}, pool
+	certificate := testSelectionCertificate(t, 99, "server.test", "server.test", x509.KeyUsageDigitalSignature|x509.KeyUsageCertSign, x509.ExtKeyUsageServerAuth)
+	return certificate, certificatePool(certificate)
 }
 
 func testClientCertificate(t testing.TB) (tls.Certificate, *x509.CertPool) {
 	t.Helper()
-	pub, key, err := ed25519.GenerateKey(rand.Reader)
-	if err != nil {
-		t.Fatal(err)
-	}
-	now := time.Now()
-	tmpl := &x509.Certificate{SerialNumber: big.NewInt(100), Subject: pkix.Name{CommonName: "client"}, NotBefore: now.Add(-time.Hour), NotAfter: now.Add(time.Hour), KeyUsage: x509.KeyUsageDigitalSignature | x509.KeyUsageCertSign, ExtKeyUsage: []x509.ExtKeyUsage{x509.ExtKeyUsageClientAuth}, IsCA: true, BasicConstraintsValid: true}
-	der, err := x509.CreateCertificate(rand.Reader, tmpl, tmpl, pub, key)
-	if err != nil {
-		t.Fatal(err)
-	}
-	parsed, err := x509.ParseCertificate(der)
-	if err != nil {
-		t.Fatal(err)
-	}
-	pool := x509.NewCertPool()
-	pool.AddCert(parsed)
-	return tls.Certificate{Certificate: [][]byte{der}, PrivateKey: key, Leaf: parsed}, pool
+	certificate := testSelectionCertificate(t, 100, "client", "", x509.KeyUsageDigitalSignature|x509.KeyUsageCertSign, x509.ExtKeyUsageClientAuth)
+	return certificate, certificatePool(certificate)
 }
 
-func TestInvalidHRRCookieReturnsPlaintextIllegalParameter(t *testing.T) {
-	left, right := memoryDatagramPair()
-	client := Client(&corruptSecondClientHelloCookieConn{Conn: left}, &Config{InsecureSkipVerify: true, HandshakeTimeout: time.Second, FlightInterval: 5 * time.Millisecond})
-	server := Server(right, &Config{HandshakeTimeout: time.Second, FlightInterval: 5 * time.Millisecond})
-	defer left.Close()
-	defer right.Close()
-
-	serverErr := make(chan error, 1)
-	go func() { serverErr <- server.Handshake() }()
-	clientErr := client.Handshake()
-	if !errors.Is(clientErr, AlertError(alertIllegalParameter)) {
-		t.Fatalf("client received %v", clientErr)
-	}
-	err := <-serverErr
-	var local *localAlertError
-	if !errors.As(err, &local) || local.description != alertIllegalParameter {
-		t.Fatalf("server returned %v", err)
-	}
-}
-
-func TestNonemptyLegacyCookieReturnsPlaintextIllegalParameter(t *testing.T) {
-	left, right := memoryDatagramPair()
-	client := Client(&addInitialClientHelloLegacyCookieConn{Conn: left}, &Config{InsecureSkipVerify: true, HandshakeTimeout: time.Second, FlightInterval: 5 * time.Millisecond})
-	server := Server(right, &Config{HandshakeTimeout: time.Second, FlightInterval: 5 * time.Millisecond})
-	defer left.Close()
-	defer right.Close()
-
-	serverErr := make(chan error, 1)
-	go func() { serverErr <- server.Handshake() }()
-	if err := client.Handshake(); !errors.Is(err, AlertError(alertIllegalParameter)) {
-		t.Fatalf("client received %v", err)
-	}
-	err := <-serverErr
-	var local *localAlertError
-	if !errors.As(err, &local) || local.description != alertIllegalParameter {
-		t.Fatalf("server returned %v", err)
+func TestInvalidCookieReturnsPlaintextIllegalParameter(t *testing.T) {
+	for _, test := range []struct {
+		name string
+		wrap func(net.Conn) net.Conn
+	}{
+		{"HRRCookie", func(conn net.Conn) net.Conn { return &corruptSecondClientHelloCookieConn{Conn: conn} }},
+		{"LegacyCookie", func(conn net.Conn) net.Conn { return &addInitialClientHelloLegacyCookieConn{Conn: conn} }},
+	} {
+		t.Run(test.name, func(t *testing.T) {
+			left, right := memoryDatagramPair()
+			client := Client(test.wrap(left), &Config{InsecureSkipVerify: true, HandshakeTimeout: time.Second, FlightInterval: 5 * time.Millisecond})
+			server := Server(right, &Config{HandshakeTimeout: time.Second, FlightInterval: 5 * time.Millisecond})
+			t.Cleanup(func() { _ = client.Close(); _ = server.Close() })
+			serverErr := make(chan error, 1)
+			go func() { serverErr <- server.Handshake() }()
+			clientErr := client.Handshake()
+			err := <-serverErr
+			if !errors.Is(clientErr, AlertError(alertIllegalParameter)) {
+				t.Fatalf("client received %v", clientErr)
+			}
+			var local *localAlertError
+			if !errors.As(err, &local) || local.description != alertIllegalParameter {
+				t.Fatalf("server returned %v", err)
+			}
+		})
 	}
 }
 
@@ -504,14 +605,7 @@ func TestEndToEndCertificateHandshake(t *testing.T) {
 	left, right := memoryDatagramPair()
 	client := Client(left, &Config{RootCAs: roots, ServerName: "server.test", NextProtos: []string{"coap"}, HandshakeTimeout: 5 * time.Second})
 	server := Server(right, &Config{Certificates: []tls.Certificate{certificate}, NextProtos: []string{"coap"}, HandshakeTimeout: 5 * time.Second})
-	serverErr := make(chan error, 1)
-	go func() { serverErr <- server.Handshake() }()
-	if err := client.Handshake(); err != nil {
-		t.Fatal(err)
-	}
-	if err := <-serverErr; err != nil {
-		t.Fatal(err)
-	}
+	handshakePair(t, client, server)
 	if !client.ConnectionState().HandshakeComplete || client.ConnectionState().NegotiatedProtocol != "coap" {
 		t.Fatalf("client state %#v", client.ConnectionState())
 	}
@@ -529,8 +623,6 @@ func TestEndToEndCertificateHandshake(t *testing.T) {
 	if !bytes.Equal(buf[:n], payload) {
 		t.Fatalf("got %q", buf[:n])
 	}
-	_ = left.Close()
-	_ = right.Close()
 }
 
 func TestEndToEndRejectsUnsolicitedCertificateEntryExtensions(t *testing.T) {
@@ -593,16 +685,7 @@ func TestHelloRetryRequestSelectsAdvertisedP256Share(t *testing.T) {
 	left, right := memoryDatagramPair()
 	client := Client(left, &Config{RootCAs: roots, ServerName: "server.test", HandshakeTimeout: 2 * time.Second, FlightInterval: 5 * time.Millisecond})
 	server := Server(right, &Config{Certificates: []tls.Certificate{certificate}, CurvePreferences: []tls.CurveID{tls.CurveP256}, HandshakeTimeout: 2 * time.Second, FlightInterval: 5 * time.Millisecond})
-	defer left.Close()
-	defer right.Close()
-	serverErr := make(chan error, 1)
-	go func() { serverErr <- server.Handshake() }()
-	if err := client.Handshake(); err != nil {
-		t.Fatal(err)
-	}
-	if err := <-serverErr; err != nil {
-		t.Fatal(err)
-	}
+	handshakePair(t, client, server)
 }
 
 func TestEndToEndExportKeyingMaterial(t *testing.T) {
@@ -610,16 +693,7 @@ func TestEndToEndExportKeyingMaterial(t *testing.T) {
 	left, right := memoryDatagramPair()
 	client := Client(left, &Config{RootCAs: roots, ServerName: "server.test", HandshakeTimeout: 2 * time.Second, FlightInterval: 5 * time.Millisecond})
 	server := Server(right, &Config{Certificates: []tls.Certificate{certificate}, HandshakeTimeout: 2 * time.Second, FlightInterval: 5 * time.Millisecond})
-	defer left.Close()
-	defer right.Close()
-	serverErr := make(chan error, 1)
-	go func() { serverErr <- server.Handshake() }()
-	if err := client.Handshake(); err != nil {
-		t.Fatal(err)
-	}
-	if err := <-serverErr; err != nil {
-		t.Fatal(err)
-	}
+	handshakePair(t, client, server)
 	clientState, serverState := client.ConnectionState(), server.ConnectionState()
 	clientKey, err := clientState.ExportKeyingMaterial("EXPORTER-test", []byte("context"), 64)
 	if err != nil {
@@ -647,18 +721,9 @@ func TestEndToEndExportKeyingMaterial(t *testing.T) {
 func TestEndToEndAES128CCM(t *testing.T) {
 	certificate, roots := testServerCertificate(t)
 	left, right := memoryDatagramPair()
-	defer left.Close()
-	defer right.Close()
 	client := Client(left, &Config{RootCAs: roots, ServerName: "server.test", CipherSuites: []uint16{TLS_AES_128_CCM_SHA256}, SessionTicketsDisabled: true, HandshakeTimeout: 2 * time.Second, FlightInterval: 5 * time.Millisecond})
 	server := Server(right, &Config{Certificates: []tls.Certificate{certificate}, CipherSuites: []uint16{TLS_AES_128_CCM_SHA256}, SessionTicketsDisabled: true, HandshakeTimeout: 2 * time.Second, FlightInterval: 5 * time.Millisecond})
-	serverDone := make(chan error, 1)
-	go func() { serverDone <- server.Handshake() }()
-	if err := client.Handshake(); err != nil {
-		t.Fatal(err)
-	}
-	if err := <-serverDone; err != nil {
-		t.Fatal(err)
-	}
+	handshakePair(t, client, server)
 	if client.ConnectionState().CipherSuite != TLS_AES_128_CCM_SHA256 || server.ConnectionState().CipherSuite != TLS_AES_128_CCM_SHA256 {
 		t.Fatal("AES-128-CCM was not negotiated")
 	}
@@ -678,8 +743,6 @@ func TestEndToEndAES128CCM(t *testing.T) {
 func TestRecordSizeLimitNegotiationIsDirectional(t *testing.T) {
 	certificate, roots := testServerCertificate(t)
 	left, right := memoryDatagramPair()
-	defer left.Close()
-	defer right.Close()
 	client := Client(left, &Config{
 		RootCAs: roots, ServerName: "server.test", RecordSizeLimit: 64,
 		SessionTicketsDisabled: true, HandshakeTimeout: 2 * time.Second, FlightInterval: 5 * time.Millisecond,
@@ -688,13 +751,7 @@ func TestRecordSizeLimitNegotiationIsDirectional(t *testing.T) {
 		Certificates: []tls.Certificate{certificate}, RecordSizeLimit: 96,
 		SessionTicketsDisabled: true, HandshakeTimeout: 2 * time.Second, FlightInterval: 5 * time.Millisecond,
 	})
-	serverDone := make(chan error, 1)
-	go func() { serverDone <- server.Handshake() }()
-	clientErr := client.Handshake()
-	serverErr := <-serverDone
-	if clientErr != nil || serverErr != nil {
-		t.Fatalf("client handshake: %v; server handshake: %v", clientErr, serverErr)
-	}
+	handshakePair(t, client, server)
 	clientState, serverState := client.ConnectionState(), server.ConnectionState()
 	if !clientState.RecordSizeLimitNegotiated || clientState.LocalRecordSizeLimit != 64 || clientState.PeerRecordSizeLimit != 96 {
 		t.Fatalf("client state: %+v", clientState)
@@ -739,14 +796,7 @@ func TestPostHandshakeClientAuthentication(t *testing.T) {
 		Certificates: []tls.Certificate{serverCertificate}, ClientAuth: tls.RequireAndVerifyClientCert, ClientCAs: clientRoots,
 		EnableGREASE: true, HandshakeTimeout: 2 * time.Second, FlightInterval: 5 * time.Millisecond,
 	})
-	serverErr := make(chan error, 1)
-	go func() { serverErr <- server.Handshake() }()
-	if err := client.Handshake(); err != nil {
-		t.Fatal(err)
-	}
-	if err := <-serverErr; err != nil {
-		t.Fatal(err)
-	}
+	handshakePair(t, client, server)
 	ctx, cancel := context.WithTimeout(context.Background(), 2*time.Second)
 	defer cancel()
 	if err := server.RequestClientCertificate(ctx); err != nil {
@@ -756,34 +806,25 @@ func TestPostHandshakeClientAuthentication(t *testing.T) {
 	if len(state.PeerCertificates) == 0 || state.PeerCertificates[0].Subject.CommonName != "client" {
 		t.Fatalf("post-handshake peer certificates %#v", state.PeerCertificates)
 	}
-	_ = client.Close()
-	_ = server.Close()
 }
 
 func TestPostHandshakeClientAuthenticationRetransmitsDroppedACK(t *testing.T) {
 	serverCertificate, roots := testServerCertificate(t)
 	clientCertificate, clientRoots := testClientCertificate(t)
+	loss := &handshakeLoss{typ: handshakeTypeFinished, epoch: 3, dropACK: true}
 	left, right := memoryDatagramPair()
-	serverWire := &dropNthWriteConn{Conn: right}
-	client := Client(left, &Config{
+	clientWire := &observeRecordsConn{Conn: left, observe: loss.observeMessage}
+	serverWire := &observeRecordsConn{Conn: right, observe: loss.observeACK}
+	client := Client(clientWire, &Config{
 		RootCAs: roots, ServerName: "server.test", Certificates: []tls.Certificate{clientCertificate},
-		PostHandshakeAuth: true, HandshakeTimeout: 2 * time.Second, FlightInterval: 5 * time.Millisecond,
+		PostHandshakeAuth: true, SessionTicketsDisabled: true, HandshakeTimeout: 2 * time.Second, FlightInterval: 5 * time.Millisecond,
 	})
 	server := Server(serverWire, &Config{
 		Certificates: []tls.Certificate{serverCertificate}, ClientAuth: tls.RequireAndVerifyClientCert, ClientCAs: clientRoots,
-		HandshakeTimeout: 2 * time.Second, FlightInterval: 5 * time.Millisecond,
+		SessionTicketsDisabled: true, HandshakeTimeout: 2 * time.Second, FlightInterval: 5 * time.Millisecond,
 	})
-	serverErr := make(chan error, 1)
-	go func() { serverErr <- server.Handshake() }()
-	if err := client.Handshake(); err != nil {
-		t.Fatal(err)
-	}
-	if err := <-serverErr; err != nil {
-		t.Fatal(err)
-	}
-	serverWire.mu.Lock()
-	serverWire.drop = serverWire.count + 2 // Request, then the first response ACK.
-	serverWire.mu.Unlock()
+	clientWire.owner, serverWire.owner = client, server
+	handshakePair(t, client, server)
 	ctx, cancel := context.WithTimeout(context.Background(), 2*time.Second)
 	defer cancel()
 	if err := server.RequestClientCertificate(ctx); err != nil {
@@ -795,8 +836,7 @@ func TestPostHandshakeClientAuthenticationRetransmitsDroppedACK(t *testing.T) {
 		complete := client.clientAuthResponseFlight == nil
 		client.writeMu.Unlock()
 		if complete {
-			_ = client.Close()
-			_ = server.Close()
+			loss.requireRecovery(t)
 			return
 		}
 		time.Sleep(time.Millisecond)
@@ -817,14 +857,7 @@ func TestPostHandshakeAuthenticationWhileClientKeyUpdateAwaitingACK(t *testing.T
 		Certificates: []tls.Certificate{serverCertificate}, ClientAuth: tls.RequireAndVerifyClientCert, ClientCAs: clientRoots,
 		HandshakeTimeout: 2 * time.Second, FlightInterval: 5 * time.Millisecond,
 	})
-	serverErr := make(chan error, 1)
-	go func() { serverErr <- server.Handshake() }()
-	if err := client.Handshake(); err != nil {
-		t.Fatal(err)
-	}
-	if err := <-serverErr; err != nil {
-		t.Fatal(err)
-	}
+	handshakePair(t, client, server)
 	ticketDeadline := time.Now().Add(time.Second)
 	for {
 		server.writeMu.Lock()
@@ -869,8 +902,6 @@ func TestPostHandshakeAuthenticationWhileClientKeyUpdateAwaitingACK(t *testing.T
 	if len(state.PeerCertificates) == 0 || state.PeerCertificates[0].Subject.CommonName != "client" {
 		t.Fatalf("post-handshake peer certificates %#v", state.PeerCertificates)
 	}
-	_ = client.Close()
-	_ = server.Close()
 }
 
 func TestHandshakeRetransmitsDroppedClientHello(t *testing.T) {
@@ -878,32 +909,59 @@ func TestHandshakeRetransmitsDroppedClientHello(t *testing.T) {
 	left, right := memoryDatagramPair()
 	client := Client(&dropWritesConn{Conn: left, remaining: 1}, &Config{RootCAs: roots, ServerName: "server.test", HandshakeTimeout: 2 * time.Second, FlightInterval: 5 * time.Millisecond})
 	server := Server(right, &Config{Certificates: []tls.Certificate{certificate}, HandshakeTimeout: 2 * time.Second, FlightInterval: 5 * time.Millisecond})
-	serverErr := make(chan error, 1)
-	go func() { serverErr <- server.Handshake() }()
-	if err := client.Handshake(); err != nil {
-		t.Fatal(err)
-	}
-	if err := <-serverErr; err != nil {
-		t.Fatal(err)
-	}
-	_ = left.Close()
-	_ = right.Close()
+	handshakePair(t, client, server)
 }
+func TestHandshakeContextCancellation(t *testing.T) {
+	certificate, _ := testServerCertificate(t)
+	for _, isClient := range []bool{false, true} {
+		t.Run(fmt.Sprintf("client=%t", isClient), func(t *testing.T) {
+			left, right := net.Pipe()
+			defer left.Close()
+			defer right.Close()
+			ctx, cancel := context.WithCancel(context.Background())
+			defer cancel()
+			wire := &closeHandshakeConn{Conn: left, read: func(p []byte) (int, error) {
+				cancel()
+				return left.Read(p)
+			}}
+			config := &Config{Certificates: []tls.Certificate{certificate}, InsecureSkipVerify: true, HandshakeTimeout: 10 * time.Second}
+			conn := Server(wire, config)
+			if isClient {
+				conn = Client(wire, config)
+				go func() {
+					// Consume ClientHello so cancellation occurs in the receive loop.
+					_, _ = right.Read(make([]byte, 64<<10))
+				}()
+			}
+			done := make(chan error, 1)
+			go func() { done <- conn.HandshakeContext(ctx) }()
+			select {
+			case err := <-done:
+				networkErr, ok := errors.AsType[net.Error](err)
+				if !errors.Is(ctx.Err(), context.Canceled) || !ok || !networkErr.Timeout() {
+					t.Fatalf("canceled handshake: context=%v error=%v", ctx.Err(), err)
+				}
+			case <-time.After(time.Second):
+				t.Fatal("cancellation did not interrupt the handshake")
+			}
+		})
+	}
+}
+
 func TestHandshakeRetransmitsDroppedServerHello(t *testing.T) {
 	certificate, roots := testServerCertificate(t)
-	left, right := memoryDatagramPair()
-	client := Client(left, &Config{RootCAs: roots, ServerName: "server.test", HandshakeTimeout: 2 * time.Second, FlightInterval: 5 * time.Millisecond})
-	server := Server(&dropWritesConn{Conn: right, remaining: 1}, &Config{Certificates: []tls.Certificate{certificate}, HandshakeTimeout: 2 * time.Second, FlightInterval: 5 * time.Millisecond})
-	serverErr := make(chan error, 1)
-	go func() { serverErr <- server.Handshake() }()
-	if err := client.Handshake(); err != nil {
-		t.Fatal(err)
+	for _, retryRequest := range []bool{false, true} {
+		t.Run(fmt.Sprintf("retry_request=%t", retryRequest), func(t *testing.T) {
+			loss := &handshakeLoss{typ: handshakeTypeServerHello, helloRetryRequest: retryRequest}
+			left, right := memoryDatagramPair()
+			serverWire := &observeRecordsConn{Conn: right, observe: loss.observeMessage}
+			client := Client(left, &Config{RootCAs: roots, ServerName: "server.test", SessionTicketsDisabled: true, HandshakeTimeout: 2 * time.Second, FlightInterval: 5 * time.Millisecond})
+			server := Server(serverWire, &Config{Certificates: []tls.Certificate{certificate}, SessionTicketsDisabled: true, HandshakeTimeout: 2 * time.Second, FlightInterval: 5 * time.Millisecond})
+			serverWire.owner = server
+			handshakePair(t, client, server)
+			loss.requireRecovery(t)
+		})
 	}
-	if err := <-serverErr; err != nil {
-		t.Fatal(err)
-	}
-	_ = left.Close()
-	_ = right.Close()
 }
 
 func TestHandshakeSurvivesBurstLossBothDirections(t *testing.T) {
@@ -911,14 +969,7 @@ func TestHandshakeSurvivesBurstLossBothDirections(t *testing.T) {
 	left, right := memoryDatagramPair()
 	client := Client(&dropWritesConn{Conn: left, remaining: 3}, &Config{RootCAs: roots, ServerName: "server.test", HandshakeTimeout: 3 * time.Second, FlightInterval: 2 * time.Millisecond, MaxFlightInterval: 20 * time.Millisecond})
 	server := Server(&dropWritesConn{Conn: right, remaining: 3}, &Config{Certificates: []tls.Certificate{certificate}, HandshakeTimeout: 3 * time.Second, FlightInterval: 2 * time.Millisecond, MaxFlightInterval: 20 * time.Millisecond})
-	serverErr := make(chan error, 1)
-	go func() { serverErr <- server.Handshake() }()
-	if err := client.Handshake(); err != nil {
-		t.Fatal(err)
-	}
-	if err := <-serverErr; err != nil {
-		t.Fatal(err)
-	}
+	handshakePair(t, client, server)
 }
 
 func TestHandshakeStableUnderLossDelayReorderingAndDuplication(t *testing.T) {
@@ -928,14 +979,7 @@ func TestHandshakeStableUnderLossDelayReorderingAndDuplication(t *testing.T) {
 	serverWire := &weakNetworkConn{Conn: right, enabled: true}
 	client := Client(clientWire, &Config{RootCAs: roots, ServerName: "server.test", HandshakeTimeout: 5 * time.Second, FlightInterval: 5 * time.Millisecond})
 	server := Server(serverWire, &Config{Certificates: []tls.Certificate{certificate}, HandshakeTimeout: 5 * time.Second, FlightInterval: 5 * time.Millisecond})
-	serverErr := make(chan error, 1)
-	go func() { serverErr <- server.Handshake() }()
-	if err := client.Handshake(); err != nil {
-		t.Fatal(err)
-	}
-	if err := <-serverErr; err != nil {
-		t.Fatal(err)
-	}
+	handshakePair(t, client, server)
 	clientWire.disable()
 	serverWire.disable()
 	payload := bytes.Repeat([]byte("weak-network"), 90)
@@ -955,60 +999,45 @@ func TestHandshakeStableUnderLossDelayReorderingAndDuplication(t *testing.T) {
 	if !bytes.Equal(buffer, payload) {
 		t.Fatal("application data mismatch after weak-network handshake")
 	}
-	_ = client.Close()
-	_ = server.Close()
 }
 
 func TestHandshakeRetransmitsDroppedClientFinished(t *testing.T) {
 	certificate, roots := testServerCertificate(t)
+	loss := &handshakeLoss{typ: handshakeTypeFinished, epoch: 2}
 	left, right := memoryDatagramPair()
-	client := Client(&dropNthWriteConn{Conn: left, drop: 3}, &Config{RootCAs: roots, ServerName: "server.test", HandshakeTimeout: 2 * time.Second, FlightInterval: 5 * time.Millisecond})
-	server := Server(right, &Config{Certificates: []tls.Certificate{certificate}, HandshakeTimeout: 2 * time.Second, FlightInterval: 100 * time.Millisecond})
-	serverErr := make(chan error, 1)
-	go func() { serverErr <- server.Handshake() }()
-	if err := client.Handshake(); err != nil {
-		t.Fatal(err)
-	}
-	if err := <-serverErr; err != nil {
-		t.Fatal(err)
-	}
-	_ = left.Close()
-	_ = right.Close()
+	clientWire := &observeRecordsConn{Conn: left, observe: loss.observeMessage}
+	serverWire := &observeRecordsConn{Conn: right, observe: loss.observeACK}
+	client := Client(clientWire, &Config{RootCAs: roots, ServerName: "server.test", SessionTicketsDisabled: true, HandshakeTimeout: 2 * time.Second, FlightInterval: 5 * time.Millisecond})
+	server := Server(serverWire, &Config{Certificates: []tls.Certificate{certificate}, SessionTicketsDisabled: true, HandshakeTimeout: 2 * time.Second, FlightInterval: 100 * time.Millisecond})
+	clientWire.owner, serverWire.owner = client, server
+	handshakePair(t, client, server)
+	loss.requireRecovery(t)
 }
 
 func TestHandshakeRetransmitsWhenFinalACKIsDropped(t *testing.T) {
-	certificate, roots := testServerCertificate(t)
-	left, right := memoryDatagramPair()
-	client := Client(left, &Config{RootCAs: roots, ServerName: "server.test", HandshakeTimeout: 2 * time.Second, FlightInterval: 5 * time.Millisecond})
-	server := Server(&dropNthWriteConn{Conn: right, drop: 7}, &Config{Certificates: []tls.Certificate{certificate}, HandshakeTimeout: 2 * time.Second, FlightInterval: 5 * time.Millisecond})
-	serverErr := make(chan error, 1)
-	go func() { serverErr <- server.Handshake() }()
-	if err := client.Handshake(); err != nil {
-		t.Fatal(err)
-	}
-	if err := <-serverErr; err != nil {
-		t.Fatal(err)
-	}
-	_ = left.Close()
-	_ = right.Close()
-}
-
-func TestClientAuthFlightRetransmitsWhenFinalACKIsDropped(t *testing.T) {
 	serverCertificate, roots := testServerCertificate(t)
 	clientCertificate, clientRoots := testClientCertificate(t)
-	left, right := memoryDatagramPair()
-	client := Client(left, &Config{RootCAs: roots, ServerName: "server.test", Certificates: []tls.Certificate{clientCertificate}, HandshakeTimeout: 2 * time.Second, FlightInterval: 5 * time.Millisecond})
-	server := Server(&dropNthWriteConn{Conn: right, drop: 8}, &Config{Certificates: []tls.Certificate{serverCertificate}, ClientAuth: tls.RequireAndVerifyClientCert, ClientCAs: clientRoots, HandshakeTimeout: 2 * time.Second, FlightInterval: 5 * time.Millisecond})
-	serverErr := make(chan error, 1)
-	go func() { serverErr <- server.Handshake() }()
-	if err := client.Handshake(); err != nil {
-		t.Fatal(err)
+	for _, clientAuth := range []bool{false, true} {
+		t.Run(fmt.Sprintf("client_auth=%t", clientAuth), func(t *testing.T) {
+			loss := &handshakeLoss{typ: handshakeTypeFinished, epoch: 2, dropACK: true}
+			left, right := memoryDatagramPair()
+			clientWire := &observeRecordsConn{Conn: left, observe: loss.observeMessage}
+			serverWire := &observeRecordsConn{Conn: right, observe: loss.observeACK}
+			clientConfig := &Config{RootCAs: roots, ServerName: "server.test", SessionTicketsDisabled: true, HandshakeTimeout: 2 * time.Second, FlightInterval: 5 * time.Millisecond}
+			serverConfig := &Config{Certificates: []tls.Certificate{serverCertificate}, SessionTicketsDisabled: true, HandshakeTimeout: 2 * time.Second, FlightInterval: 5 * time.Millisecond}
+			if clientAuth {
+				clientConfig.Certificates = []tls.Certificate{clientCertificate}
+				serverConfig.ClientAuth, serverConfig.ClientCAs = tls.RequireAndVerifyClientCert, clientRoots
+			}
+			client, server := Client(clientWire, clientConfig), Server(serverWire, serverConfig)
+			clientWire.owner, serverWire.owner = client, server
+			handshakePair(t, client, server)
+			loss.requireRecovery(t)
+			if clientAuth && len(server.ConnectionState().PeerCertificates) == 0 {
+				t.Fatal("client authentication lost the peer certificate")
+			}
+		})
 	}
-	if err := <-serverErr; err != nil {
-		t.Fatal(err)
-	}
-	_ = left.Close()
-	_ = right.Close()
 }
 
 func TestEndToEndRequiredClientCertificate(t *testing.T) {
@@ -1017,14 +1046,7 @@ func TestEndToEndRequiredClientCertificate(t *testing.T) {
 	left, right := memoryDatagramPair()
 	client := Client(left, &Config{RootCAs: roots, ServerName: "server.test", Certificates: []tls.Certificate{clientCertificate}, HandshakeTimeout: 2 * time.Second, FlightInterval: 5 * time.Millisecond})
 	server := Server(right, &Config{Certificates: []tls.Certificate{serverCertificate}, ClientAuth: tls.RequireAndVerifyClientCert, ClientCAs: clientRoots, HandshakeTimeout: 2 * time.Second, FlightInterval: 5 * time.Millisecond})
-	serverErr := make(chan error, 1)
-	go func() { serverErr <- server.Handshake() }()
-	if err := client.Handshake(); err != nil {
-		t.Fatal(err)
-	}
-	if err := <-serverErr; err != nil {
-		t.Fatal(err)
-	}
+	handshakePair(t, client, server)
 	if len(server.ConnectionState().PeerCertificates) != 1 || len(server.ConnectionState().VerifiedChains) == 0 {
 		t.Fatalf("server state %#v", server.ConnectionState())
 	}
@@ -1091,14 +1113,7 @@ func TestEndToEndKeyUpdate(t *testing.T) {
 	left, right := memoryDatagramPair()
 	client := Client(left, &Config{RootCAs: roots, ServerName: "server.test", HandshakeTimeout: 2 * time.Second, FlightInterval: 5 * time.Millisecond})
 	server := Server(right, &Config{Certificates: []tls.Certificate{certificate}, HandshakeTimeout: 2 * time.Second, FlightInterval: 5 * time.Millisecond})
-	serverErr := make(chan error, 1)
-	go func() { serverErr <- server.Handshake() }()
-	if err := client.Handshake(); err != nil {
-		t.Fatal(err)
-	}
-	if err := <-serverErr; err != nil {
-		t.Fatal(err)
-	}
+	handshakePair(t, client, server)
 	if err := client.SendKeyUpdate(false); err != nil {
 		t.Fatal(err)
 	}
@@ -1136,14 +1151,7 @@ func TestKeyUpdateRetransmitsDroppedACK(t *testing.T) {
 	client := Client(left, &Config{RootCAs: roots, ServerName: "server.test", HandshakeTimeout: 2 * time.Second, FlightInterval: 5 * time.Millisecond, MaxFlightInterval: 20 * time.Millisecond})
 	droppingServerConn := &dropWritesConn{Conn: right}
 	server := Server(droppingServerConn, &Config{Certificates: []tls.Certificate{certificate}, HandshakeTimeout: 2 * time.Second, FlightInterval: 5 * time.Millisecond, MaxFlightInterval: 20 * time.Millisecond})
-	serverErr := make(chan error, 1)
-	go func() { serverErr <- server.Handshake() }()
-	if err := client.Handshake(); err != nil {
-		t.Fatal(err)
-	}
-	if err := <-serverErr; err != nil {
-		t.Fatal(err)
-	}
+	handshakePair(t, client, server)
 	droppingServerConn.mu.Lock()
 	droppingServerConn.remaining = 1
 	droppingServerConn.mu.Unlock()
@@ -1185,8 +1193,6 @@ func TestApplicationWriteAutomaticallyStartsKeyUpdateNearAEADLimit(t *testing.T)
 	if client.ConnectionState().HandshakeComplete != server.ConnectionState().HandshakeComplete {
 		t.Fatal("connection state changed during automatic KeyUpdate")
 	}
-	_ = client.Close()
-	_ = server.Close()
 }
 
 func TestRepeatedBidirectionalKeyUpdatesRemainBounded(t *testing.T) {
@@ -1194,14 +1200,7 @@ func TestRepeatedBidirectionalKeyUpdatesRemainBounded(t *testing.T) {
 	left, right := memoryDatagramPair()
 	client := Client(left, &Config{RootCAs: roots, ServerName: "server.test", HandshakeTimeout: 2 * time.Second, FlightInterval: time.Millisecond})
 	server := Server(right, &Config{Certificates: []tls.Certificate{certificate}, HandshakeTimeout: 2 * time.Second, FlightInterval: time.Millisecond})
-	serverErr := make(chan error, 1)
-	go func() { serverErr <- server.Handshake() }()
-	if err := client.Handshake(); err != nil {
-		t.Fatal(err)
-	}
-	if err := <-serverErr; err != nil {
-		t.Fatal(err)
-	}
+	handshakePair(t, client, server)
 	clientEpoch, serverEpoch := uint64(3), uint64(3)
 	for i := range 64 {
 		if i%2 == 0 {
@@ -1226,8 +1225,6 @@ func TestRepeatedBidirectionalKeyUpdatesRemainBounded(t *testing.T) {
 			}
 		}
 	}
-	_ = client.Close()
-	_ = server.Close()
 }
 
 func TestApplicationBufferLimit(t *testing.T) {
@@ -1235,14 +1232,7 @@ func TestApplicationBufferLimit(t *testing.T) {
 	left, right := memoryDatagramPair()
 	client := Client(left, &Config{RootCAs: roots, ServerName: "server.test", HandshakeTimeout: 2 * time.Second, FlightInterval: 5 * time.Millisecond})
 	server := Server(right, &Config{Certificates: []tls.Certificate{certificate}, MaxBufferedApplicationData: 4, HandshakeTimeout: 2 * time.Second, FlightInterval: 5 * time.Millisecond})
-	serverErr := make(chan error, 1)
-	go func() { serverErr <- server.Handshake() }()
-	if err := client.Handshake(); err != nil {
-		t.Fatal(err)
-	}
-	if err := <-serverErr; err != nil {
-		t.Fatal(err)
-	}
+	handshakePair(t, client, server)
 	if _, err := client.WriteDatagram([]byte("12345")); err != nil {
 		t.Fatal(err)
 	}
@@ -1257,14 +1247,7 @@ func TestCloseWakesBlockedRead(t *testing.T) {
 	left, right := memoryDatagramPair()
 	client := Client(left, &Config{RootCAs: roots, ServerName: "server.test", HandshakeTimeout: 2 * time.Second, FlightInterval: 5 * time.Millisecond})
 	server := Server(right, &Config{Certificates: []tls.Certificate{certificate}, HandshakeTimeout: 2 * time.Second, FlightInterval: 5 * time.Millisecond})
-	serverErr := make(chan error, 1)
-	go func() { serverErr <- server.Handshake() }()
-	if err := client.Handshake(); err != nil {
-		t.Fatal(err)
-	}
-	if err := <-serverErr; err != nil {
-		t.Fatal(err)
-	}
+	handshakePair(t, client, server)
 	readErr := make(chan error, 1)
 	go func() {
 		buf := make([]byte, 1)
@@ -1289,14 +1272,7 @@ func TestFatalAlertIsReported(t *testing.T) {
 	left, right := memoryDatagramPair()
 	client := Client(left, &Config{RootCAs: roots, ServerName: "server.test", HandshakeTimeout: 2 * time.Second, FlightInterval: 5 * time.Millisecond})
 	server := Server(right, &Config{Certificates: []tls.Certificate{certificate}, HandshakeTimeout: 2 * time.Second, FlightInterval: 5 * time.Millisecond})
-	serverErr := make(chan error, 1)
-	go func() { serverErr <- server.Handshake() }()
-	if err := client.Handshake(); err != nil {
-		t.Fatal(err)
-	}
-	if err := <-serverErr; err != nil {
-		t.Fatal(err)
-	}
+	handshakePair(t, client, server)
 	body, err := (alertMessage{level: alertLevelFatal, description: 80}).marshal()
 	if err != nil {
 		t.Fatal(err)
@@ -1353,14 +1329,7 @@ func TestEndToEndNewSessionTicket(t *testing.T) {
 		Certificates: []tls.Certificate{certificate}, SessionTicketKey: ticketKey,
 		SessionTicketLifetime: time.Hour, HandshakeTimeout: 2 * time.Second, FlightInterval: 5 * time.Millisecond,
 	})
-	serverErr := make(chan error, 1)
-	go func() { serverErr <- server.Handshake() }()
-	if err := client.Handshake(); err != nil {
-		t.Fatal(err)
-	}
-	if err := <-serverErr; err != nil {
-		t.Fatal(err)
-	}
+	handshakePair(t, client, server)
 	var cached *ClientSessionState
 	deadline := time.Now().Add(time.Second)
 	for time.Now().Before(deadline) {
@@ -1399,14 +1368,7 @@ func TestSessionTicketsDisabled(t *testing.T) {
 	cache := NewLRUClientSessionCache(1)
 	client := Client(left, &Config{RootCAs: roots, ServerName: "server.test", ClientSessionCache: cache, HandshakeTimeout: 2 * time.Second, FlightInterval: 5 * time.Millisecond})
 	server := Server(right, &Config{Certificates: []tls.Certificate{certificate}, SessionTicketsDisabled: true, HandshakeTimeout: 2 * time.Second, FlightInterval: 5 * time.Millisecond})
-	serverErr := make(chan error, 1)
-	go func() { serverErr <- server.Handshake() }()
-	if err := client.Handshake(); err != nil {
-		t.Fatal(err)
-	}
-	if err := <-serverErr; err != nil {
-		t.Fatal(err)
-	}
+	handshakePair(t, client, server)
 	time.Sleep(20 * time.Millisecond)
 	if _, ok := cache.Get("server.test"); ok {
 		t.Fatal("client cached a ticket while server tickets were disabled")
@@ -1428,38 +1390,8 @@ func TestEndToEndSessionResumption(t *testing.T) {
 		CipherSuites:          []uint16{TLS_CHACHA20_POLY1305_SHA256},
 		SessionTicketLifetime: time.Hour, HandshakeTimeout: 2 * time.Second, FlightInterval: 5 * time.Millisecond,
 	}
-	left, right := memoryDatagramPair()
-	firstClient := Client(left, clientConfig)
-	firstServer := Server(right, serverConfig)
-	serverErr := make(chan error, 1)
-	go func() { serverErr <- firstServer.Handshake() }()
-	if err := firstClient.Handshake(); err != nil {
-		t.Fatal(err)
-	}
-	if err := <-serverErr; err != nil {
-		t.Fatal(err)
-	}
-	deadline := time.Now().Add(time.Second)
-	for time.Now().Before(deadline) {
-		if _, ok := cache.Get("server.test"); ok {
-			break
-		}
-		time.Sleep(time.Millisecond)
-	}
-	if _, ok := cache.Get("server.test"); !ok {
-		t.Fatal("initial handshake did not produce a session ticket")
-	}
-	secondLeft, secondRight := memoryDatagramPair()
-	client := Client(secondLeft, clientConfig)
-	server := Server(secondRight, serverConfig)
-	serverErr = make(chan error, 1)
-	go func() { serverErr <- server.Handshake() }()
-	if err := client.Handshake(); err != nil {
-		t.Fatal(err)
-	}
-	if err := <-serverErr; err != nil {
-		t.Fatal(err)
-	}
+	_ = issueEarlyDataTicket(t, clientConfig, serverConfig)
+	client, server := completeHandshakePair(t, clientConfig, serverConfig)
 	if !client.ConnectionState().DidResume || !server.ConnectionState().DidResume {
 		t.Fatalf("resumption state client=%v server=%v", client.ConnectionState().DidResume, server.ConnectionState().DidResume)
 	}
@@ -1517,14 +1449,7 @@ func TestEndToEndMutualTLSSessionResumption(t *testing.T) {
 	left, right := memoryDatagramPair()
 	client := Client(left, resumingClientConfig)
 	server := Server(right, serverConfig)
-	serverErr := make(chan error, 1)
-	go func() { serverErr <- server.Handshake() }()
-	if err := client.Handshake(); err != nil {
-		t.Fatal(err)
-	}
-	if err := <-serverErr; err != nil {
-		t.Fatal(err)
-	}
+	handshakePair(t, client, server)
 	clientState, serverState := client.ConnectionState(), server.ConnectionState()
 	if !clientState.DidResume || !serverState.DidResume {
 		t.Fatalf("mutual TLS resumption state client=%v server=%v", clientState.DidResume, serverState.DidResume)
@@ -1535,8 +1460,6 @@ func TestEndToEndMutualTLSSessionResumption(t *testing.T) {
 	if verifyCalls != 1 {
 		t.Fatalf("resumed handshake called VerifyPeerCertificate; calls = %d", verifyCalls)
 	}
-	_ = client.Close()
-	_ = server.Close()
 }
 
 func TestMutualTLSSessionResumptionPolicyFallbacks(t *testing.T) {
@@ -1562,22 +1485,13 @@ func TestMutualTLSSessionResumptionPolicyFallbacks(t *testing.T) {
 		left, right := memoryDatagramPair()
 		client := Client(left, clientConfig)
 		server := Server(right, serverConfig)
-		serverErr := make(chan error, 1)
-		go func() { serverErr <- server.Handshake() }()
-		if err := client.Handshake(); err != nil {
-			t.Fatal(err)
-		}
-		if err := <-serverErr; err != nil {
-			t.Fatal(err)
-		}
+		handshakePair(t, client, server)
 		if client.ConnectionState().DidResume || server.ConnectionState().DidResume {
 			t.Fatal("unauthenticated ticket resumed after mutual TLS became required")
 		}
 		if len(server.ConnectionState().VerifiedChains) == 0 {
 			t.Fatal("full mutual TLS fallback did not authenticate the client")
 		}
-		_ = client.Close()
-		_ = server.Close()
 	})
 
 	t.Run("ChangedClientCARejectsResumption", func(t *testing.T) {
@@ -1599,6 +1513,7 @@ func TestMutualTLSSessionResumptionPolicyFallbacks(t *testing.T) {
 		left, right := memoryDatagramPair()
 		client := Client(left, clientConfig)
 		server := Server(right, serverConfig)
+		t.Cleanup(func() { _ = client.Close(); _ = server.Close() })
 		serverErr := make(chan error, 1)
 		go func() { serverErr <- server.Handshake() }()
 		clientErr := client.Handshake()
@@ -1609,8 +1524,6 @@ func TestMutualTLSSessionResumptionPolicyFallbacks(t *testing.T) {
 		if client.ConnectionState().DidResume || server.ConnectionState().DidResume {
 			t.Fatal("changed ClientCAs retained resumed state")
 		}
-		_ = client.Close()
-		_ = server.Close()
 	})
 }
 
@@ -1675,6 +1588,7 @@ func TestEndToEndMutualTLSEarlyData(t *testing.T) {
 	left, right := memoryDatagramPair()
 	client := Client(left, resumingClientConfig)
 	server := Server(right, serverConfig)
+	t.Cleanup(func() { _ = client.Close(); _ = server.Close() })
 	serverErr := make(chan error, 1)
 	go func() { serverErr <- server.Handshake() }()
 	payload := []byte("idempotent mutual TLS early data")
@@ -1692,8 +1606,6 @@ func TestEndToEndMutualTLSEarlyData(t *testing.T) {
 	if err != nil || !bytes.Equal(buffer[:n], payload) {
 		t.Fatalf("ReadDatagram = %q, %v", buffer[:n], err)
 	}
-	_ = client.Close()
-	_ = server.Close()
 }
 
 func TestSessionResumptionAllowsDifferentCipherSuiteWithSameHash(t *testing.T) {
@@ -1717,6 +1629,7 @@ func TestSessionResumptionAllowsDifferentCipherSuiteWithSameHash(t *testing.T) {
 	left, right := memoryDatagramPair()
 	client := Client(left, clientConfig)
 	server := Server(right, serverConfig)
+	t.Cleanup(func() { _ = client.Close(); _ = server.Close() })
 	serverErr := make(chan error, 1)
 	go func() { serverErr <- server.Handshake() }()
 	if n, err := client.WriteEarlyData([]byte("bound to the original cipher suite")); n != 0 || !errors.Is(err, ErrEarlyDataRejected) {
@@ -1752,33 +1665,16 @@ func TestEndToEndEarlyData(t *testing.T) {
 		FlightInterval:              5 * time.Millisecond,
 	}
 
-	firstLeft, firstRight := memoryDatagramPair()
-	firstClient := Client(firstLeft, clientConfig)
-	firstServer := Server(firstRight, serverConfig)
-	serverErr := make(chan error, 1)
-	go func() { serverErr <- firstServer.Handshake() }()
-	if err := firstClient.Handshake(); err != nil {
-		t.Fatal(err)
-	}
-	if err := <-serverErr; err != nil {
-		t.Fatal(err)
-	}
-	deadline := time.Now().Add(time.Second)
-	for time.Now().Before(deadline) {
-		if state, ok := cache.Get("server.test"); ok && state.maxEarlyData == 4096 {
-			break
-		}
-		time.Sleep(time.Millisecond)
-	}
-	state, ok := cache.Get("server.test")
-	if !ok || state.maxEarlyData != 4096 {
-		t.Fatal("initial handshake did not cache an early-data ticket")
+	state := issueEarlyDataTicket(t, clientConfig, serverConfig)
+	if state.maxEarlyData != 4096 {
+		t.Fatalf("ticket maxEarlyData = %d, want 4096", state.maxEarlyData)
 	}
 
 	secondLeft, secondRight := memoryDatagramPair()
 	client := Client(secondLeft, clientConfig)
 	server := Server(secondRight, serverConfig)
-	serverErr = make(chan error, 1)
+	t.Cleanup(func() { _ = client.Close(); _ = server.Close() })
+	serverErr := make(chan error, 1)
 	go func() { serverErr <- server.Handshake() }()
 	payload := bytes.Repeat([]byte("e"), 700)
 	n, err := client.WriteEarlyData(payload)
@@ -1806,28 +1702,18 @@ func TestEndToEndEarlyData(t *testing.T) {
 
 func issueEarlyDataTicket(t *testing.T, clientConfig, serverConfig *Config) *ClientSessionState {
 	t.Helper()
-	left, right := memoryDatagramPair()
-	client := Client(left, clientConfig)
-	server := Server(right, serverConfig)
-	serverErr := make(chan error, 1)
-	go func() { serverErr <- server.Handshake() }()
-	if err := client.Handshake(); err != nil {
-		t.Fatal(err)
-	}
-	if err := <-serverErr; err != nil {
-		t.Fatal(err)
-	}
+	client, server := completeHandshakePair(t, clientConfig, serverConfig)
+	defer client.Close()
+	defer server.Close()
 	deadline := time.Now().Add(time.Second)
 	key := clientSessionCacheKey(client.config, client.conn)
 	for time.Now().Before(deadline) {
 		if state, ok := clientConfig.ClientSessionCache.Get(key); ok {
-			_ = client.Close()
-			_ = server.Close()
 			return state
 		}
 		time.Sleep(time.Millisecond)
 	}
-	t.Fatal("initial handshake did not produce an early-data ticket")
+	t.Fatal("initial handshake did not produce a session ticket")
 	return nil
 }
 
@@ -1904,6 +1790,7 @@ func TestEarlyDataRejectedAfterHelloRetryRequest(t *testing.T) {
 	left, right := memoryDatagramPair()
 	client := Client(left, clientConfig)
 	server := Server(right, serverConfig)
+	t.Cleanup(func() { _ = client.Close(); _ = server.Close() })
 	serverErr := make(chan error, 1)
 	go func() { serverErr <- server.Handshake() }()
 	if n, err := client.WriteEarlyData([]byte("must be rejected after HRR")); n != 0 || !errors.Is(err, ErrEarlyDataRejected) {
@@ -1946,6 +1833,7 @@ func TestEarlyDataReplayIsRejected(t *testing.T) {
 		left, right := memoryDatagramPair()
 		client := Client(left, clientConfig)
 		server := Server(right, serverConfig)
+		t.Cleanup(func() { _ = client.Close(); _ = server.Close() })
 		serverErr := make(chan error, 1)
 		go func() { serverErr <- server.Handshake() }()
 		n, err := client.WriteEarlyData([]byte(payload))
@@ -1986,6 +1874,7 @@ func TestEarlyDataTicketLimit(t *testing.T) {
 	left, right := memoryDatagramPair()
 	client := Client(left, clientConfig)
 	server := Server(right, serverConfig)
+	t.Cleanup(func() { _ = client.Close(); _ = server.Close() })
 	serverErr := make(chan error, 1)
 	go func() { serverErr <- server.Handshake() }()
 	if n, err := client.WriteEarlyData([]byte("ninebytes")); n != 0 || !errors.Is(err, ErrEarlyDataUnavailable) {
@@ -2029,29 +1918,7 @@ func TestSessionResumptionTicketAndBinderFailures(t *testing.T) {
 	copy(ticketKey[:], bytes.Repeat([]byte{0x3d}, 32))
 	baseClientConfig := &Config{RootCAs: roots, ServerName: "server.test", ClientSessionCache: baseCache, HandshakeTimeout: time.Second, FlightInterval: 5 * time.Millisecond}
 	serverConfig := &Config{Certificates: []tls.Certificate{certificate}, SessionTicketKey: ticketKey, SessionTicketLifetime: time.Hour, HandshakeTimeout: time.Second, FlightInterval: 5 * time.Millisecond}
-	left, right := memoryDatagramPair()
-	client := Client(left, baseClientConfig)
-	server := Server(right, serverConfig)
-	serverErr := make(chan error, 1)
-	go func() { serverErr <- server.Handshake() }()
-	if err := client.Handshake(); err != nil {
-		t.Fatal(err)
-	}
-	if err := <-serverErr; err != nil {
-		t.Fatal(err)
-	}
-	deadline := time.Now().Add(time.Second)
-	var baseState *ClientSessionState
-	for time.Now().Before(deadline) {
-		if state, ok := baseCache.Get("server.test"); ok {
-			baseState = state
-			break
-		}
-		time.Sleep(time.Millisecond)
-	}
-	if baseState == nil {
-		t.Fatal("initial handshake did not produce a ticket")
-	}
+	baseState := issueEarlyDataTicket(t, baseClientConfig, serverConfig)
 
 	t.Run("tampered ticket falls back", func(t *testing.T) {
 		state := cloneClientSessionState(baseState)
@@ -2060,17 +1927,7 @@ func TestSessionResumptionTicketAndBinderFailures(t *testing.T) {
 		cache.Put("server.test", state)
 		clientConfig := baseClientConfig.Clone()
 		clientConfig.ClientSessionCache = cache
-		clientSide, serverSide := memoryDatagramPair()
-		fallbackClient := Client(clientSide, clientConfig)
-		fallbackServer := Server(serverSide, serverConfig)
-		errors := make(chan error, 1)
-		go func() { errors <- fallbackServer.Handshake() }()
-		if err := fallbackClient.Handshake(); err != nil {
-			t.Fatal(err)
-		}
-		if err := <-errors; err != nil {
-			t.Fatal(err)
-		}
+		fallbackClient, fallbackServer := completeHandshakePair(t, clientConfig, serverConfig)
 		if fallbackClient.ConnectionState().DidResume || fallbackServer.ConnectionState().DidResume {
 			t.Fatal("tampered ticket resumed a session")
 		}
@@ -2089,6 +1946,7 @@ func TestSessionResumptionTicketAndBinderFailures(t *testing.T) {
 		clientSide, serverSide := memoryDatagramPair()
 		badClient := Client(clientSide, clientConfig)
 		badServer := Server(serverSide, serverCopy)
+		t.Cleanup(func() { _ = badClient.Close(); _ = badServer.Close() })
 		errors := make(chan error, 1)
 		go func() { errors <- badServer.Handshake() }()
 		clientErr := badClient.Handshake()
@@ -2103,35 +1961,17 @@ func TestNewSessionTicketLossRecovery(t *testing.T) {
 	certificate, roots := testServerCertificate(t)
 	var ticketKey [32]byte
 	copy(ticketKey[:], bytes.Repeat([]byte{0x71}, 32))
-	for _, test := range []struct {
-		name       string
-		dropServer int
-		dropClient int
-	}{
-		{name: "ticket lost", dropServer: 8},
-		{name: "ticket ACK lost", dropClient: 4},
-	} {
-		t.Run(test.name, func(t *testing.T) {
+	for _, dropACK := range []bool{false, true} {
+		t.Run(fmt.Sprintf("drop_ack=%t", dropACK), func(t *testing.T) {
+			loss := &handshakeLoss{typ: handshakeTypeNewSessionTicket, epoch: 3, dropACK: dropACK}
 			cache := NewLRUClientSessionCache(1)
 			left, right := memoryDatagramPair()
-			clientConn := left
-			serverConn := right
-			if test.dropClient != 0 {
-				clientConn = &dropNthWriteConn{Conn: left, drop: test.dropClient}
-			}
-			if test.dropServer != 0 {
-				serverConn = &dropNthWriteConn{Conn: right, drop: test.dropServer}
-			}
-			client := Client(clientConn, &Config{RootCAs: roots, ServerName: "server.test", ClientSessionCache: cache, HandshakeTimeout: 2 * time.Second, FlightInterval: 5 * time.Millisecond, MaxFlightInterval: 20 * time.Millisecond})
-			server := Server(serverConn, &Config{Certificates: []tls.Certificate{certificate}, SessionTicketKey: ticketKey, HandshakeTimeout: 2 * time.Second, FlightInterval: 5 * time.Millisecond, MaxFlightInterval: 20 * time.Millisecond})
-			serverErr := make(chan error, 1)
-			go func() { serverErr <- server.Handshake() }()
-			if err := client.Handshake(); err != nil {
-				t.Fatal(err)
-			}
-			if err := <-serverErr; err != nil {
-				t.Fatal(err)
-			}
+			clientWire := &observeRecordsConn{Conn: left, observe: loss.observeACK}
+			serverWire := &observeRecordsConn{Conn: right, observe: loss.observeMessage}
+			client := Client(clientWire, &Config{RootCAs: roots, ServerName: "server.test", ClientSessionCache: cache, HandshakeTimeout: 2 * time.Second, FlightInterval: 5 * time.Millisecond, MaxFlightInterval: 20 * time.Millisecond})
+			server := Server(serverWire, &Config{Certificates: []tls.Certificate{certificate}, SessionTicketKey: ticketKey, HandshakeTimeout: 2 * time.Second, FlightInterval: 5 * time.Millisecond, MaxFlightInterval: 20 * time.Millisecond})
+			clientWire.owner, serverWire.owner = client, server
+			handshakePair(t, client, server)
 			deadline := time.Now().Add(time.Second)
 			for time.Now().Before(deadline) {
 				_, cached := cache.Get("server.test")
@@ -2139,6 +1979,7 @@ func TestNewSessionTicketLossRecovery(t *testing.T) {
 				acknowledged := server.ticketFlight == nil
 				server.writeMu.Unlock()
 				if cached && acknowledged {
+					loss.requireRecovery(t)
 					return
 				}
 				time.Sleep(time.Millisecond)
@@ -2155,14 +1996,7 @@ func TestFragmentedNewSessionTicket(t *testing.T) {
 	left, right := memoryDatagramPair()
 	client := Client(left, &Config{InsecureSkipVerify: true, ServerName: serverName, ClientSessionCache: cache, MTU: 256, HandshakeTimeout: 2 * time.Second, FlightInterval: 5 * time.Millisecond})
 	server := Server(right, &Config{Certificates: []tls.Certificate{certificate}, MTU: 256, HandshakeTimeout: 2 * time.Second, FlightInterval: 5 * time.Millisecond})
-	serverErr := make(chan error, 1)
-	go func() { serverErr <- server.Handshake() }()
-	if err := client.Handshake(); err != nil {
-		t.Fatal(err)
-	}
-	if err := <-serverErr; err != nil {
-		t.Fatal(err)
-	}
+	handshakePair(t, client, server)
 	deadline := time.Now().Add(time.Second)
 	for time.Now().Before(deadline) {
 		_, cached := cache.Get(serverName)
@@ -2186,14 +2020,7 @@ func TestEndToEndConnectionIDAndKeyUpdate(t *testing.T) {
 	serverCID := []byte{0xd1, 0xd2, 0xd3}
 	client := Client(clientWire, &Config{RootCAs: roots, ServerName: "server.test", CipherSuites: []uint16{TLS_CHACHA20_POLY1305_SHA256}, ConnectionID: clientCID, SessionTicketsDisabled: true, HandshakeTimeout: 2 * time.Second, FlightInterval: 5 * time.Millisecond})
 	server := Server(serverWire, &Config{Certificates: []tls.Certificate{certificate}, CipherSuites: []uint16{TLS_CHACHA20_POLY1305_SHA256}, ConnectionID: serverCID, SessionTicketsDisabled: true, HandshakeTimeout: 2 * time.Second, FlightInterval: 5 * time.Millisecond})
-	serverErr := make(chan error, 1)
-	go func() { serverErr <- server.Handshake() }()
-	if err := client.Handshake(); err != nil {
-		t.Fatal(err)
-	}
-	if err := <-serverErr; err != nil {
-		t.Fatal(err)
-	}
+	handshakePair(t, client, server)
 	clientState, serverState := client.ConnectionState(), server.ConnectionState()
 	if clientState.CipherSuite != TLS_CHACHA20_POLY1305_SHA256 || serverState.CipherSuite != TLS_CHACHA20_POLY1305_SHA256 {
 		t.Fatal("connection did not negotiate ChaCha20-Poly1305")
@@ -2255,14 +2082,7 @@ func TestConnectionIDRequiresBothPeers(t *testing.T) {
 	left, right := memoryDatagramPair()
 	client := Client(left, &Config{RootCAs: roots, ServerName: "server.test", ConnectionID: []byte{1}, SessionTicketsDisabled: true, HandshakeTimeout: 2 * time.Second, FlightInterval: 5 * time.Millisecond})
 	server := Server(right, &Config{Certificates: []tls.Certificate{certificate}, SessionTicketsDisabled: true, HandshakeTimeout: 2 * time.Second, FlightInterval: 5 * time.Millisecond})
-	serverErr := make(chan error, 1)
-	go func() { serverErr <- server.Handshake() }()
-	if err := client.Handshake(); err != nil {
-		t.Fatal(err)
-	}
-	if err := <-serverErr; err != nil {
-		t.Fatal(err)
-	}
+	handshakePair(t, client, server)
 	if len(client.ConnectionState().LocalConnectionID) != 0 || len(server.ConnectionState().PeerConnectionID) != 0 || len(client.sendCipher.connectionID) != 0 {
 		t.Fatal("CID was enabled without server negotiation")
 	}
@@ -2282,16 +2102,7 @@ func TestReturnRoutabilityNegotiationCanBeDisabled(t *testing.T) {
 			left, right := memoryDatagramPair()
 			client := Client(left, &Config{RootCAs: roots, ServerName: "server.test", ConnectionID: []byte{1}, DisableReturnRoutabilityCheck: test.disableClient, SessionTicketsDisabled: true, HandshakeTimeout: 2 * time.Second, FlightInterval: 5 * time.Millisecond})
 			server := Server(right, &Config{Certificates: []tls.Certificate{certificate}, ConnectionID: []byte{2}, DisableReturnRoutabilityCheck: test.disableServer, SessionTicketsDisabled: true, HandshakeTimeout: 2 * time.Second, FlightInterval: 5 * time.Millisecond})
-			defer client.Close()
-			defer server.Close()
-			serverErr := make(chan error, 1)
-			go func() { serverErr <- server.Handshake() }()
-			if err := client.Handshake(); err != nil {
-				t.Fatal(err)
-			}
-			if err := <-serverErr; err != nil {
-				t.Fatal(err)
-			}
+			handshakePair(t, client, server)
 			if !client.connectionIDNegotiated || !server.connectionIDNegotiated {
 				t.Fatal("disabling RRC also disabled Connection ID")
 			}
@@ -2308,14 +2119,7 @@ func TestEndToEndEmptyConnectionID(t *testing.T) {
 	clientWire := &captureWritesConn{Conn: left}
 	client := Client(clientWire, &Config{RootCAs: roots, ServerName: "server.test", ConnectionID: []byte{}, SessionTicketsDisabled: true, HandshakeTimeout: 2 * time.Second, FlightInterval: 5 * time.Millisecond})
 	server := Server(right, &Config{Certificates: []tls.Certificate{certificate}, ConnectionID: []byte{}, SessionTicketsDisabled: true, HandshakeTimeout: 2 * time.Second, FlightInterval: 5 * time.Millisecond})
-	serverErr := make(chan error, 1)
-	go func() { serverErr <- server.Handshake() }()
-	if err := client.Handshake(); err != nil {
-		t.Fatal(err)
-	}
-	if err := <-serverErr; err != nil {
-		t.Fatal(err)
-	}
+	handshakePair(t, client, server)
 	if !client.ConnectionState().ReturnRoutabilityCheck || !server.ConnectionState().ReturnRoutabilityCheck {
 		t.Fatal("RRC was not negotiated with empty Connection ID")
 	}
@@ -2340,14 +2144,7 @@ func TestEndToEndImmediateConnectionIDUpdate(t *testing.T) {
 	serverWire := &captureWritesConn{Conn: right}
 	client := Client(left, &Config{RootCAs: roots, ServerName: "server.test", ConnectionID: []byte{1, 2}, SessionTicketsDisabled: true, HandshakeTimeout: 2 * time.Second, FlightInterval: 5 * time.Millisecond})
 	server := Server(serverWire, &Config{Certificates: []tls.Certificate{certificate}, ConnectionID: []byte{3, 4}, SessionTicketsDisabled: true, HandshakeTimeout: 2 * time.Second, FlightInterval: 5 * time.Millisecond})
-	serverErr := make(chan error, 1)
-	go func() { serverErr <- server.Handshake() }()
-	if err := client.Handshake(); err != nil {
-		t.Fatal(err)
-	}
-	if err := <-serverErr; err != nil {
-		t.Fatal(err)
-	}
+	handshakePair(t, client, server)
 	newClientCID := []byte{5, 6, 7}
 	serverWire.reset()
 	if err := client.SendNewConnectionIDs([][]byte{newClientCID}, true); err != nil {
@@ -2384,14 +2181,7 @@ func TestEndToEndRequestAndUseSpareConnectionID(t *testing.T) {
 	spareServerCID := []byte{9, 10, 11}
 	client := Client(clientWire, &Config{RootCAs: roots, ServerName: "server.test", ConnectionID: []byte{1, 2}, SessionTicketsDisabled: true, HandshakeTimeout: 2 * time.Second, FlightInterval: 5 * time.Millisecond})
 	server := Server(right, &Config{Certificates: []tls.Certificate{certificate}, ConnectionID: []byte{3, 4}, GetConnectionID: func() ([]byte, error) { return append([]byte(nil), spareServerCID...), nil }, SessionTicketsDisabled: true, HandshakeTimeout: 2 * time.Second, FlightInterval: 5 * time.Millisecond})
-	serverErr := make(chan error, 1)
-	go func() { serverErr <- server.Handshake() }()
-	if err := client.Handshake(); err != nil {
-		t.Fatal(err)
-	}
-	if err := <-serverErr; err != nil {
-		t.Fatal(err)
-	}
+	handshakePair(t, client, server)
 	if err := client.RequestConnectionIDs(1); err != nil {
 		t.Fatal(err)
 	}
@@ -2430,14 +2220,7 @@ func TestConnectionIDUpdateRetransmitsDroppedACK(t *testing.T) {
 	droppingServer := &dropWritesConn{Conn: right}
 	client := Client(clientWire, &Config{RootCAs: roots, ServerName: "server.test", ConnectionID: []byte{1, 2}, SessionTicketsDisabled: true, HandshakeTimeout: 2 * time.Second, FlightInterval: 5 * time.Millisecond, MaxFlightInterval: 20 * time.Millisecond})
 	server := Server(droppingServer, &Config{Certificates: []tls.Certificate{certificate}, ConnectionID: []byte{3, 4}, SessionTicketsDisabled: true, HandshakeTimeout: 2 * time.Second, FlightInterval: 5 * time.Millisecond, MaxFlightInterval: 20 * time.Millisecond})
-	serverErr := make(chan error, 1)
-	go func() { serverErr <- server.Handshake() }()
-	if err := client.Handshake(); err != nil {
-		t.Fatal(err)
-	}
-	if err := <-serverErr; err != nil {
-		t.Fatal(err)
-	}
+	handshakePair(t, client, server)
 	droppingServer.mu.Lock()
 	droppingServer.remaining = 1
 	droppingServer.mu.Unlock()
@@ -2469,14 +2252,7 @@ func TestFragmentedNewConnectionID(t *testing.T) {
 	left, right := memoryDatagramPair()
 	client := Client(left, &Config{RootCAs: roots, ServerName: "server.test", ConnectionID: []byte{1, 2}, MaxConnectionIDs: 128, MTU: 256, SessionTicketsDisabled: true, HandshakeTimeout: 2 * time.Second, FlightInterval: 5 * time.Millisecond})
 	server := Server(right, &Config{Certificates: []tls.Certificate{certificate}, ConnectionID: []byte{3, 4}, MaxConnectionIDs: 128, MTU: 256, SessionTicketsDisabled: true, HandshakeTimeout: 2 * time.Second, FlightInterval: 5 * time.Millisecond})
-	serverErr := make(chan error, 1)
-	go func() { serverErr <- server.Handshake() }()
-	if err := client.Handshake(); err != nil {
-		t.Fatal(err)
-	}
-	if err := <-serverErr; err != nil {
-		t.Fatal(err)
-	}
+	handshakePair(t, client, server)
 	connectionIDs := make([][]byte, 80)
 	for i := range connectionIDs {
 		connectionIDs[i] = []byte{0x80, byte(i), 1, 2, 3, 4, 5, 6}
@@ -2508,14 +2284,9 @@ func TestConnectionIDRequestRemainsOpenUntilFulfilled(t *testing.T) {
 		<-release
 		return []byte{7, 8, 9}, nil
 	}, SessionTicketsDisabled: true, HandshakeTimeout: 2 * time.Second, FlightInterval: 5 * time.Millisecond})
-	serverErr := make(chan error, 1)
-	go func() { serverErr <- server.Handshake() }()
-	if err := client.Handshake(); err != nil {
-		t.Fatal(err)
-	}
-	if err := <-serverErr; err != nil {
-		t.Fatal(err)
-	}
+	handshakePair(t, client, server)
+	unblock := sync.OnceFunc(func() { close(release) })
+	t.Cleanup(unblock)
 	if err := client.RequestConnectionIDs(1); err != nil {
 		t.Fatal(err)
 	}
@@ -2527,7 +2298,7 @@ func TestConnectionIDRequestRemainsOpenUntilFulfilled(t *testing.T) {
 	if err := client.RequestConnectionIDs(1); err == nil {
 		t.Fatal("sent another RequestConnectionId before the first was fulfilled")
 	}
-	close(release)
+	unblock()
 	deadline := time.Now().Add(time.Second)
 	for time.Now().Before(deadline) {
 		client.writeMu.Lock()
@@ -2546,8 +2317,6 @@ func TestConnectionIDRequestGeneratorFailureReturnsPartialResponse(t *testing.T)
 		t.Run(fmt.Sprintf("successful=%d", successful), func(t *testing.T) {
 			certificate, roots := testServerCertificate(t)
 			left, right := memoryDatagramPair()
-			defer left.Close()
-			defer right.Close()
 			calls := 0
 			client := Client(left, &Config{RootCAs: roots, ServerName: "server.test", ConnectionID: []byte{1, 2}, SessionTicketsDisabled: true, HandshakeTimeout: 2 * time.Second, FlightInterval: 5 * time.Millisecond})
 			server := Server(right, &Config{Certificates: []tls.Certificate{certificate}, ConnectionID: []byte{3, 4}, GetConnectionID: func() ([]byte, error) {
@@ -2557,14 +2326,7 @@ func TestConnectionIDRequestGeneratorFailureReturnsPartialResponse(t *testing.T)
 				}
 				return []byte{7, byte(calls), 9}, nil
 			}, SessionTicketsDisabled: true, HandshakeTimeout: 2 * time.Second, FlightInterval: 5 * time.Millisecond})
-			serverErr := make(chan error, 1)
-			go func() { serverErr <- server.Handshake() }()
-			if err := client.Handshake(); err != nil {
-				t.Fatal(err)
-			}
-			if err := <-serverErr; err != nil {
-				t.Fatal(err)
-			}
+			handshakePair(t, client, server)
 			if err := client.RequestConnectionIDs(2); err != nil {
 				t.Fatal(err)
 			}
@@ -2592,14 +2354,7 @@ func TestUnexpectedConnectionIDMessageSendsFatalAlert(t *testing.T) {
 	left, right := memoryDatagramPair()
 	client := Client(left, &Config{RootCAs: roots, ServerName: "server.test", SessionTicketsDisabled: true, HandshakeTimeout: 2 * time.Second, FlightInterval: 5 * time.Millisecond})
 	server := Server(right, &Config{Certificates: []tls.Certificate{certificate}, SessionTicketsDisabled: true, HandshakeTimeout: 2 * time.Second, FlightInterval: 5 * time.Millisecond})
-	serverErr := make(chan error, 1)
-	go func() { serverErr <- server.Handshake() }()
-	if err := client.Handshake(); err != nil {
-		t.Fatal(err)
-	}
-	if err := <-serverErr; err != nil {
-		t.Fatal(err)
-	}
+	handshakePair(t, client, server)
 	body := (requestConnectionIDMessage{count: 1}).marshal()
 	fragment, err := marshalHandshakeFragment(handshakeFragment{typ: handshakeTypeRequestConnectionID, messageSequence: client.sendingTraffic.messageSequence, length: uint32(len(body)), body: body})
 	if err != nil {

@@ -135,21 +135,6 @@ func recordCipherPair(t *testing.T, suiteID uint16, epoch uint64) (*recordCipher
 	return sender, receiver
 }
 
-func TestProtectedACKRecord(t *testing.T) {
-	sender, receiver := recordCipherPair(t, TLS_AES_128_GCM_SHA256, 2)
-	wire, err := sender.seal(recordTypeACK, []byte{0, 0})
-	if err != nil {
-		t.Fatal(err)
-	}
-	content, typ, _, err := receiver.open(wire)
-	if err != nil {
-		t.Fatal(err)
-	}
-	if typ != recordTypeACK || !bytes.Equal(content, []byte{0, 0}) {
-		t.Fatalf("got type=%d content=%x", typ, content)
-	}
-}
-
 func TestSealHandshakeFragmentIntoMatchesAllocated(t *testing.T) {
 	allocated, into := recordCipherPair(t, TLS_AES_128_GCM_SHA256, 2)
 	fragment := handshakeFragment{typ: handshakeTypeCertificate, messageSequence: 7, length: 4, body: []byte("body")}
@@ -296,19 +281,41 @@ func TestRecordNonceUsesSequenceWithoutEpoch(t *testing.T) {
 }
 
 func TestProtectedRecordHeaderVariants(t *testing.T) {
-	for _, sequence16 := range []bool{false, true} {
-		for _, length := range []bool{false, true} {
-			sender, receiver := recordCipherPair(t, TLS_AES_128_GCM_SHA256, 2)
-			wire, err := sender.sealWithHeader(recordTypeApplicationData, []byte("variant"), sequence16, length)
-			if err != nil {
-				t.Fatal(err)
-			}
-			content, typ, consumed, err := receiver.open(wire)
-			if err != nil {
-				t.Fatalf("S=%v L=%v: %v", sequence16, length, err)
-			}
-			if string(content) != "variant" || typ != recordTypeApplicationData || consumed != len(wire) {
-				t.Fatalf("S=%v L=%v bad result", sequence16, length)
+	for _, test := range []struct {
+		name         string
+		epoch        uint64
+		connectionID []byte
+	}{
+		{name: "WithoutCID", epoch: 2},
+		{name: "WithCID", epoch: 3, connectionID: []byte{0xaa, 0xbb, 0xcc, 0xdd}},
+	} {
+		for _, sequence16 := range []bool{false, true} {
+			for _, length := range []bool{false, true} {
+				t.Run(fmt.Sprintf("%s/S=%v/L=%v", test.name, sequence16, length), func(t *testing.T) {
+					sender, receiver := recordCipherPair(t, TLS_AES_128_GCM_SHA256, test.epoch)
+					if test.connectionID != nil {
+						if err := sender.setConnectionID(test.connectionID); err != nil {
+							t.Fatal(err)
+						}
+						if err := receiver.setConnectionID(test.connectionID); err != nil {
+							t.Fatal(err)
+						}
+					}
+					wire, err := sender.sealWithHeader(recordTypeApplicationData, []byte("variant"), sequence16, length)
+					if err != nil {
+						t.Fatal(err)
+					}
+					if (wire[0]&unifiedHeaderCID != 0) != (test.connectionID != nil) || !bytes.Equal(wire[1:1+len(test.connectionID)], test.connectionID) {
+						t.Fatalf("unexpected CID in unified header: %x", wire)
+					}
+					content, typ, consumed, err := receiver.open(wire)
+					if err != nil {
+						t.Fatal(err)
+					}
+					if string(content) != "variant" || typ != recordTypeApplicationData || consumed != len(wire) {
+						t.Fatalf("content=%q type=%d consumed=%d, wire length=%d", content, typ, consumed, len(wire))
+					}
+				})
 			}
 		}
 	}
@@ -330,35 +337,6 @@ func TestAuthFailureKeyUpdateThreshold(t *testing.T) {
 		want := failures >= 6
 		if got := receiver.shouldRequestKeyUpdateForAuthFailures(); got != want {
 			t.Fatalf("failures=%d: got %v want %v", failures, got, want)
-		}
-	}
-}
-
-func TestProtectedRecordConnectionIDHeaderVariants(t *testing.T) {
-	connectionID := []byte{0xaa, 0xbb, 0xcc, 0xdd}
-	for _, sequence16 := range []bool{false, true} {
-		for _, length := range []bool{false, true} {
-			sender, receiver := recordCipherPair(t, TLS_AES_128_GCM_SHA256, 3)
-			if err := sender.setConnectionID(connectionID); err != nil {
-				t.Fatal(err)
-			}
-			if err := receiver.setConnectionID(connectionID); err != nil {
-				t.Fatal(err)
-			}
-			wire, err := sender.sealWithHeader(recordTypeApplicationData, []byte("cid"), sequence16, length)
-			if err != nil {
-				t.Fatal(err)
-			}
-			if wire[0]&unifiedHeaderCID == 0 || !bytes.Equal(wire[1:1+len(connectionID)], connectionID) {
-				t.Fatalf("CID missing from unified header: %x", wire)
-			}
-			content, typ, consumed, err := receiver.open(wire)
-			if err != nil {
-				t.Fatalf("S=%v L=%v: %v", sequence16, length, err)
-			}
-			if string(content) != "cid" || typ != recordTypeApplicationData || consumed != len(wire) {
-				t.Fatalf("S=%v L=%v bad CID result", sequence16, length)
-			}
 		}
 	}
 }

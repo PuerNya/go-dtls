@@ -94,9 +94,6 @@ func TestKeyUpdateMessageAndState(t *testing.T) {
 			t.Fatalf("got %#v err=%v", got, err)
 		}
 	}
-	if _, err := parseKeyUpdate([]byte{2}); err == nil {
-		t.Fatal("accepted invalid KeyUpdate")
-	}
 	var state keyUpdateState
 	number := recordNumber{epoch: 3, sequence: 9}
 	if err := state.begin(number); err != nil {

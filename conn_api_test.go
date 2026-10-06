@@ -36,7 +36,7 @@ func TestConnUsesOnlyNativeDatagramAPI(t *testing.T) {
 }
 
 func TestPathMTUAndRecordOverhead(t *testing.T) {
-	client, server := establishedConnPair(t)
+	client, _ := establishedConnPair(t)
 	if client.PathMTU() != 1200 {
 		t.Fatalf("PathMTU=%d", client.PathMTU())
 	}
@@ -44,19 +44,14 @@ func TestPathMTUAndRecordOverhead(t *testing.T) {
 	if got := client.RecordOverhead(); got != want {
 		t.Fatalf("RecordOverhead=%d, want %d", got, want)
 	}
-	_ = client.conn.Close()
-	_ = server.conn.Close()
 }
 
 func TestPathMTUFloorUsesUDPPayloadSize(t *testing.T) {
-	left, right := net.Pipe()
-	defer left.Close()
-	defer right.Close()
 	for _, test := range []struct {
 		ip   net.IP
 		want int
 	}{{net.IPv4(127, 0, 0, 1), 548}, {net.ParseIP("::1"), 1232}} {
-		conn := &Conn{conn: &localAddrConn{Conn: left, local: &net.UDPAddr{IP: test.ip}}}
+		conn := &Conn{conn: &localAddrConn{local: &net.UDPAddr{IP: test.ip}}}
 		if got := conn.pathMTUFloor(); got != test.want {
 			t.Fatalf("IP=%s payload floor=%d, want %d", test.ip, got, test.want)
 		}
@@ -65,25 +60,25 @@ func TestPathMTUFloorUsesUDPPayloadSize(t *testing.T) {
 
 func TestConnDatagramBoundariesAndSources(t *testing.T) {
 	client, server := establishedConnPair(t)
-	defer client.conn.Close()
-	defer server.conn.Close()
 
+	payloads := [][]byte{[]byte("first"), bytes.Repeat([]byte("x"), 700), []byte("second")}
 	writes := make(chan error, 1)
 	go func() {
-		if _, err := client.WriteDatagram([]byte("first")); err != nil {
-			writes <- err
-			return
+		for _, payload := range payloads {
+			if _, err := client.WriteDatagram(payload); err != nil {
+				writes <- err
+				return
+			}
 		}
-		_, err := client.WriteDatagram([]byte("second"))
-		writes <- err
+		writes <- nil
 	}()
-	buffer := make([]byte, 32)
-	for _, want := range []string{"first", "second"} {
+	buffer := make([]byte, 1024)
+	for _, want := range payloads {
 		n, info, err := server.ReadDatagram(buffer)
 		if err != nil {
 			t.Fatal(err)
 		}
-		if string(buffer[:n]) != want {
+		if !bytes.Equal(buffer[:n], want) {
 			t.Fatalf("ReadDatagram=%q, want %q", buffer[:n], want)
 		}
 		if info.Source == nil || info.Source.String() != server.RemoteAddr().String() || info.FullLength != len(want) || info.Truncated {
@@ -97,8 +92,6 @@ func TestConnDatagramBoundariesAndSources(t *testing.T) {
 
 func TestConnReadDatagramReportsTruncation(t *testing.T) {
 	client, server := establishedConnPair(t)
-	defer client.conn.Close()
-	defer server.conn.Close()
 	writes := make(chan error, 1)
 	go func() {
 		if _, err := client.WriteDatagram([]byte("abcdef")); err != nil {
@@ -125,8 +118,6 @@ func TestConnReadDatagramReportsTruncation(t *testing.T) {
 
 func TestConnZeroLengthDatagram(t *testing.T) {
 	client, server := establishedConnPair(t)
-	defer client.conn.Close()
-	defer server.conn.Close()
 	written := make(chan error, 1)
 	go func() {
 		n, err := client.WriteDatagram(nil)
@@ -145,11 +136,8 @@ func TestConnZeroLengthDatagram(t *testing.T) {
 }
 
 func TestConnWriteDatagramRejectsOversizedDatagram(t *testing.T) {
-	client, server := establishedConnPair(t)
-	original := client.conn
-	defer original.Close()
-	defer server.conn.Close()
-	sink := &recordSinkConn{Conn: original}
+	client, _ := establishedConnPair(t)
+	sink := &recordSinkConn{Conn: client.conn}
 	client.conn = sink
 	maximum := client.maxApplicationDatagramLocked()
 	n, err := client.WriteDatagram(bytes.Repeat([]byte{1}, maximum+1))

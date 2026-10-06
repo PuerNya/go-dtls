@@ -130,7 +130,6 @@ func (c *Conn) RequestClientCertificate(ctx context.Context) error {
 	}
 	flight, err := buildProtectedFlight([]handshakeMessage{{typ: handshakeTypeCertificateRequest, sequence: sequence, body: body}}, c.currentMTU(), c.sendCipher)
 	if err == nil {
-		flight.setIntervals(c.config.FlightInterval, c.config.MaxFlightInterval)
 		err = c.writeFlight(c.conn, flight)
 	}
 	if err != nil {
@@ -250,7 +249,6 @@ func (c *Conn) processPostHandshakeCertificateRequest(sequence uint16, body []by
 	}
 	flight, err := buildProtectedFlight(messages, c.currentMTU(), c.sendCipher)
 	if err == nil {
-		flight.setIntervals(c.config.FlightInterval, c.config.MaxFlightInterval)
 		err = c.writeFlight(c.conn, flight)
 	}
 	if err != nil {

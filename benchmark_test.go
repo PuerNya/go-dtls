@@ -663,27 +663,6 @@ func BenchmarkParsePlainRecord(b *testing.B) {
 	})
 }
 
-func BenchmarkFlightPendingIndices(b *testing.B) {
-	f := &flight{records: make([]flightRecord, 10)}
-	b.Run("Allocated", func(b *testing.B) {
-		b.ReportAllocs()
-		for i := 0; i < b.N; i++ {
-			if indices := f.pendingIndices(nil); len(indices) != len(f.records) {
-				b.Fatal("missing pending record")
-			}
-		}
-	})
-	b.Run("ReuseWindow", func(b *testing.B) {
-		var storage [10]int
-		b.ReportAllocs()
-		for i := 0; i < b.N; i++ {
-			if indices := f.pendingIndices(storage[:0]); len(indices) != len(f.records) {
-				b.Fatal("missing pending record")
-			}
-		}
-	})
-}
-
 func BenchmarkFlightWireWindow(b *testing.B) {
 	f := &flight{records: make([]flightRecord, 10)}
 	for i := range f.records {
@@ -692,14 +671,6 @@ func BenchmarkFlightWireWindow(b *testing.B) {
 		f.records[i].sent = true
 	}
 	var storage [10][]byte
-	b.Run("Pending", func(b *testing.B) {
-		b.ReportAllocs()
-		for i := 0; i < b.N; i++ {
-			if records := f.pendingWire(storage[:0]); len(records) != 10 {
-				b.Fatal("missing pending wire")
-			}
-		}
-	})
 	b.Run("Retransmit", func(b *testing.B) {
 		b.ReportAllocs()
 		for i := 0; i < b.N; i++ {

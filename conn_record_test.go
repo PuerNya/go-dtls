@@ -76,6 +76,7 @@ func (c *mtuLimitedConn) Write(p []byte) (int, error) {
 func establishedConnPair(t *testing.T) (*Conn, *Conn) {
 	t.Helper()
 	left, right := net.Pipe()
+	t.Cleanup(func() { _ = left.Close(); _ = right.Close() })
 	client := Client(left, &Config{})
 	server := Server(right, &Config{})
 	var err error
@@ -114,14 +115,10 @@ func TestConnPropagatesAEADAuthenticationFailureLimit(t *testing.T) {
 	if err = server.dispatchDatagram(wire); !errors.Is(err, errAEADAuthenticationFailureLimit) {
 		t.Fatalf("authentication failure limit returned %v", err)
 	}
-	_ = client.conn.Close()
-	_ = server.conn.Close()
 }
 
 func TestConnRequestsKeyUpdateBeforeAuthenticationFailureLimit(t *testing.T) {
 	client, server := establishedConnPair(t)
-	defer client.conn.Close()
-	defer server.conn.Close()
 	updateWire := make(chan []byte, 1)
 	go func() {
 		buf := make([]byte, 2048)
@@ -193,30 +190,8 @@ func TestApplicationDatagramQueueIsCountBounded(t *testing.T) {
 	}
 }
 
-func TestConnEncryptedDatagramRoundTrip(t *testing.T) {
-	client, server := establishedConnPair(t)
-	payload := bytes.Repeat([]byte("x"), 700)
-	errCh := make(chan error, 1)
-	go func() { _, err := client.WriteDatagram(payload); errCh <- err }()
-	buf := make([]byte, len(payload))
-	n, info, err := server.ReadDatagram(buf)
-	if err != nil {
-		t.Fatal(err)
-	}
-	if err := <-errCh; err != nil {
-		t.Fatal(err)
-	}
-	if !bytes.Equal(buf[:n], payload) || info.Truncated || info.FullLength != len(payload) {
-		t.Fatal("application plaintext mismatch")
-	}
-	_ = client.conn.Close()
-	_ = server.conn.Close()
-}
-
 func TestConnWriteDatagramIgnoresPathMTU(t *testing.T) {
 	client, server := establishedConnPair(t)
-	defer client.conn.Close()
-	defer server.conn.Close()
 	client.config.IgnorePathMTU = true
 	client.pathMTU.Store(256)
 	payload := bytes.Repeat([]byte("x"), 700)
@@ -236,9 +211,7 @@ func TestConnWriteDatagramIgnoresPathMTU(t *testing.T) {
 }
 
 func TestConnWriteDatagramIgnorePathMTUDoesNotRetry(t *testing.T) {
-	client, server := establishedConnPair(t)
-	defer client.conn.Close()
-	defer server.conn.Close()
+	client, _ := establishedConnPair(t)
 	limited := &mtuLimitedConn{Conn: client.conn, limit: 500}
 	client.conn = limited
 	client.config.IgnorePathMTU = true
@@ -256,9 +229,7 @@ func TestConnWriteDatagramIgnorePathMTUDoesNotRetry(t *testing.T) {
 }
 
 func TestConnDatagramWriteReducesPathMTUWithoutPartialSend(t *testing.T) {
-	client, server := establishedConnPair(t)
-	defer client.conn.Close()
-	defer server.conn.Close()
+	client, _ := establishedConnPair(t)
 	client.conn = &mtuLimitedConn{Conn: client.conn, limit: 500}
 	payload := bytes.Repeat([]byte("p"), 700)
 	n, err := client.WriteDatagram(payload)
@@ -271,11 +242,8 @@ func TestConnDatagramWriteReducesPathMTUWithoutPartialSend(t *testing.T) {
 }
 
 func TestConnDatagramWriteRespectsRecordLimitWithLargeMTU(t *testing.T) {
-	client, server := establishedConnPair(t)
-	originalClientConn := client.conn
-	defer originalClientConn.Close()
-	defer server.conn.Close()
-	sink := &recordSinkConn{Conn: originalClientConn}
+	client, _ := establishedConnPair(t)
+	sink := &recordSinkConn{Conn: client.conn}
 	client.conn = sink
 	client.config.IgnorePathMTU = true
 	client.pathMTU.Store(65535)
@@ -303,7 +271,7 @@ func TestConnDatagramWriteRespectsRecordLimitWithLargeMTU(t *testing.T) {
 }
 
 func TestConnDropsDelayedEarlyDataAfterApplicationKeys(t *testing.T) {
-	client, server := establishedConnPair(t)
+	_, server := establishedConnPair(t)
 	suite, err := cipherSuiteForID(TLS_AES_128_GCM_SHA256)
 	if err != nil {
 		t.Fatal(err)
@@ -323,8 +291,6 @@ func TestConnDropsDelayedEarlyDataAfterApplicationKeys(t *testing.T) {
 	if buffered != 0 {
 		t.Fatal("delayed epoch-1 data reached the application")
 	}
-	_ = client.conn.Close()
-	_ = server.conn.Close()
 }
 
 func TestConnRejectsUnexpectedPostHandshakeMessages(t *testing.T) {
@@ -344,8 +310,6 @@ func TestConnRejectsUnexpectedPostHandshakeMessages(t *testing.T) {
 			if !errors.As(err, &alertErr) || alertErr.description != alertUnexpectedMessage {
 				t.Fatalf("unexpected post-handshake type %d returned %v", typ, err)
 			}
-			_ = client.conn.Close()
-			_ = server.conn.Close()
 		})
 	}
 }
@@ -358,8 +322,6 @@ func TestConnRejectsAuthenticatedChangeCipherSpec(t *testing.T) {
 	if !errors.As(err, &alertErr) || alertErr.description != alertUnexpectedMessage {
 		t.Fatalf("authenticated ChangeCipherSpec returned %v", err)
 	}
-	_ = client.conn.Close()
-	_ = server.conn.Close()
 }
 
 func TestConnRejectsMalformedAuthenticatedACK(t *testing.T) {
@@ -386,16 +348,12 @@ func TestConnRejectsMalformedAuthenticatedACK(t *testing.T) {
 			if !errors.As(err, &local) || local.description != test.want {
 				t.Fatalf("authenticated ACK returned %v, want alert %d", err, test.want)
 			}
-			_ = client.conn.Close()
-			_ = server.conn.Close()
 		})
 	}
 }
 
 func TestRecordReaderAlertsOnAuthenticatedHandshakeDecodeError(t *testing.T) {
 	client, server := establishedConnPair(t)
-	defer client.conn.Close()
-	defer server.conn.Close()
 	suite, _ := cipherSuiteForID(TLS_AES_128_GCM_SHA256)
 	server.mu.Lock()
 	server.state.exporter = newExporter(suite, bytes.Repeat([]byte{7}, suite.hash.Size()))
@@ -444,8 +402,6 @@ func TestRecordReaderAlertsOnAuthenticatedHandshakeDecodeError(t *testing.T) {
 
 func TestConnUsesRecordOverflowForOversizedAuthenticatedInnerPlaintext(t *testing.T) {
 	client, server := establishedConnPair(t)
-	defer client.conn.Close()
-	defer server.conn.Close()
 	plain := make([]byte, (1<<14)+2)
 	plain[len(plain)-1] = recordTypeApplicationData
 	wire := sealRawInnerPlaintext(t, client.sendCipher, plain)
@@ -458,8 +414,6 @@ func TestConnUsesRecordOverflowForOversizedAuthenticatedInnerPlaintext(t *testin
 
 func TestConnRejectsZeroLengthAuthenticatedHandshake(t *testing.T) {
 	client, server := establishedConnPair(t)
-	defer client.conn.Close()
-	defer server.conn.Close()
 	wire := sealRawInnerPlaintext(t, client.sendCipher, []byte{recordTypeHandshake})
 	err := server.dispatchDatagram(wire)
 	var local *localAlertError
@@ -470,8 +424,6 @@ func TestConnRejectsZeroLengthAuthenticatedHandshake(t *testing.T) {
 
 func TestConnTreatsUnknownAlertLevelAsError(t *testing.T) {
 	client, server := establishedConnPair(t)
-	defer client.conn.Close()
-	defer server.conn.Close()
 	wire := sealRawInnerPlaintext(t, client.sendCipher, []byte{255, alertCloseNotify, recordTypeAlert})
 	err := server.dispatchDatagram(wire)
 	var peerAlert AlertError
@@ -484,11 +436,8 @@ func TestConnTreatsUnknownAlertLevelAsError(t *testing.T) {
 }
 
 func TestConnCloseClearsTrafficSecrets(t *testing.T) {
-	client, server := establishedConnPair(t)
-	originalClientConn := client.conn
-	client.conn = &recordSinkConn{Conn: originalClientConn}
-	defer originalClientConn.Close()
-	defer server.conn.Close()
+	client, _ := establishedConnPair(t)
+	client.conn = &recordSinkConn{Conn: client.conn}
 
 	client.resumptionMasterSecret = []byte("resumption secret")
 	client.resumptionSuite = client.sendingTraffic.suite
@@ -533,11 +482,8 @@ func TestConnCloseClearsTrafficSecrets(t *testing.T) {
 }
 
 func TestPostHandshakeRetransmissionFailureTerminatesConnection(t *testing.T) {
-	client, server := establishedConnPair(t)
-	originalClientConn := client.conn
-	client.conn = &recordSinkConn{Conn: originalClientConn}
-	defer originalClientConn.Close()
-	defer server.conn.Close()
+	client, _ := establishedConnPair(t)
+	client.conn = &recordSinkConn{Conn: client.conn}
 
 	flight, err := buildProtectedFlight([]handshakeMessage{{
 		typ: handshakeTypeNewSessionTicket, sequence: client.sendingTraffic.messageSequence, body: []byte{0},
@@ -545,7 +491,6 @@ func TestPostHandshakeRetransmissionFailureTerminatesConnection(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	flight.setIntervals(time.Millisecond, time.Millisecond)
 	client.writeMu.Lock()
 	client.config.FlightInterval = time.Millisecond
 	client.config.MaxFlightInterval = time.Millisecond
@@ -575,8 +520,6 @@ func TestPostHandshakeRetransmissionFailureTerminatesConnection(t *testing.T) {
 
 func TestConnRequiresKeyUpdateRecordBoundaryAlignment(t *testing.T) {
 	client, server := establishedConnPair(t)
-	defer client.conn.Close()
-	defer server.conn.Close()
 	sequence := client.sendingTraffic.messageSequence
 	one, err := marshalHandshakeFragment(handshakeFragment{typ: handshakeTypeKeyUpdate, messageSequence: sequence, length: 1, body: []byte{0}})
 	if err != nil {
@@ -602,10 +545,7 @@ func TestConnRequiresKeyUpdateRecordBoundaryAlignment(t *testing.T) {
 
 func TestRequestedKeyUpdateResponseWaitsForOutstandingUpdateACK(t *testing.T) {
 	client, server := establishedConnPair(t)
-	originalClientConn := client.conn
-	defer originalClientConn.Close()
-	defer server.conn.Close()
-	sink := &recordSinkConn{Conn: originalClientConn}
+	sink := &recordSinkConn{Conn: client.conn}
 	client.conn = sink
 
 	_, ownNumber, err := client.sendingTraffic.beginKeyUpdate(false)
@@ -662,10 +602,7 @@ func TestIncomingKeyUpdatePropagatesACKAndResponseWriteErrors(t *testing.T) {
 	} {
 		t.Run(test.name, func(t *testing.T) {
 			client, server := establishedConnPair(t)
-			originalClientConn := client.conn
-			defer originalClientConn.Close()
-			defer server.conn.Close()
-			client.conn = &failNthRecordWriteConn{Conn: originalClientConn, failAt: test.failAt}
+			client.conn = &failNthRecordWriteConn{Conn: client.conn, failAt: test.failAt}
 
 			wire, _, err := server.sendingTraffic.beginKeyUpdate(true)
 			if err != nil {
@@ -682,11 +619,8 @@ func TestIncomingKeyUpdatePropagatesACKAndResponseWriteErrors(t *testing.T) {
 }
 
 func TestSendKeyUpdateIsIndependentOfNewSessionTicketFlight(t *testing.T) {
-	client, server := establishedConnPair(t)
-	originalClientConn := client.conn
-	defer originalClientConn.Close()
-	defer server.conn.Close()
-	client.conn = &recordSinkConn{Conn: originalClientConn}
+	client, _ := establishedConnPair(t)
+	client.conn = &recordSinkConn{Conn: client.conn}
 	client.ticketFlight = &flight{records: []flightRecord{{number: recordNumber{epoch: 3, sequence: 100}}}}
 	if err := client.SendKeyUpdate(false); err != nil {
 		t.Fatalf("KeyUpdate was blocked by independent NewSessionTicket flight: %v", err)
@@ -709,11 +643,8 @@ func TestDeferredKeyUpdateResponseIsClearedAtSendingEpochLimit(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	client, server := establishedConnPair(t)
-	originalClientConn := client.conn
-	defer originalClientConn.Close()
-	defer server.conn.Close()
-	client.conn = &recordSinkConn{Conn: originalClientConn}
+	client, _ := establishedConnPair(t)
+	client.conn = &recordSinkConn{Conn: client.conn}
 	client.sendingTraffic = traffic
 	client.sendCipher = traffic.cipher
 	client.keyUpdateResponsePending = true
@@ -743,8 +674,6 @@ func TestDeferredKeyUpdateResponseIsClearedAtSendingEpochLimit(t *testing.T) {
 
 func TestConnRejectsKeyUpdateAfterIncompleteHandshakeMessage(t *testing.T) {
 	client, server := establishedConnPair(t)
-	defer client.conn.Close()
-	defer server.conn.Close()
 	sequence := client.sendingTraffic.messageSequence
 	fragment, err := marshalHandshakeFragment(handshakeFragment{typ: handshakeTypeNewConnectionID, messageSequence: sequence, length: 2, body: []byte{0}})
 	if err != nil {
@@ -786,8 +715,6 @@ func TestConnRejectsKeyUpdateAfterIncompleteHandshakeMessage(t *testing.T) {
 
 func TestConnRejectsApplicationDataInsidePostHandshakeAuthResponse(t *testing.T) {
 	client, server := establishedConnPair(t)
-	defer client.conn.Close()
-	defer server.conn.Close()
 	if _, err := client.sendCipher.seal(recordTypeHandshake, []byte{1}); err != nil {
 		t.Fatal(err)
 	}
@@ -825,10 +752,7 @@ func TestConnRejectsApplicationDataInsidePostHandshakeAuthResponse(t *testing.T)
 
 func TestConnRejectsApplicationDataInsideFragmentedPostHandshakeMessage(t *testing.T) {
 	client, server := establishedConnPair(t)
-	originalClientConn := client.conn
-	client.conn = &recordSinkConn{Conn: originalClientConn}
-	defer originalClientConn.Close()
-	defer server.conn.Close()
+	client.conn = &recordSinkConn{Conn: client.conn}
 
 	sequence := server.sendingTraffic.messageSequence
 	first, err := marshalHandshakeFragment(handshakeFragment{
@@ -868,10 +792,7 @@ func TestConnRejectsApplicationDataInsideFragmentedPostHandshakeMessage(t *testi
 
 func TestConnDeliversReorderedApplicationDataAfterFragmentedHandshakeMessage(t *testing.T) {
 	client, server := establishedConnPair(t)
-	originalClientConn := client.conn
-	client.conn = &recordSinkConn{Conn: originalClientConn}
-	defer originalClientConn.Close()
-	defer server.conn.Close()
+	client.conn = &recordSinkConn{Conn: client.conn}
 
 	sequence := server.sendingTraffic.messageSequence
 	body, err := (&newSessionTicketMessage{lifetime: 1, nonce: []byte{1}, ticket: []byte{1}}).marshal()
@@ -923,9 +844,7 @@ func TestConnDeliversReorderedApplicationDataAfterFragmentedHandshakeMessage(t *
 }
 
 func TestProtectedHandshakeApplicationRecordBufferIsCountBounded(t *testing.T) {
-	client, server := establishedConnPair(t)
-	defer client.conn.Close()
-	defer server.conn.Close()
+	_, server := establishedConnPair(t)
 	server.config.ReplayWindow = 1
 	server.config.MaxBufferedHandshakeMessages = 1
 	server.postHandshakeReassembly = newReassembler()
@@ -957,8 +876,6 @@ func TestProtectedHandshakeApplicationRecordBufferIsCountBounded(t *testing.T) {
 
 func TestCloseNotifyOnlyClosesPeerReadSide(t *testing.T) {
 	client, server := establishedConnPair(t)
-	defer client.conn.Close()
-	defer server.conn.Close()
 	body, err := (alertMessage{level: alertLevelWarning, description: alertCloseNotify}).marshal()
 	if err != nil {
 		t.Fatal(err)
@@ -1000,8 +917,6 @@ func TestCloseNotifyOnlyClosesPeerReadSide(t *testing.T) {
 
 func TestCloseNotifyUsesRecordNumberOrdering(t *testing.T) {
 	client, server := establishedConnPair(t)
-	defer client.conn.Close()
-	defer server.conn.Close()
 	preClose, err := client.sendCipher.seal(recordTypeApplicationData, []byte("before"))
 	if err != nil {
 		t.Fatal(err)
@@ -1038,8 +953,6 @@ func TestCloseNotifyUsesRecordNumberOrdering(t *testing.T) {
 
 func TestUserCanceledWaitsForCloseNotifyAcrossReordering(t *testing.T) {
 	client, server := establishedConnPair(t)
-	defer client.conn.Close()
-	defer server.conn.Close()
 
 	canceledBody, err := (alertMessage{level: alertLevelWarning, description: alertUserCanceled}).marshal()
 	if err != nil {

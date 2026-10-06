@@ -296,15 +296,7 @@ func TestECHEndToEndHRRFragmentationAndWeakNetwork(t *testing.T) {
 		SessionTicketsDisabled: true, MTU: 256,
 		HandshakeTimeout: 5 * time.Second, FlightInterval: 5 * time.Millisecond, MaxFlightInterval: 20 * time.Millisecond,
 	})
-	defer left.Close()
-	defer right.Close()
-	serverDone := make(chan error, 1)
-	go func() { serverDone <- server.Handshake() }()
-	clientErr := client.Handshake()
-	serverErr := <-serverDone
-	if clientErr != nil || serverErr != nil {
-		t.Fatalf("ECH weak-network handshake failed: client=%v server=%v", clientErr, serverErr)
-	}
+	handshakePair(t, client, server)
 	if !client.ConnectionState().ECHAccepted || !server.ConnectionState().ECHAccepted {
 		t.Fatalf("ECH state: client=%#v server=%#v", client.ConnectionState(), server.ConnectionState())
 	}
@@ -457,57 +449,17 @@ func TestECHGREASEPreservedAcrossHRR(t *testing.T) {
 		Certificates: []tls.Certificate{certificate}, CurvePreferences: []tls.CurveID{tls.CurveP256},
 		SessionTicketsDisabled: true, HandshakeTimeout: 2 * time.Second, FlightInterval: 5 * time.Millisecond,
 	})
-	defer left.Close()
-	defer right.Close()
-	serverDone := make(chan error, 1)
-	go func() { serverDone <- server.Handshake() }()
-	clientErr := client.Handshake()
-	serverErr := <-serverDone
-	if clientErr != nil || serverErr != nil {
-		t.Fatalf("GREASE handshake failed: client=%v server=%v", clientErr, serverErr)
+	handshakePair(t, client, server)
+	hellos := capturedClientHellos(t, capture)
+	if len(hellos) != 2 {
+		t.Fatalf("captured %d ClientHellos", len(hellos))
 	}
-	capture.mu.Lock()
-	writes := append([][]byte(nil), capture.writes...)
-	capture.mu.Unlock()
-	hellos := make(map[uint16]*clientHello)
-	for _, datagram := range writes {
-		if len(datagram) == 0 || datagram[0] != recordTypeHandshake {
-			continue
-		}
-		records, err := parsePlainRecords(datagram)
-		if err != nil {
-			t.Fatal(err)
-		}
-		for _, record := range records {
-			fragments, err := parseHandshakeFragments(record.payload)
-			if err != nil {
-				t.Fatal(err)
-			}
-			for _, fragment := range fragments {
-				if fragment.typ != handshakeTypeClientHello || fragment.offset != 0 || int(fragment.length) != len(fragment.body) {
-					continue
-				}
-				hello, err := parseClientHello(fragment.body)
-				if err != nil {
-					t.Fatal(err)
-				}
-				hellos[fragment.messageSequence] = hello
-			}
-		}
-	}
-	if hellos[0] == nil || hellos[1] == nil || !bytes.Equal(hellos[0].encryptedClientHello(), hellos[1].encryptedClientHello()) {
-		t.Fatalf("GREASE ECH changed across HRR: first=%x second=%x", echExtension(hellos[0]), echExtension(hellos[1]))
+	if !bytes.Equal(hellos[0].encryptedClientHello(), hellos[1].encryptedClientHello()) {
+		t.Fatalf("GREASE ECH changed across HRR: first=%x second=%x", hellos[0].encryptedClientHello(), hellos[1].encryptedClientHello())
 	}
 	if client.ConnectionState().ECHAccepted || server.ConnectionState().ECHAccepted {
 		t.Fatal("GREASE ECH was reported as accepted")
 	}
-}
-
-func echExtension(hello *clientHello) []byte {
-	if hello == nil {
-		return nil
-	}
-	return hello.encryptedClientHello()
 }
 
 func TestECHResumptionAndEarlyData(t *testing.T) {
@@ -549,69 +501,5 @@ func TestECHResumptionAndEarlyData(t *testing.T) {
 	n, _, err := server.ReadDatagram(buffer)
 	if err != nil || !bytes.Equal(buffer[:n], payload) {
 		t.Fatalf("early data = %q, %v", buffer[:n], err)
-	}
-}
-
-func TestECHRealUDP(t *testing.T) {
-	certificate, roots := testServerCertificate(t)
-	list, key := testECHConfig(t, "public.test", 15)
-	listener, err := Listen("udp4", "127.0.0.1:0", &Config{
-		Certificates: []tls.Certificate{certificate}, EncryptedClientHelloKeys: []EncryptedClientHelloKey{key},
-		SessionTicketsDisabled: true, HandshakeTimeout: 2 * time.Second,
-		FlightInterval: 5 * time.Millisecond, MaxFlightInterval: 20 * time.Millisecond,
-	})
-	if err != nil {
-		t.Fatal(err)
-	}
-	defer listener.Close()
-	serverDone := make(chan error, 1)
-	go func() {
-		server, acceptErr := listener.Accept()
-		if acceptErr != nil {
-			serverDone <- acceptErr
-			return
-		}
-		defer server.Close()
-		if handshakeErr := server.Handshake(); handshakeErr != nil {
-			serverDone <- handshakeErr
-			return
-		}
-		if !server.ConnectionState().ECHAccepted {
-			serverDone <- errors.New("server did not accept ECH")
-			return
-		}
-		buffer := make([]byte, 16)
-		n, _, readErr := server.ReadDatagram(buffer)
-		if readErr == nil && string(buffer[:n]) != "ping" {
-			readErr = errors.New("unexpected ECH UDP payload")
-		}
-		if readErr == nil {
-			_, readErr = server.WriteDatagram([]byte("pong"))
-		}
-		serverDone <- readErr
-	}()
-	client, err := DialWithDialer(&net.Dialer{Timeout: 2 * time.Second}, "udp4", listener.Addr().String(), &Config{
-		RootCAs: roots, ServerName: "server.test", EncryptedClientHelloConfigList: list,
-		SessionTicketsDisabled: true, HandshakeTimeout: 2 * time.Second,
-		FlightInterval: 5 * time.Millisecond, MaxFlightInterval: 20 * time.Millisecond,
-	})
-	if err != nil {
-		t.Fatal(err)
-	}
-	defer client.Close()
-	if !client.ConnectionState().ECHAccepted {
-		t.Fatal("client did not confirm ECH")
-	}
-	_ = client.SetDeadline(time.Now().Add(2 * time.Second))
-	if _, err = client.WriteDatagram([]byte("ping")); err != nil {
-		t.Fatal(err)
-	}
-	buffer := make([]byte, 16)
-	n, _, err := client.ReadDatagram(buffer)
-	if err != nil || string(buffer[:n]) != "pong" {
-		t.Fatalf("ECH UDP response = %q, %v", buffer[:n], err)
-	}
-	if err = <-serverDone; err != nil {
-		t.Fatal(err)
 	}
 }

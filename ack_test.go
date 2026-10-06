@@ -211,20 +211,22 @@ func TestBuildEmptyACKRecordsPlainAndProtected(t *testing.T) {
 		t.Fatalf("plain empty ACK payload: numbers=%v err=%v", numbers, err)
 	}
 
-	sender, receiver := recordCipherPair(t, TLS_AES_128_GCM_SHA256, 3)
-	protected, _, err := buildACKRecords(nil, 60, 0, sender)
-	if err != nil {
-		t.Fatal(err)
-	}
-	if len(protected) != 1 {
-		t.Fatalf("protected empty ACK records=%d", len(protected))
-	}
-	content, typ, _, err := receiver.open(protected[0])
-	if err != nil || typ != recordTypeACK {
-		t.Fatalf("open protected empty ACK: type=%d err=%v", typ, err)
-	}
-	if numbers, err := parseACK(content); err != nil || len(numbers) != 0 {
-		t.Fatalf("protected empty ACK payload: numbers=%v err=%v", numbers, err)
+	for _, epoch := range []uint64{2, 3} {
+		sender, receiver := recordCipherPair(t, TLS_AES_128_GCM_SHA256, epoch)
+		protected, _, err := buildACKRecords(nil, 60, 0, sender)
+		if err != nil {
+			t.Fatal(err)
+		}
+		if len(protected) != 1 {
+			t.Fatalf("epoch=%d protected empty ACK records=%d", epoch, len(protected))
+		}
+		content, typ, _, err := receiver.open(protected[0])
+		if err != nil || typ != recordTypeACK {
+			t.Fatalf("epoch=%d open protected empty ACK: type=%d err=%v", epoch, typ, err)
+		}
+		if numbers, err := parseACK(content); err != nil || len(numbers) != 0 {
+			t.Fatalf("epoch=%d protected empty ACK payload: numbers=%v err=%v", epoch, numbers, err)
+		}
 	}
 }
 
@@ -248,46 +250,41 @@ func TestACKRecordsRespectRecordLimitWithLargeMTU(t *testing.T) {
 	}
 }
 
-func TestReceiveFinalFlightACKAtApplicationEpoch(t *testing.T) {
-	sender3, receiver3 := recordCipherPair(t, TLS_AES_128_GCM_SHA256, 3)
-	_, receiver2 := recordCipherPair(t, TLS_AES_128_GCM_SHA256, 2)
-	wire, _, err := buildACKRecords([]recordNumber{{epoch: 2, sequence: 5}}, 1200, 0, sender3)
-	if err != nil {
-		t.Fatal(err)
-	}
-	left, right := memoryDatagramPair()
-	defer left.Close()
-	defer right.Close()
-	go func() { _, _ = left.Write(wire[0]) }()
-	numbers, err := receiveACKRecord(right, nil, receiver2, receiver3)
-	if err != nil {
-		t.Fatal(err)
-	}
-	want := recordNumber{epoch: 2, sequence: 5}
-	if len(numbers) != 1 || numbers[0] != want {
-		t.Fatalf("ACK numbers = %#v, want %#v", numbers, []recordNumber{want})
-	}
-}
-
-func TestReceiveACKRecordAcceptsEarlierCipherCandidate(t *testing.T) {
-	sender2, receiver2 := recordCipherPair(t, TLS_AES_128_GCM_SHA256, 2)
-	_, receiver3 := recordCipherPair(t, TLS_AES_128_GCM_SHA256, 3)
-	wire, _, err := buildACKRecords([]recordNumber{{epoch: 2, sequence: 5}}, 1200, 0, sender2)
-	if err != nil {
-		t.Fatal(err)
-	}
-	left, right := memoryDatagramPair()
-	defer left.Close()
-	defer right.Close()
-	go func() { _, _ = left.Write(wire[0]) }()
-	var storage [1]recordNumber
-	numbers, err := receiveACKRecord(right, storage[:0], receiver2, receiver3)
-	if err != nil {
-		t.Fatal(err)
-	}
-	want := recordNumber{epoch: 2, sequence: 5}
-	if len(numbers) != 1 || numbers[0] != want {
-		t.Fatalf("ACK numbers = %#v, want %#v", numbers, []recordNumber{want})
+func TestReceiveACKRecordSelectsCipherCandidate(t *testing.T) {
+	for _, test := range []struct {
+		name         string
+		epoch        uint64
+		reuseStorage bool
+	}{
+		{name: "ApplicationEpoch", epoch: 3},
+		{name: "HandshakeEpoch", epoch: 2, reuseStorage: true},
+	} {
+		t.Run(test.name, func(t *testing.T) {
+			sender, _ := recordCipherPair(t, TLS_AES_128_GCM_SHA256, test.epoch)
+			_, receiver2 := recordCipherPair(t, TLS_AES_128_GCM_SHA256, 2)
+			_, receiver3 := recordCipherPair(t, TLS_AES_128_GCM_SHA256, 3)
+			want := recordNumber{epoch: 2, sequence: 5}
+			wire, _, err := buildACKRecords([]recordNumber{want}, 1200, 0, sender)
+			if err != nil {
+				t.Fatal(err)
+			}
+			left, right := memoryDatagramPair()
+			defer left.Close()
+			defer right.Close()
+			go func() { _, _ = left.Write(wire[0]) }()
+			var storage [1]recordNumber
+			var dst []recordNumber
+			if test.reuseStorage {
+				dst = storage[:0]
+			}
+			numbers, err := receiveACKRecord(right, dst, receiver2, receiver3)
+			if err != nil || len(numbers) != 1 || numbers[0] != want {
+				t.Fatalf("ACK numbers = %#v, want %#v; err=%v", numbers, []recordNumber{want}, err)
+			}
+			if test.reuseStorage && &numbers[0] != &storage[0] {
+				t.Fatal("ACK receive did not reuse destination")
+			}
+		})
 	}
 }
 

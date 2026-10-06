@@ -376,15 +376,7 @@ func TestExternalPSKWeakNetwork(t *testing.T) {
 	config := &Config{ExternalPSKs: []*ExternalPSK{psk}, SessionTicketsDisabled: true, HandshakeTimeout: 5 * time.Second, FlightInterval: 5 * time.Millisecond}
 	client := Client(clientWire, config)
 	server := Server(serverWire, config)
-	defer client.Close()
-	defer server.Close()
-	serverDone := make(chan error, 1)
-	go func() { serverDone <- server.Handshake() }()
-	clientErr := client.Handshake()
-	serverErr := <-serverDone
-	if clientErr != nil || serverErr != nil {
-		t.Fatalf("weak-network external PSK: client=%v server=%v", clientErr, serverErr)
-	}
+	handshakePair(t, client, server)
 }
 
 func externalPSKHandshake(t *testing.T, clientConfig, serverConfig *Config) (*Conn, *Conn, error, error) {

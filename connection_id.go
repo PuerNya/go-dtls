@@ -144,7 +144,6 @@ func (c *Conn) SendNewConnectionIDs(connectionIDs [][]byte, immediate bool) erro
 		c.writeMu.Unlock()
 		return err
 	}
-	flight.setIntervals(c.config.FlightInterval, c.config.MaxFlightInterval)
 
 	previousCIDs := cloneConnectionIDs(c.receivingTraffic.acceptedCIDs)
 	newCIDs := connectionIDDifference(merged, previousCIDs)
@@ -233,7 +232,6 @@ func (c *Conn) RequestConnectionIDs(count uint8) error {
 	sequence := c.sendingTraffic.messageSequence
 	flight, err := buildProtectedFlight([]handshakeMessage{{typ: handshakeTypeRequestConnectionID, sequence: sequence, body: body}}, c.currentMTU(), c.sendCipher)
 	if err == nil {
-		flight.setIntervals(c.config.FlightInterval, c.config.MaxFlightInterval)
 		err = c.writeFlight(c.conn, flight)
 	}
 	if err != nil {

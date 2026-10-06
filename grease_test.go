@@ -192,11 +192,9 @@ func TestGREASEEndToEndMutualTLSAndTicket(t *testing.T) {
 	clientCertificate, clientRoots := testClientCertificate(t)
 	cache := NewLRUClientSessionCache(1).(*lruSessionCache)
 	left, right := memoryDatagramPair()
-	client, server := runTicketRequestHandshake(t,
+	runTicketRequestHandshake(t,
 		&Config{RootCAs: roots, ServerName: "server.test", Certificates: []tls.Certificate{clientCertificate}, ClientSessionCache: cache, EnableGREASE: true, HandshakeTimeout: 2 * time.Second},
 		&Config{Certificates: []tls.Certificate{serverCertificate}, ClientAuth: tls.RequireAndVerifyClientCert, ClientCAs: clientRoots, EnableGREASE: true, HandshakeTimeout: 2 * time.Second},
 		left, right)
 	waitForTicketCount(t, cache, 1)
-	_ = client.Close()
-	_ = server.Close()
 }

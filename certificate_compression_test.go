@@ -3,8 +3,10 @@ package dtls13
 import (
 	"bytes"
 	"context"
+	"crypto/sha256"
 	"crypto/tls"
 	"encoding/binary"
+	"sync/atomic"
 	"testing"
 	"time"
 )
@@ -174,22 +176,6 @@ func TestCertificateCompressionExtensionRoundTrips(t *testing.T) {
 	}
 }
 
-func completeCertificateCompressionHandshake(t *testing.T, clientConfig, serverConfig *Config) (*Conn, *Conn) {
-	t.Helper()
-	left, right := memoryDatagramPair()
-	t.Cleanup(func() { _ = left.Close(); _ = right.Close() })
-	client := Client(left, clientConfig)
-	server := Server(right, serverConfig)
-	serverDone := make(chan error, 1)
-	go func() { serverDone <- server.Handshake() }()
-	clientErr := client.Handshake()
-	serverErr := <-serverDone
-	if clientErr != nil || serverErr != nil {
-		t.Fatalf("handshake failed: client=%v server=%v", clientErr, serverErr)
-	}
-	return client, server
-}
-
 func compressibleTestCertificate(certificate tls.Certificate) tls.Certificate {
 	chain := append([][]byte(nil), certificate.Certificate...)
 	for range 3 {
@@ -223,9 +209,31 @@ func TestCertificateCompressionEndToEnd(t *testing.T) {
 		{"disabled", false, false},
 	} {
 		t.Run(test.name, func(t *testing.T) {
-			client, server := completeCertificateCompressionHandshake(t,
-				&Config{RootCAs: roots, ServerName: "server.test", EnableCertificateCompression: test.clientEnabled, SessionTicketsDisabled: true, HandshakeTimeout: 2 * time.Second, FlightInterval: 5 * time.Millisecond},
-				&Config{Certificates: []tls.Certificate{certificate}, EnableCertificateCompression: test.serverEnabled, SessionTicketsDisabled: true, HandshakeTimeout: 2 * time.Second, FlightInterval: 5 * time.Millisecond})
+			var certificateTypes atomic.Uint32
+			left, right := memoryDatagramPair()
+			serverWire := &observeRecordsConn{Conn: right, observe: func(r record) (bool, error) {
+				if r.typ != recordTypeHandshake || r.epoch != 2 {
+					return false, nil
+				}
+				fragments, err := parseHandshakeFragments(r.payload)
+				for _, fragment := range fragments {
+					if fragment.typ == handshakeTypeCertificate || fragment.typ == handshakeTypeCompressedCertificate {
+						certificateTypes.Or(1 << fragment.typ)
+					}
+				}
+				return false, err
+			}}
+			client := Client(left, &Config{RootCAs: roots, ServerName: "server.test", EnableCertificateCompression: test.clientEnabled, SessionTicketsDisabled: true, HandshakeTimeout: 2 * time.Second, FlightInterval: 5 * time.Millisecond})
+			server := Server(serverWire, &Config{Certificates: []tls.Certificate{certificate}, EnableCertificateCompression: test.serverEnabled, SessionTicketsDisabled: true, HandshakeTimeout: 2 * time.Second, FlightInterval: 5 * time.Millisecond})
+			serverWire.owner = server
+			handshakePair(t, client, server)
+			wantType := handshakeTypeCertificate
+			if test.clientEnabled && test.serverEnabled {
+				wantType = handshakeTypeCompressedCertificate
+			}
+			if got := certificateTypes.Load(); got != 1<<wantType {
+				t.Fatalf("certificate message types=%032b, want only type %d", got, wantType)
+			}
 			if len(client.ConnectionState().PeerCertificates) == 0 || !client.ConnectionState().HandshakeComplete || !server.ConnectionState().HandshakeComplete {
 				t.Fatal("certificate compression handshake lost authenticated state")
 			}
@@ -247,20 +255,8 @@ func TestCertificateCompressionSessionResumption(t *testing.T) {
 		Certificates: []tls.Certificate{certificate}, SessionTicketKey: ticketKey, SessionTicketLifetime: time.Hour, EnableCertificateCompression: true,
 		HandshakeTimeout: 2 * time.Second, FlightInterval: 5 * time.Millisecond,
 	}
-	firstClient, firstServer := completeCertificateCompressionHandshake(t, clientConfig, serverConfig)
-	deadline := time.Now().Add(time.Second)
-	for time.Now().Before(deadline) {
-		if _, ok := cache.Get("server.test"); ok {
-			break
-		}
-		time.Sleep(time.Millisecond)
-	}
-	if _, ok := cache.Get("server.test"); !ok {
-		t.Fatal("compressed full handshake did not produce a session ticket")
-	}
-	_ = firstClient.Close()
-	_ = firstServer.Close()
-	client, server := completeCertificateCompressionHandshake(t, clientConfig, serverConfig)
+	_ = issueEarlyDataTicket(t, clientConfig, serverConfig)
+	client, server := completeHandshakePair(t, clientConfig, serverConfig)
 	if !client.ConnectionState().DidResume || !server.ConnectionState().DidResume {
 		t.Fatal("certificate compression configuration prevented session resumption")
 	}
@@ -271,7 +267,7 @@ func TestCertificateCompressionMutualTLSAndRecordLimit(t *testing.T) {
 	clientCertificate, clientRoots := testClientCertificate(t)
 	serverCertificate = compressibleTestCertificate(serverCertificate)
 	clientCertificate = compressibleTestCertificate(clientCertificate)
-	client, server := completeCertificateCompressionHandshake(t,
+	client, server := completeHandshakePair(t,
 		&Config{RootCAs: roots, ServerName: "server.test", Certificates: []tls.Certificate{clientCertificate}, EnableCertificateCompression: true, RecordSizeLimit: 64, SessionTicketsDisabled: true, HandshakeTimeout: 2 * time.Second, FlightInterval: 5 * time.Millisecond},
 		&Config{Certificates: []tls.Certificate{serverCertificate}, ClientAuth: tls.RequireAndVerifyClientCert, ClientCAs: clientRoots, EnableCertificateCompression: true, RecordSizeLimit: 64, SessionTicketsDisabled: true, HandshakeTimeout: 2 * time.Second, FlightInterval: 5 * time.Millisecond})
 	if len(client.ConnectionState().PeerCertificates) == 0 || len(server.ConnectionState().PeerCertificates) == 0 {
@@ -282,7 +278,7 @@ func TestCertificateCompressionMutualTLSAndRecordLimit(t *testing.T) {
 func TestCertificateCompressionWithHelloRetryRequest(t *testing.T) {
 	certificate, roots := testServerCertificate(t)
 	certificate = compressibleTestCertificate(certificate)
-	completeCertificateCompressionHandshake(t,
+	completeHandshakePair(t,
 		&Config{RootCAs: roots, ServerName: "server.test", EnableCertificateCompression: true, SessionTicketsDisabled: true, HandshakeTimeout: 2 * time.Second, FlightInterval: 5 * time.Millisecond},
 		&Config{Certificates: []tls.Certificate{certificate}, CurvePreferences: []tls.CurveID{tls.CurveP256}, EnableCertificateCompression: true, SessionTicketsDisabled: true, HandshakeTimeout: 2 * time.Second, FlightInterval: 5 * time.Millisecond})
 }
@@ -292,7 +288,7 @@ func TestCertificateCompressionPostHandshakeAuthentication(t *testing.T) {
 	clientCertificate, clientRoots := testClientCertificate(t)
 	serverCertificate = compressibleTestCertificate(serverCertificate)
 	clientCertificate = compressibleTestCertificate(clientCertificate)
-	client, server := completeCertificateCompressionHandshake(t,
+	_, server := completeHandshakePair(t,
 		&Config{RootCAs: roots, ServerName: "server.test", Certificates: []tls.Certificate{clientCertificate}, PostHandshakeAuth: true, EnableCertificateCompression: true, HandshakeTimeout: 2 * time.Second, FlightInterval: 5 * time.Millisecond},
 		&Config{Certificates: []tls.Certificate{serverCertificate}, ClientAuth: tls.RequireAndVerifyClientCert, ClientCAs: clientRoots, EnableCertificateCompression: true, HandshakeTimeout: 2 * time.Second, FlightInterval: 5 * time.Millisecond})
 	ctx, cancel := context.WithTimeout(context.Background(), 2*time.Second)
@@ -303,8 +299,6 @@ func TestCertificateCompressionPostHandshakeAuthentication(t *testing.T) {
 	if len(server.ConnectionState().PeerCertificates) == 0 {
 		t.Fatal("compressed post-handshake authentication lost client certificate")
 	}
-	_ = client.Close()
-	_ = server.Close()
 }
 
 func TestCertificateCompressionWeakNetwork(t *testing.T) {
@@ -317,40 +311,43 @@ func TestCertificateCompressionWeakNetwork(t *testing.T) {
 	serverWire := &weakNetworkConn{Conn: right, enabled: true}
 	client := Client(clientWire, &Config{RootCAs: roots, ServerName: "server.test", Certificates: []tls.Certificate{clientCertificate}, EnableCertificateCompression: true, SessionTicketsDisabled: true, HandshakeTimeout: 5 * time.Second, FlightInterval: 5 * time.Millisecond})
 	server := Server(serverWire, &Config{Certificates: []tls.Certificate{serverCertificate}, ClientAuth: tls.RequireAndVerifyClientCert, ClientCAs: clientRoots, EnableCertificateCompression: true, SessionTicketsDisabled: true, HandshakeTimeout: 5 * time.Second, FlightInterval: 5 * time.Millisecond})
-	serverDone := make(chan error, 1)
-	go func() { serverDone <- server.Handshake() }()
-	clientErr := client.Handshake()
-	serverErr := <-serverDone
-	if clientErr != nil || serverErr != nil {
-		t.Fatalf("weak-network handshake failed: client=%v server=%v", clientErr, serverErr)
-	}
-	_ = left.Close()
-	_ = right.Close()
+	handshakePair(t, client, server)
 }
 
 func TestCompressedCertificateUsesWireTranscript(t *testing.T) {
-	certificate, err := (&certificateMessage{certificates: []certificateEntry{{data: bytes.Repeat([]byte{1}, 512)}}}).marshal()
+	certificate, roots := testServerCertificate(t)
+	certificate = compressibleTestCertificate(certificate)
+	message := &certificateMessage{}
+	for _, der := range certificate.Certificate {
+		message.certificates = append(message.certificates, certificateEntry{data: der})
+	}
+	body, err := message.marshal()
 	if err != nil {
 		t.Fatal(err)
 	}
-	typ, compressed, err := certificateHandshakeMessage(certificate, &certificateCompressionZlibOffer, true, nil)
+	typ, compressed, err := certificateHandshakeMessage(body, &certificateCompressionZlibOffer, true, nil)
 	if err != nil || typ != handshakeTypeCompressedCertificate {
 		t.Fatalf("type=%d err=%v", typ, err)
 	}
-	suite, err := cipherSuiteForID(TLS_AES_128_GCM_SHA256)
+	config, err := (&Config{RootCAs: roots, ServerName: "server.test"}).normalized()
 	if err != nil {
 		t.Fatal(err)
 	}
-	wireTranscript := newTranscriptHash(suite.hash.New())
-	plainTranscript := newTranscriptHash(suite.hash.New())
-	if err = wireTranscript.add(typ, 3, compressed); err != nil {
+	state := &clientHandshakeState{
+		hello: &clientHello{
+			certificateCompressionOffered: true,
+			signatureSchemes:              defaultSignatureSchemes(),
+		},
+		transcript: newTranscriptHash(sha256.New()),
+	}
+	c := &Conn{config: config}
+	if err = c.clientServerCertificate(state, completedHandshake{typ: typ, sequence: 3, body: compressed}); err != nil {
 		t.Fatal(err)
 	}
-	if err = plainTranscript.add(handshakeTypeCertificate, 3, certificate); err != nil {
-		t.Fatal(err)
-	}
-	if bytes.Equal(wireTranscript.sum(), plainTranscript.sum()) {
-		t.Fatal("CompressedCertificate transcript used decompressed Certificate wire")
+	wire := []byte{handshakeTypeCompressedCertificate, byte(len(compressed) >> 16), byte(len(compressed) >> 8), byte(len(compressed))}
+	want := sha256.Sum256(append(wire, compressed...))
+	if got := state.transcript.sum(); !bytes.Equal(got, want[:]) {
+		t.Fatalf("certificate handler transcript = %x, want compressed wire hash %x", got, want)
 	}
 }
 

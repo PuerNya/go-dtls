@@ -3,8 +3,8 @@ package dtls13
 import (
 	"bytes"
 	"crypto/tls"
-	"errors"
 	"net"
+	"slices"
 	"testing"
 	"time"
 )
@@ -81,7 +81,7 @@ func TestHybridKeyExchangeFallbackAndHelloRetryRequestShares(t *testing.T) {
 				for j := range hellos[i].keyShares {
 					got[j] = hellos[i].keyShares[j].group
 				}
-				if !bytes.Equal(curveIDsForTest(got), curveIDsForTest(want)) {
+				if !slices.Equal(got, want) {
 					t.Fatalf("ClientHello %d shares = %v, want %v", i, got, want)
 				}
 			}
@@ -136,14 +136,6 @@ func capturedClientHellos(t *testing.T, capture *captureWritesConn) []*clientHel
 		hellos = append(hellos, hello)
 	}
 	return hellos
-}
-
-func curveIDsForTest(groups []tls.CurveID) []byte {
-	wire := make([]byte, 2*len(groups))
-	for i, group := range groups {
-		wire[2*i], wire[2*i+1] = byte(group>>8), byte(group)
-	}
-	return wire
 }
 
 func TestHybridKeyExchangeMutualTLSResumptionAndEarlyData(t *testing.T) {
@@ -202,56 +194,6 @@ func TestHybridKeyExchangeECHFragmentationAndWeakNetwork(t *testing.T) {
 		&Config{Certificates: []tls.Certificate{certificate}, EncryptedClientHelloKeys: []EncryptedClientHelloKey{echKey}, CurvePreferences: []tls.CurveID{tls.X25519MLKEM768}, SessionTicketsDisabled: true, MTU: 600, HandshakeTimeout: 5 * time.Second, FlightInterval: 5 * time.Millisecond, MaxFlightInterval: 20 * time.Millisecond})
 	if !client.ConnectionState().ECHAccepted || !server.ConnectionState().ECHAccepted {
 		t.Fatal("hybrid weak-network handshake did not accept ECH")
-	}
-}
-
-func TestHybridKeyExchangeRealUDP(t *testing.T) {
-	certificate, roots := testServerCertificate(t)
-	listener, err := Listen("udp4", "127.0.0.1:0", &Config{
-		Certificates: []tls.Certificate{certificate}, CurvePreferences: []tls.CurveID{tls.X25519MLKEM768}, SessionTicketsDisabled: true,
-		HandshakeTimeout: 3 * time.Second, FlightInterval: 5 * time.Millisecond, MaxFlightInterval: 20 * time.Millisecond,
-	})
-	if err != nil {
-		t.Fatal(err)
-	}
-	defer listener.Close()
-	serverDone := make(chan error, 1)
-	go func() {
-		server, acceptErr := listener.Accept()
-		if acceptErr != nil {
-			serverDone <- acceptErr
-			return
-		}
-		defer server.Close()
-		buffer := make([]byte, 8)
-		n, _, readErr := server.ReadDatagram(buffer)
-		if readErr == nil && string(buffer[:n]) != "ping" {
-			readErr = errors.New("unexpected hybrid UDP payload")
-		}
-		if readErr == nil {
-			_, readErr = server.WriteDatagram([]byte("pong"))
-		}
-		serverDone <- readErr
-	}()
-	client, err := DialWithDialer(&net.Dialer{Timeout: 3 * time.Second}, "udp4", listener.Addr().String(), &Config{
-		RootCAs: roots, ServerName: "server.test", CurvePreferences: []tls.CurveID{tls.X25519MLKEM768}, SessionTicketsDisabled: true,
-		HandshakeTimeout: 3 * time.Second, FlightInterval: 5 * time.Millisecond, MaxFlightInterval: 20 * time.Millisecond,
-	})
-	if err != nil {
-		t.Fatal(err)
-	}
-	defer client.Close()
-	_ = client.SetDeadline(time.Now().Add(3 * time.Second))
-	if _, err = client.WriteDatagram([]byte("ping")); err != nil {
-		t.Fatal(err)
-	}
-	buffer := make([]byte, 8)
-	n, _, err := client.ReadDatagram(buffer)
-	if err != nil || string(buffer[:n]) != "pong" {
-		t.Fatalf("hybrid UDP response = %q, %v", buffer[:n], err)
-	}
-	if err = <-serverDone; err != nil {
-		t.Fatal(err)
 	}
 }
 

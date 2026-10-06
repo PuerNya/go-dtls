@@ -81,9 +81,7 @@ func TestConnectionIDUpdateMessagesRejectMalformed(t *testing.T) {
 	if _, err := parseRequestConnectionID(nil); err == nil {
 		t.Fatal("accepted a truncated RequestConnectionId")
 	}
-	client, server := establishedConnPair(t)
-	defer client.conn.Close()
-	defer server.conn.Close()
+	client, _ := establishedConnPair(t)
 	client.connectionIDNegotiated = true
 	client.peerCIDUpdatesAllowed = true
 	client.sendConnectionID = []byte{1}
@@ -107,8 +105,6 @@ func TestConnectionIDUpdateMessagesRejectMalformed(t *testing.T) {
 
 func TestConnectionIDUpdateRequiresNegotiation(t *testing.T) {
 	client, server := establishedConnPair(t)
-	defer client.conn.Close()
-	defer server.conn.Close()
 	if err := client.SendNewConnectionIDs([][]byte{{1}}, false); err == nil {
 		t.Fatal("sent NewConnectionId without CID negotiation")
 	}
@@ -129,8 +125,6 @@ func TestConnectionIDUpdateRequiresNegotiation(t *testing.T) {
 
 func TestConnectionIDResourceLimits(t *testing.T) {
 	client, server := establishedConnPair(t)
-	defer client.conn.Close()
-	defer server.conn.Close()
 	client.connectionIDNegotiated = true
 	client.localCIDUpdatesAllowed = true
 	client.receiveConnectionID = []byte{1, 2}
@@ -159,9 +153,7 @@ func TestConnectionIDResourceLimits(t *testing.T) {
 }
 
 func TestSendNewConnectionIDsRollsBackOnWriteFailure(t *testing.T) {
-	client, server := establishedConnPair(t)
-	defer client.conn.Close()
-	defer server.conn.Close()
+	client, _ := establishedConnPair(t)
 	client.connectionIDNegotiated = true
 	client.localCIDUpdatesAllowed = true
 	client.receiveConnectionID = []byte{1, 2}
@@ -192,7 +184,7 @@ func TestSendNewConnectionIDsRollsBackOnWriteFailure(t *testing.T) {
 }
 
 func TestPeerConnectionIDSetRejectsPrefixesAndBoundsStorage(t *testing.T) {
-	client, server := establishedConnPair(t)
+	client, _ := establishedConnPair(t)
 	client.connectionIDNegotiated = true
 	client.peerCIDUpdatesAllowed = true
 	client.sendConnectionID = []byte{1, 2}
@@ -219,6 +211,4 @@ func TestPeerConnectionIDSetRejectsPrefixesAndBoundsStorage(t *testing.T) {
 	if len(client.peerSpareConnectionIDs) != 1 {
 		t.Fatalf("retained %d spare CIDs, want 1", len(client.peerSpareConnectionIDs))
 	}
-	_ = client.conn.Close()
-	_ = server.conn.Close()
 }

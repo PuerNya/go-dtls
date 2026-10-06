@@ -8,45 +8,42 @@ import (
 
 func TestKeyScheduleFinishedAndApplicationSecrets(t *testing.T) {
 	suite, _ := cipherSuiteForID(TLS_AES_128_GCM_SHA256)
-	client := newKeySchedule(suite, nil)
-	server := newKeySchedule(suite, nil)
+	schedule := newKeySchedule(suite, nil)
 	shared := bytes.Repeat([]byte{0x33}, 32)
 	helloHash := bytes.Repeat([]byte{0x44}, suite.hash.Size())
-	for _, k := range []*keySchedule{client, server} {
-		if err := k.deriveHandshake(shared, helloHash); err != nil {
-			t.Fatal(err)
-		}
+	if err := schedule.deriveHandshake(shared, helloHash); err != nil {
+		t.Fatal(err)
 	}
-	if !bytes.Equal(client.clientHandshakeTraffic, server.clientHandshakeTraffic) || !bytes.Equal(client.serverHandshakeTraffic, server.serverHandshakeTraffic) {
-		t.Fatal("peers derived different handshake traffic secrets")
+	if !bytes.Equal(schedule.clientHandshakeTraffic, expandLabel(suite, schedule.handshakeSecret, "c hs traffic", helloHash, suite.hash.Size())) ||
+		!bytes.Equal(schedule.serverHandshakeTraffic, expandLabel(suite, schedule.handshakeSecret, "s hs traffic", helloHash, suite.hash.Size())) {
+		t.Fatal("handshake traffic secrets differ from HKDF derivation")
 	}
 	transcript := bytes.Repeat([]byte{0x55}, suite.hash.Size())
-	verify := client.finishedVerifyData(client.clientHandshakeTraffic, transcript)
-	if !server.verifyFinished(server.clientHandshakeTraffic, transcript, verify) {
+	verify := schedule.finishedVerifyData(schedule.clientHandshakeTraffic, transcript)
+	if !schedule.verifyFinished(schedule.clientHandshakeTraffic, transcript, verify) {
 		t.Fatal("valid Finished was rejected")
 	}
 	verify[0] ^= 1
-	if server.verifyFinished(server.clientHandshakeTraffic, transcript, verify) {
+	if schedule.verifyFinished(schedule.clientHandshakeTraffic, transcript, verify) {
 		t.Fatal("tampered Finished was accepted")
 	}
-	derived := deriveSecret(suite, client.handshakeSecret, labelDerived, emptyTranscriptHash(suite))
+	derived := deriveSecret(suite, schedule.handshakeSecret, labelDerived, emptyTranscriptHash(suite))
 	wantMaster := hkdfExtract(suite.hash.New, make([]byte, suite.hash.Size()), derived)
 	wrongMaster := hkdfExtract(suite.hash.New, nil, derived)
-	for _, k := range []*keySchedule{client, server} {
-		if err := k.deriveApplication(transcript); err != nil {
-			t.Fatal(err)
-		}
+	if err := schedule.deriveApplication(transcript); err != nil {
+		t.Fatal(err)
 	}
-	if !bytes.Equal(client.masterSecret, wantMaster) {
+	if !bytes.Equal(schedule.masterSecret, wantMaster) {
 		t.Fatal("master secret did not use a Hash.length zero input secret")
 	}
-	if bytes.Equal(client.masterSecret, wrongMaster) {
+	if bytes.Equal(schedule.masterSecret, wrongMaster) {
 		t.Fatal("master secret incorrectly used an empty input secret")
 	}
-	if !bytes.Equal(client.clientApplicationTraffic, server.clientApplicationTraffic) || !bytes.Equal(client.serverApplicationTraffic, server.serverApplicationTraffic) {
-		t.Fatal("peers derived different application traffic secrets")
+	if !bytes.Equal(schedule.clientApplicationTraffic, expandLabel(suite, wantMaster, "c ap traffic", transcript, suite.hash.Size())) ||
+		!bytes.Equal(schedule.serverApplicationTraffic, expandLabel(suite, wantMaster, "s ap traffic", transcript, suite.hash.Size())) {
+		t.Fatal("application traffic secrets differ from HKDF derivation")
 	}
-	if bytes.Equal(client.clientApplicationTraffic, client.serverApplicationTraffic) {
+	if bytes.Equal(schedule.clientApplicationTraffic, schedule.serverApplicationTraffic) {
 		t.Fatal("client and server traffic secrets are equal")
 	}
 }
@@ -190,34 +187,30 @@ func TestKeyScheduleResumptionPSK(t *testing.T) {
 	shared := bytes.Repeat([]byte{0x11}, 32)
 	helloHash := bytes.Repeat([]byte{0x22}, suite.hash.Size())
 	finishedHash := bytes.Repeat([]byte{0x33}, suite.hash.Size())
-	peers := []*keySchedule{newKeySchedule(suite, nil), newKeySchedule(suite, nil)}
-	var first []byte
-	for _, schedule := range peers {
-		if err := schedule.deriveHandshake(shared, helloHash); err != nil {
-			t.Fatal(err)
-		}
-		if err := schedule.deriveApplication(finishedHash); err != nil {
-			t.Fatal(err)
-		}
-		if err := schedule.deriveResumption(finishedHash); err != nil {
-			t.Fatal(err)
-		}
-		psk, err := schedule.resumptionPSK([]byte{1, 2, 3})
-		if err != nil {
-			t.Fatal(err)
-		}
-		if first == nil {
-			first = psk
-		} else if !bytes.Equal(first, psk) {
-			t.Fatal("peers derived different resumption PSKs")
-		}
-		other, err := schedule.resumptionPSK([]byte{1, 2, 4})
-		if err != nil {
-			t.Fatal(err)
-		}
-		if bytes.Equal(psk, other) {
-			t.Fatal("ticket nonce did not separate resumption PSKs")
-		}
+	schedule := newKeySchedule(suite, nil)
+	if err := schedule.deriveHandshake(shared, helloHash); err != nil {
+		t.Fatal(err)
+	}
+	if err := schedule.deriveApplication(finishedHash); err != nil {
+		t.Fatal(err)
+	}
+	if err := schedule.deriveResumption(finishedHash); err != nil {
+		t.Fatal(err)
+	}
+	psk, err := schedule.resumptionPSK([]byte{1, 2, 3})
+	if err != nil {
+		t.Fatal(err)
+	}
+	want := expandLabel(suite, schedule.resumptionMasterSecret, "resumption", []byte{1, 2, 3}, suite.hash.Size())
+	if !bytes.Equal(psk, want) {
+		t.Fatal("resumption PSK differs from HKDF derivation")
+	}
+	other, err := schedule.resumptionPSK([]byte{1, 2, 4})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if bytes.Equal(psk, other) {
+		t.Fatal("ticket nonce did not separate resumption PSKs")
 	}
 }
 

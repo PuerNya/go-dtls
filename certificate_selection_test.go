@@ -58,25 +58,6 @@ func certificatePool(certificates ...tls.Certificate) *x509.CertPool {
 	return pool
 }
 
-func completeSelectionHandshake(t *testing.T, clientConfig, serverConfig *Config) (*Conn, *Conn) {
-	t.Helper()
-	left, right := memoryDatagramPair()
-	t.Cleanup(func() {
-		_ = left.Close()
-		_ = right.Close()
-	})
-	client := Client(left, clientConfig)
-	server := Server(right, serverConfig)
-	serverDone := make(chan error, 1)
-	go func() { serverDone <- server.Handshake() }()
-	clientErr := client.Handshake()
-	serverErr := <-serverDone
-	if clientErr != nil || serverErr != nil {
-		t.Fatalf("handshake failed: client=%v server=%v", clientErr, serverErr)
-	}
-	return client, server
-}
-
 func keyUsageFilter(t testing.TB, usage x509.KeyUsage) CertificateOIDFilter {
 	t.Helper()
 	bitLength := 0
@@ -234,7 +215,7 @@ func TestDynamicCertificateSelectionEndToEnd(t *testing.T) {
 		keyUsageFilter(t, x509.KeyUsageDigitalSignature|x509.KeyUsageKeyEncipherment),
 		extendedKeyUsageFilter(t, oidExtKeyUsageCodeSigning),
 	}
-	_, server := completeSelectionHandshake(t, &Config{
+	_, server := completeHandshakePair(t, &Config{
 		RootCAs: roots, ServerName: "server.test", Certificates: []tls.Certificate{wrongClient, rightClient},
 		HandshakeTimeout: 2 * time.Second, FlightInterval: 5 * time.Millisecond,
 	}, &Config{
@@ -248,7 +229,7 @@ func TestDynamicCertificateSelectionEndToEnd(t *testing.T) {
 
 	wrongServer := testSelectionCertificate(t, 6, "wrong-server", "server.test", x509.KeyUsageDigitalSignature, x509.ExtKeyUsageServerAuth)
 	rightServer := testSelectionCertificate(t, 7, "right-server", "server.test", x509.KeyUsageDigitalSignature, x509.ExtKeyUsageServerAuth)
-	client, _ := completeSelectionHandshake(t, &Config{
+	client, _ := completeHandshakePair(t, &Config{
 		RootCAs: certificatePool(rightServer), ServerName: "server.test",
 		ServerCertificateAuthorities: [][]byte{rightServer.Leaf.RawSubject},
 		SessionTicketsDisabled:       true, HandshakeTimeout: 2 * time.Second, FlightInterval: 5 * time.Millisecond,
@@ -303,7 +284,7 @@ func TestGetClientCertificateAndPostHandshakeSelection(t *testing.T) {
 	wrongClient := testSelectionCertificate(t, 9, "wrong-client", "", x509.KeyUsageDigitalSignature, x509.ExtKeyUsageClientAuth)
 	rightClient := testSelectionCertificate(t, 10, "pha-client", "", x509.KeyUsageDigitalSignature, x509.ExtKeyUsageClientAuth)
 	calls := 0
-	client, server := completeSelectionHandshake(t, &Config{
+	_, server := completeHandshakePair(t, &Config{
 		RootCAs: roots, ServerName: "server.test", Certificates: []tls.Certificate{wrongClient, rightClient}, PostHandshakeAuth: true,
 		GetClientCertificate: func(info *CertificateRequestInfo) (*tls.Certificate, error) {
 			calls++
@@ -326,7 +307,6 @@ func TestGetClientCertificateAndPostHandshakeSelection(t *testing.T) {
 	if got := server.ConnectionState().PeerCertificates[0].Subject.CommonName; got != "pha-client" {
 		t.Fatalf("post-handshake certificate=%q", got)
 	}
-	_ = client.Close()
 }
 
 func TestResumedMutualTLSDoesNotSelectClientCertificateAgain(t *testing.T) {
@@ -354,7 +334,7 @@ func TestResumedMutualTLSDoesNotSelectClientCertificateAgain(t *testing.T) {
 		t.Fatalf("initial GetClientCertificate calls=%d", calls)
 	}
 	calls = 0
-	client, server := completeSelectionHandshake(t, clientConfig, serverConfig)
+	client, server := completeHandshakePair(t, clientConfig, serverConfig)
 	if !client.ConnectionState().DidResume || !server.ConnectionState().DidResume {
 		t.Fatal("mutual TLS connection did not resume")
 	}

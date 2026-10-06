@@ -70,7 +70,7 @@ func TestHKDFExtractIntoMatchesStandardLibrary(t *testing.T) {
 	}
 }
 
-func TestHKDFExpandMatchesStandardLibrary(t *testing.T) {
+func TestHKDFExpanderMatchesStandardLibrary(t *testing.T) {
 	for _, suiteID := range []uint16{TLS_AES_128_GCM_SHA256, TLS_AES_256_GCM_SHA384} {
 		suite, err := cipherSuiteForID(suiteID)
 		if err != nil {
@@ -78,18 +78,18 @@ func TestHKDFExpandMatchesStandardLibrary(t *testing.T) {
 		}
 		secret := bytes.Repeat([]byte{0x5a}, suite.hash.Size())
 		info := bytes.Repeat([]byte{0xa5}, 97)
+		expander := newHKDFExpander(suite.hash.New, secret)
 		lengths := []int{0, 1, suite.hash.Size() - 1, suite.hash.Size(), suite.hash.Size() + 1, 2*suite.hash.Size() + 7, 255 * suite.hash.Size()}
 		for _, length := range lengths {
 			want, err := hkdf.Expand(suite.hash.New, secret, string(info), length)
 			if err != nil {
 				t.Fatal(err)
 			}
-			if got := hkdfExpand(suite.hash.New, secret, info, length); !bytes.Equal(got, want) {
+			if got := expander.expand(info, length); !bytes.Equal(got, want) {
 				t.Fatalf("suite %04x length %d differs from crypto/hkdf", suiteID, length)
 			}
 		}
 
-		expander := newHKDFExpander(suite.hash.New, secret)
 		for _, label := range [][]byte{[]byte("first"), []byte("second"), []byte("first")} {
 			got := expander.expand(label, suite.hash.Size()+3)
 			want, err := hkdf.Expand(suite.hash.New, secret, string(label), suite.hash.Size()+3)
@@ -161,14 +161,18 @@ func TestSingleBlockHKDFLabelsMatchStandardAndRemainImmutable(t *testing.T) {
 	}
 }
 
-func TestDeriveTrafficKeysIntoMatchesOwnedResult(t *testing.T) {
+func TestDeriveTrafficKeysInto(t *testing.T) {
 	for _, suiteID := range defaultCipherSuites() {
 		suite, err := cipherSuiteForID(suiteID)
 		if err != nil {
 			t.Fatal(err)
 		}
 		secret := bytes.Repeat([]byte{byte(suiteID)}, suite.hash.Size())
-		want := deriveTrafficKeys(suite, secret)
+		want := trafficKeys{
+			key: expandLabel(suite, secret, "key", nil, suite.keyLen),
+			iv:  expandLabel(suite, secret, "iv", nil, suite.ivLen),
+			sn:  expandLabel(suite, secret, "sn", nil, suite.keyLen),
+		}
 		key := make([]byte, suite.keyLen)
 		iv := make([]byte, suite.ivLen)
 		sn := make([]byte, suite.keyLen)

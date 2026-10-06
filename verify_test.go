@@ -85,23 +85,8 @@ func makeTestCertificateWithSHA1Root(t testing.TB) (tls.Certificate, *x509.Certi
 
 func makeTestCertificate(t *testing.T, dns string, usage x509.ExtKeyUsage) ([]byte, *x509.CertPool) {
 	t.Helper()
-	pub, key, err := ed25519.GenerateKey(rand.Reader)
-	if err != nil {
-		t.Fatal(err)
-	}
-	now := time.Now()
-	tmpl := &x509.Certificate{SerialNumber: big.NewInt(1), Subject: pkix.Name{CommonName: dns}, DNSNames: []string{dns}, NotBefore: now.Add(-time.Hour), NotAfter: now.Add(time.Hour), KeyUsage: x509.KeyUsageDigitalSignature | x509.KeyUsageCertSign, ExtKeyUsage: []x509.ExtKeyUsage{usage}, IsCA: true, BasicConstraintsValid: true}
-	der, err := x509.CreateCertificate(rand.Reader, tmpl, tmpl, pub, key)
-	if err != nil {
-		t.Fatal(err)
-	}
-	cert, err := x509.ParseCertificate(der)
-	if err != nil {
-		t.Fatal(err)
-	}
-	pool := x509.NewCertPool()
-	pool.AddCert(cert)
-	return der, pool
+	certificate := testSelectionCertificate(t, 1, dns, dns, x509.KeyUsageDigitalSignature|x509.KeyUsageCertSign, usage)
+	return certificate.Certificate[0], certificatePool(certificate)
 }
 
 func TestVerifyServerCertificate(t *testing.T) {

@@ -52,6 +52,11 @@ func TestProtocolAlertClassification(t *testing.T) {
 		{&ProtocolError{"server selected an unoffered cipher suite"}, alertIllegalParameter, true},
 		{&ProtocolError{"unexpected handshake message"}, alertIllegalParameter, true},
 		{&ProtocolError{"truncated handshake fragment header"}, alertIllegalParameter, true},
+		{&ProtocolError{"duplicate ClientHello extension"}, alertIllegalParameter, true},
+		{&ProtocolError{"malformed certificate entry"}, alertIllegalParameter, true},
+		{&ProtocolError{"invalid record length"}, alertIllegalParameter, true},
+		{&ProtocolError{"the peer omitted CertificateVerify"}, alertIllegalParameter, true},
+		{&ProtocolError{""}, alertIllegalParameter, true},
 		{alertError(alertTooManyCIDsRequest, &ProtocolError{"too many"}), alertTooManyCIDsRequest, true},
 		{alertError(alertDecryptError, errors.New("bad signature")), alertDecryptError, true},
 		{errors.New("network failure"), 0, false},
@@ -81,24 +86,6 @@ func TestVectorOverflowErrorKeepsProtocolClassification(t *testing.T) {
 		want := alertIllegalParameter
 		if got, ok := protocolAlert(wrapped); !ok || got != want {
 			t.Fatalf("bits=%d: protocolAlert=(%d,%v), want (%d,true)", bits, got, ok, want)
-		}
-	}
-}
-
-// TestProtocolAlertIgnoresReasonWording guards the property the classifier was
-// rewritten to provide: rewording a diagnostic must not change the wire alert.
-func TestProtocolAlertIgnoresReasonWording(t *testing.T) {
-	for _, reason := range []string{
-		"unexpected handshake message",
-		"truncated handshake fragment header",
-		"duplicate ClientHello extension",
-		"malformed certificate entry",
-		"invalid record length",
-		"the peer omitted CertificateVerify",
-		"",
-	} {
-		if got, ok := protocolAlert(&ProtocolError{reason}); !ok || got != alertIllegalParameter {
-			t.Fatalf("protocolAlert(%q)=(%d,%v), want (%d,true)", reason, got, ok, alertIllegalParameter)
 		}
 	}
 }

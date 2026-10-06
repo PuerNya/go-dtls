@@ -103,53 +103,43 @@ func TestNewSessionTicketRejectsRecognizedExtensionInWrongMessage(t *testing.T) 
 	}
 }
 
-func TestNewSessionTicketAcceptsZeroLifetimeForImmediateDiscard(t *testing.T) {
-	var w wireBuilder
-	w.u32(0)
-	w.u32(7)
-	w.bytes8([]byte{1})
-	w.bytes16([]byte{2})
-	exts, err := marshalExtensions(nil, nil)
-	if err != nil {
-		t.Fatal(err)
-	}
-	w.b = append(w.b, exts...)
-	message, err := parseNewSessionTicket(w.b)
-	if err != nil {
-		t.Fatal(err)
-	}
-	if message.lifetime != 0 {
-		t.Fatalf("lifetime=%d", message.lifetime)
-	}
-}
-
-func TestNewSessionTicketOverlongLifetimeIsParsedAndDiscarded(t *testing.T) {
-	var w wireBuilder
-	w.u32(8 * 24 * 60 * 60)
-	w.u32(7)
-	w.bytes8([]byte{1})
-	w.bytes16([]byte{2})
-	exts, err := marshalExtensions(nil, nil)
-	if err != nil {
-		t.Fatal(err)
-	}
-	w.b = append(w.b, exts...)
-	message, err := parseNewSessionTicket(w.b)
-	if err != nil || message.lifetime != 8*24*60*60 {
-		t.Fatalf("parsed ticket=%#v err=%v", message, err)
-	}
-	cache := NewLRUClientSessionCache(1)
-	config, err := (&Config{ClientSessionCache: cache, ServerName: "server.test"}).normalized()
-	if err != nil {
-		t.Fatal(err)
-	}
-	suite, _ := cipherSuiteForID(TLS_AES_128_GCM_SHA256)
-	c := &Conn{config: config, resumptionSuite: suite, resumptionMasterSecret: make([]byte, suite.hash.Size())}
-	if err = c.processNewSessionTicket(0, w.b); err != nil {
-		t.Fatal(err)
-	}
-	if _, ok := cache.Get("server.test"); ok {
-		t.Fatal("cached a ticket with lifetime over seven days")
+func TestNewSessionTicketUnusableLifetimeIsParsedAndDiscarded(t *testing.T) {
+	for _, test := range []struct {
+		name     string
+		lifetime uint32
+	}{
+		{name: "Zero", lifetime: 0},
+		{name: "OverSevenDays", lifetime: 8 * 24 * 60 * 60},
+	} {
+		t.Run(test.name, func(t *testing.T) {
+			var w wireBuilder
+			w.u32(test.lifetime)
+			w.u32(7)
+			w.bytes8([]byte{1})
+			w.bytes16([]byte{2})
+			exts, err := marshalExtensions(nil, nil)
+			if err != nil {
+				t.Fatal(err)
+			}
+			w.b = append(w.b, exts...)
+			message, err := parseNewSessionTicket(w.b)
+			if err != nil || message.lifetime != test.lifetime {
+				t.Fatalf("parsed ticket=%#v err=%v", message, err)
+			}
+			cache := NewLRUClientSessionCache(1)
+			config, err := (&Config{ClientSessionCache: cache, ServerName: "server.test"}).normalized()
+			if err != nil {
+				t.Fatal(err)
+			}
+			suite, _ := cipherSuiteForID(TLS_AES_128_GCM_SHA256)
+			c := &Conn{config: config, resumptionSuite: suite, resumptionMasterSecret: make([]byte, suite.hash.Size())}
+			if err = c.processNewSessionTicket(0, w.b); err != nil {
+				t.Fatal(err)
+			}
+			if _, ok := cache.Get("server.test"); ok {
+				t.Fatalf("cached a ticket with lifetime %d", test.lifetime)
+			}
+		})
 	}
 }
 

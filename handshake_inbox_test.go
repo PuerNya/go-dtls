@@ -84,42 +84,40 @@ func TestCompletedHandshakeBatchInlineAndOverflow(t *testing.T) {
 }
 
 func TestHandshakeInboxDeliversInOrder(t *testing.T) {
-	inbox := newHandshakeInbox(0, 1024, 8, 4096)
-	future := handshakeFragment{typ: 2, messageSequence: 1, length: 1, body: []byte("b")}
-	messages, err := inbox.add(future)
-	if err != nil {
-		t.Fatal(err)
-	}
-	if len(messages) != 0 {
-		t.Fatal("delivered future message")
-	}
-	messages, err = inbox.add(handshakeFragment{typ: 1, messageSequence: 0, length: 1, body: []byte("a")})
-	if err != nil {
-		t.Fatal(err)
-	}
-	if len(messages) != 2 || string(messages[0].body) != "a" || string(messages[1].body) != "b" {
-		t.Fatalf("unexpected delivery %#v", messages)
-	}
-	if inbox.expected != 2 {
-		t.Fatalf("expected sequence %d", inbox.expected)
-	}
-}
-
-func TestHandshakeInboxReusesDeliveryDestination(t *testing.T) {
-	inbox := newHandshakeInbox(0, 1024, 8, 4096)
-	if messages, err := inbox.add(handshakeFragment{typ: 2, messageSequence: 1, length: 1, body: []byte("b")}); err != nil || len(messages) != 0 {
-		t.Fatalf("future messages=%v err=%v", messages, err)
-	}
-	var storage [2]completedHandshake
-	messages, err := inbox.addInto(storage[:0], handshakeFragment{typ: 1, messageSequence: 0, length: 1, body: []byte("a")})
-	if err != nil {
-		t.Fatal(err)
-	}
-	if len(messages) != 2 || &messages[0] != &storage[0] || string(messages[0].body) != "a" || string(messages[1].body) != "b" {
-		t.Fatalf("unexpected reused delivery %#v", messages)
-	}
-	if len(inbox.ready) != 0 || inbox.readyBytes != 0 || inbox.expected != 2 {
-		t.Fatalf("ready=%d bytes=%d expected=%d", len(inbox.ready), inbox.readyBytes, inbox.expected)
+	for _, test := range []struct {
+		name         string
+		reuseStorage bool
+	}{
+		{name: "DefaultAllocation"},
+		{name: "SuppliedStorage", reuseStorage: true},
+	} {
+		t.Run(test.name, func(t *testing.T) {
+			inbox := newHandshakeInbox(0, 1024, 8, 4096)
+			if messages, err := inbox.add(handshakeFragment{typ: 2, messageSequence: 1, length: 1, body: []byte("b")}); err != nil || len(messages) != 0 {
+				t.Fatalf("future messages=%v err=%v", messages, err)
+			}
+			var storage [2]completedHandshake
+			first := handshakeFragment{typ: 1, messageSequence: 0, length: 1, body: []byte("a")}
+			var messages []completedHandshake
+			var err error
+			if test.reuseStorage {
+				messages, err = inbox.addInto(storage[:0], first)
+			} else {
+				messages, err = inbox.add(first)
+			}
+			if err != nil {
+				t.Fatal(err)
+			}
+			if len(messages) != 2 || string(messages[0].body) != "a" || string(messages[1].body) != "b" {
+				t.Fatalf("unexpected delivery %#v", messages)
+			}
+			if test.reuseStorage && &messages[0] != &storage[0] {
+				t.Fatal("delivery did not reuse supplied storage")
+			}
+			if len(inbox.ready) != 0 || inbox.readyBytes != 0 || inbox.expected != 2 {
+				t.Fatalf("ready=%d bytes=%d expected=%d", len(inbox.ready), inbox.readyBytes, inbox.expected)
+			}
+		})
 	}
 }
 
@@ -230,41 +228,32 @@ func TestHandshakeReceivePropagatesAEADAuthenticationFailureLimit(t *testing.T) 
 	}
 }
 
-func TestHandshakeReceiveProcessesPlaintextFatalAlert(t *testing.T) {
-	left, right := memoryDatagramPair()
-	defer left.Close()
-	defer right.Close()
-	body, err := (alertMessage{level: alertLevelFatal, description: alertIllegalParameter}).marshal()
-	if err != nil {
-		t.Fatal(err)
-	}
-	wire, err := marshalPlainRecord(record{typ: recordTypeAlert, payload: body})
-	if err != nil {
-		t.Fatal(err)
-	}
-	go func() { _, _ = left.Write(wire) }()
-	_, err = receiveHandshakeMessage(right, newHandshakeInbox(0, 1024, 8, 4096), nil)
-	if !errors.Is(err, AlertError(alertIllegalParameter)) {
-		t.Fatalf("receive returned %v", err)
-	}
-}
-
-func TestHandshakeReceiveTreatsWarningAlertAsFatal(t *testing.T) {
-	left, right := memoryDatagramPair()
-	defer left.Close()
-	defer right.Close()
-	body, err := (alertMessage{level: alertLevelWarning, description: alertIllegalParameter}).marshal()
-	if err != nil {
-		t.Fatal(err)
-	}
-	wire, err := marshalPlainRecord(record{typ: recordTypeAlert, payload: body})
-	if err != nil {
-		t.Fatal(err)
-	}
-	go func() { _, _ = left.Write(wire) }()
-	_, err = receiveHandshakeMessage(right, newHandshakeInbox(0, 1024, 8, 4096), nil)
-	if !errors.Is(err, AlertError(alertIllegalParameter)) {
-		t.Fatalf("receive returned %v", err)
+func TestHandshakeReceiveTreatsPlaintextIllegalParameterAsFatal(t *testing.T) {
+	for _, test := range []struct {
+		name  string
+		level uint8
+	}{
+		{name: "Fatal", level: alertLevelFatal},
+		{name: "Warning", level: alertLevelWarning},
+	} {
+		t.Run(test.name, func(t *testing.T) {
+			left, right := memoryDatagramPair()
+			defer left.Close()
+			defer right.Close()
+			body, err := (alertMessage{level: test.level, description: alertIllegalParameter}).marshal()
+			if err != nil {
+				t.Fatal(err)
+			}
+			wire, err := marshalPlainRecord(record{typ: recordTypeAlert, payload: body})
+			if err != nil {
+				t.Fatal(err)
+			}
+			go func() { _, _ = left.Write(wire) }()
+			_, err = receiveHandshakeMessage(right, newHandshakeInbox(0, 1024, 8, 4096), nil)
+			if !errors.Is(err, AlertError(alertIllegalParameter)) {
+				t.Fatalf("receive returned %v", err)
+			}
+		})
 	}
 }
 

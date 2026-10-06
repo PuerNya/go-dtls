@@ -8,31 +8,25 @@ import (
 
 func TestHandshakeFragmentRoundTrip(t *testing.T) {
 	f := handshakeFragment{typ: 1, messageSequence: 7, length: 10, offset: 3, body: []byte("abcd")}
-	b, err := marshalHandshakeFragment(f)
-	if err != nil {
-		t.Fatal(err)
-	}
-	got, err := parseHandshakeFragments(b)
-	if err != nil {
-		t.Fatal(err)
-	}
-	if len(got) != 1 || got[0].typ != f.typ || got[0].messageSequence != f.messageSequence || got[0].length != f.length || got[0].offset != f.offset || !bytes.Equal(got[0].body, f.body) {
-		t.Fatalf("round trip mismatch: %#v", got)
-	}
-}
-
-func TestMarshalHandshakeFragmentIntoMatchesAllocated(t *testing.T) {
-	fragment := handshakeFragment{typ: 1, messageSequence: 7, length: 10, offset: 3, body: []byte("abcd")}
-	want, err := marshalHandshakeFragment(fragment)
-	if err != nil {
-		t.Fatal(err)
-	}
-	got := make([]byte, len(want))
-	if err = marshalHandshakeFragmentInto(got, fragment); err != nil {
-		t.Fatal(err)
-	}
-	if !bytes.Equal(got, want) {
-		t.Fatalf("into=%x allocated=%x", got, want)
+	for _, into := range []bool{false, true} {
+		var wire []byte
+		var err error
+		if into {
+			wire = bytes.Repeat([]byte{0xa5}, handshakeHeaderLen+len(f.body))
+			err = marshalHandshakeFragmentInto(wire, f)
+		} else {
+			wire, err = marshalHandshakeFragment(f)
+		}
+		if err != nil {
+			t.Fatal(err)
+		}
+		got, err := parseHandshakeFragments(wire)
+		if err != nil {
+			t.Fatal(err)
+		}
+		if len(got) != 1 || got[0].typ != f.typ || got[0].messageSequence != f.messageSequence || got[0].length != f.length || got[0].offset != f.offset || !bytes.Equal(got[0].body, f.body) {
+			t.Fatalf("into=%t round trip mismatch: %#v", into, got)
+		}
 	}
 }
 

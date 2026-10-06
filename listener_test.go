@@ -58,56 +58,81 @@ func (c *reusableUDPClientConn) SetWriteDeadline(t time.Time) error {
 
 func TestListenAcceptRealUDP(t *testing.T) {
 	certificate, roots := testServerCertificate(t)
-	listener, err := Listen("udp4", "127.0.0.1:0", &Config{
-		Certificates: []tls.Certificate{certificate}, HandshakeTimeout: 2 * time.Second,
-		FlightInterval: 5 * time.Millisecond, MaxFlightInterval: 20 * time.Millisecond,
-	})
-	if err != nil {
-		t.Fatal(err)
-	}
-	defer listener.Close()
-	serverErr := make(chan error, 1)
-	go func() {
-		conn, acceptErr := listener.Accept()
-		if acceptErr != nil {
-			serverErr <- acceptErr
-			return
-		}
-		defer conn.Close()
-		_ = conn.SetDeadline(time.Now().Add(2 * time.Second))
-		buffer := make([]byte, 32)
-		n, _, readErr := conn.ReadDatagram(buffer)
-		if readErr == nil && string(buffer[:n]) != "ping" {
-			readErr = &ProtocolError{"unexpected listener payload"}
-		}
-		if readErr == nil {
-			_, readErr = conn.WriteDatagram([]byte("pong"))
-		}
-		serverErr <- readErr
-	}()
-	dialer := &net.Dialer{Timeout: 2 * time.Second}
-	client, err := DialWithDialer(dialer, "udp4", listener.Addr().String(), &Config{
-		RootCAs: roots, ServerName: "server.test", HandshakeTimeout: 2 * time.Second,
-		FlightInterval: 5 * time.Millisecond, MaxFlightInterval: 20 * time.Millisecond,
-	})
-	if err != nil {
-		t.Fatal(err)
-	}
-	defer client.Close()
-	_ = client.SetDeadline(time.Now().Add(2 * time.Second))
-	if _, err = client.WriteDatagram([]byte("ping")); err != nil {
-		t.Fatal(err)
-	}
-	buffer := make([]byte, 32)
-	n, _, err := client.ReadDatagram(buffer)
-	if err != nil {
-		t.Fatal(err)
-	}
-	if string(buffer[:n]) != "pong" {
-		t.Fatalf("got %q", buffer[:n])
-	}
-	if err = <-serverErr; err != nil {
-		t.Fatal(err)
+	list, key := testECHConfig(t, "public.test", 15)
+	for _, test := range []struct {
+		name           string
+		client, server Config
+	}{
+		{name: "Default"},
+		{
+			name:   "ECH",
+			client: Config{EncryptedClientHelloConfigList: list, SessionTicketsDisabled: true},
+			server: Config{EncryptedClientHelloKeys: []EncryptedClientHelloKey{key}, SessionTicketsDisabled: true},
+		},
+		{
+			name:   "HybridKeyExchange",
+			client: Config{CurvePreferences: []tls.CurveID{tls.X25519MLKEM768}, SessionTicketsDisabled: true},
+			server: Config{CurvePreferences: []tls.CurveID{tls.X25519MLKEM768}, SessionTicketsDisabled: true},
+		},
+	} {
+		t.Run(test.name, func(t *testing.T) {
+			for _, config := range []*Config{&test.client, &test.server} {
+				config.HandshakeTimeout = 3 * time.Second
+				config.FlightInterval = 5 * time.Millisecond
+				config.MaxFlightInterval = 20 * time.Millisecond
+			}
+			test.client.RootCAs = roots
+			test.client.ServerName = "server.test"
+			test.server.Certificates = []tls.Certificate{certificate}
+			wantECH := len(test.client.EncryptedClientHelloConfigList) != 0
+			listener, err := Listen("udp4", "127.0.0.1:0", &test.server)
+			if err != nil {
+				t.Fatal(err)
+			}
+			defer listener.Close()
+			serverDone := make(chan error, 1)
+			go func() {
+				server, acceptErr := listener.Accept()
+				if acceptErr != nil {
+					serverDone <- acceptErr
+					return
+				}
+				defer server.Close()
+				_ = server.SetDeadline(time.Now().Add(3 * time.Second))
+				buffer := make([]byte, 32)
+				n, _, readErr := server.ReadDatagram(buffer)
+				if readErr == nil && string(buffer[:n]) != "ping" {
+					readErr = errors.New("unexpected UDP payload")
+				}
+				if readErr == nil && server.ConnectionState().ECHAccepted != wantECH {
+					readErr = errors.New("unexpected server ECH acceptance state")
+				}
+				if readErr == nil {
+					_, readErr = server.WriteDatagram([]byte("pong"))
+				}
+				serverDone <- readErr
+			}()
+			client, err := DialWithDialer(&net.Dialer{Timeout: 3 * time.Second}, "udp4", listener.Addr().String(), &test.client)
+			if err != nil {
+				t.Fatal(err)
+			}
+			defer client.Close()
+			if client.ConnectionState().ECHAccepted != wantECH {
+				t.Fatal("unexpected client ECH acceptance state")
+			}
+			_ = client.SetDeadline(time.Now().Add(3 * time.Second))
+			if _, err = client.WriteDatagram([]byte("ping")); err != nil {
+				t.Fatal(err)
+			}
+			buffer := make([]byte, 32)
+			n, _, err := client.ReadDatagram(buffer)
+			if err != nil || string(buffer[:n]) != "pong" {
+				t.Fatalf("UDP response = %q, %v", buffer[:n], err)
+			}
+			if err = <-serverDone; err != nil {
+				t.Fatal(err)
+			}
+		})
 	}
 }
 
@@ -874,9 +899,7 @@ func TestListenerMixedCIDDatagramDoesNotCrossAssociations(t *testing.T) {
 		t.Fatalf("mixed datagram routed to %p, want association A %p", got, sessionA)
 	}
 
-	client, peer := establishedConnPair(t)
-	defer client.conn.Close()
-	defer peer.conn.Close()
+	client, _ := establishedConnPair(t)
 	receiving, err := newReceivingTraffic(suite, secretA, 3)
 	if err != nil {
 		t.Fatal(err)

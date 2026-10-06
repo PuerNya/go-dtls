@@ -114,7 +114,7 @@ func (c *Conn) writeFlight(conn io.Writer, f *flight) error {
 	var storage [10][]byte
 	for {
 		var err error
-		records := f.nextUnsentWire(10, storage[:0])
+		records := f.nextUnsentWire(storage[:0])
 		if len(records) > 0 {
 			f.noteSend(c.config.Time(), false)
 		}

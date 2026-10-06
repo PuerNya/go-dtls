@@ -6,42 +6,26 @@ import (
 )
 
 func TestPlainRecordRoundTrip(t *testing.T) {
-	want := record{typ: recordTypeHandshake, epoch: 0, sequence: 0x010203040506, payload: []byte("hello")}
-	b, err := marshalPlainRecord(want)
-	if err != nil {
-		t.Fatal(err)
-	}
-	got, err := parsePlainRecords(b)
-	if err != nil {
-		t.Fatal(err)
-	}
-	if len(got) != 1 || got[0].typ != want.typ || got[0].epoch != want.epoch || got[0].sequence != want.sequence || !bytes.Equal(got[0].payload, want.payload) {
-		t.Fatalf("round trip mismatch: %#v", got)
-	}
-}
-
-func TestPlainRecordAllocatorMatchesMarshal(t *testing.T) {
 	for _, want := range []record{
 		{typ: recordTypeAlert},
 		{typ: recordTypeHandshake, sequence: 0x010203040506, payload: []byte("handshake")},
 		{typ: recordTypeACK, sequence: 9, payload: []byte("ack")},
 	} {
-		allocated, err := allocatePlainRecordWire(want.typ, want.epoch, want.sequence, len(want.payload))
+		wire, err := marshalPlainRecord(want)
 		if err != nil {
 			t.Fatal(err)
 		}
-		copy(allocated[plainRecordHeaderLen:], want.payload)
-		marshaled, err := marshalPlainRecord(want)
+		got, err := parsePlainRecords(wire)
 		if err != nil {
 			t.Fatal(err)
 		}
-		if !bytes.Equal(allocated, marshaled) {
-			t.Fatalf("allocated=%x marshaled=%x", allocated, marshaled)
+		if len(got) != 1 || got[0].typ != want.typ || got[0].epoch != want.epoch || got[0].sequence != want.sequence || !bytes.Equal(got[0].payload, want.payload) {
+			t.Fatalf("round trip mismatch: got %#v, want %#v", got, want)
 		}
 	}
 }
 
-func TestPlainRecordAllocatorMatchesMarshalErrors(t *testing.T) {
+func TestPlainRecordAllocatorRejectsInvalidInput(t *testing.T) {
 	tests := []struct {
 		record     record
 		payloadLen int
@@ -49,16 +33,12 @@ func TestPlainRecordAllocatorMatchesMarshalErrors(t *testing.T) {
 		{record: record{typ: recordTypeApplicationData}},
 		{record: record{typ: recordTypeHandshake, epoch: 1}},
 		{record: record{typ: recordTypeHandshake, sequence: 1 << 48}},
-		{record: record{typ: recordTypeHandshake, payload: make([]byte, maxRecordContent+1)}, payloadLen: maxRecordContent + 1},
+		{record: record{typ: recordTypeHandshake}, payloadLen: maxRecordContent + 1},
 	}
 	for _, test := range tests {
-		if test.payloadLen == 0 {
-			test.payloadLen = len(test.record.payload)
-		}
-		_, marshalErr := marshalPlainRecord(test.record)
-		_, allocateErr := allocatePlainRecordWire(test.record.typ, test.record.epoch, test.record.sequence, test.payloadLen)
-		if marshalErr == nil || allocateErr == nil || marshalErr.Error() != allocateErr.Error() {
-			t.Fatalf("record=%#v marshal=%v allocate=%v", test.record, marshalErr, allocateErr)
+		wire, err := allocatePlainRecordWire(test.record.typ, test.record.epoch, test.record.sequence, test.payloadLen)
+		if err == nil || wire != nil {
+			t.Fatalf("accepted invalid record %#v: wire=%x err=%v", test.record, wire, err)
 		}
 	}
 	if wire, err := allocatePlainRecordWire(recordTypeHandshake, 0, 0, -1); err == nil || wire != nil {

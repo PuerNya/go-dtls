@@ -1205,7 +1205,6 @@ func (c *Conn) sendNewSessionTickets(schedule *keySchedule, suite *cipherSuite, 
 		c.writeMu.Unlock()
 		return err
 	}
-	flight.setIntervals(c.config.FlightInterval, c.config.MaxFlightInterval)
 	if err = c.writeFlight(c.conn, flight); err != nil {
 		c.writeMu.Unlock()
 		return err

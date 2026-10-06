@@ -6,48 +6,10 @@ import (
 	"encoding/binary"
 	"net"
 	"sync"
+	"sync/atomic"
 	"testing"
 	"time"
 )
-
-func replaceClientHelloTicketRequest(t *testing.T, wire, value []byte) []byte {
-	t.Helper()
-	p := wireParser{b: wire}
-	p.u16()
-	p.take(32)
-	p.bytes8()
-	p.bytes8()
-	p.bytes16()
-	p.bytes8()
-	extensionsOffset := p.off
-	extensions := p.bytes16()
-	if err := p.done(); err != nil {
-		t.Fatal(err)
-	}
-	for offset := 0; offset < len(extensions); {
-		if len(extensions)-offset < 4 {
-			t.Fatal("truncated test extension")
-		}
-		typ := binary.BigEndian.Uint16(extensions[offset:])
-		length := int(binary.BigEndian.Uint16(extensions[offset+2:]))
-		if length > len(extensions)-offset-4 {
-			t.Fatal("invalid test extension length")
-		}
-		if typ == extTicketRequest {
-			absolute := extensionsOffset + 2 + offset
-			out := make([]byte, 0, len(wire)-length+len(value))
-			out = append(out, wire[:absolute+4]...)
-			out = append(out, value...)
-			out = append(out, wire[absolute+4+length:]...)
-			binary.BigEndian.PutUint16(out[absolute+2:absolute+4], uint16(len(value)))
-			binary.BigEndian.PutUint16(out[extensionsOffset:extensionsOffset+2], uint16(len(extensions)-length+len(value)))
-			return out
-		}
-		offset += 4 + length
-	}
-	t.Fatal("test ClientHello has no ticket_request extension")
-	return nil
-}
 
 func appendServerHelloExtension(t *testing.T, body []byte, typ uint16, value []byte) []byte {
 	t.Helper()
@@ -85,7 +47,7 @@ func TestTicketRequestWireFormatAndMessagePlacement(t *testing.T) {
 		t.Fatalf("ticket_request = %#v, present=%v", parsed.ticketRequest, parsed.ticketRequest.Enabled)
 	}
 	for _, value := range [][]byte{nil, {1}, {1, 2, 3}} {
-		_, err = parseClientHello(replaceClientHelloTicketRequest(t, wire, value))
+		_, err = parseClientHello(replaceClientHelloExtension(t, wire, extTicketRequest, value))
 		if description, ok := protocolAlert(err); !ok || description != alertDecodeError {
 			t.Fatalf("length %d alert=%d ok=%v err=%v", len(value), description, ok, err)
 		}
@@ -186,14 +148,34 @@ func waitForTicketCount(t *testing.T, cache *lruSessionCache, want int) []*Clien
 func runTicketRequestHandshake(t *testing.T, clientConfig, serverConfig *Config, clientConn, serverConn net.Conn) (*Conn, *Conn) {
 	t.Helper()
 	client := Client(clientConn, clientConfig)
-	server := Server(serverConn, serverConfig)
-	serverErr := make(chan error, 1)
-	go func() { serverErr <- server.Handshake() }()
-	if err := client.Handshake(); err != nil {
-		t.Fatal(err)
+	var sentTicket atomic.Bool
+	serverWire := &observeRecordsConn{Conn: serverConn, observe: func(r record) (bool, error) {
+		if r.typ != recordTypeHandshake || r.epoch < 3 {
+			return false, nil
+		}
+		fragments, err := parseHandshakeFragments(r.payload)
+		if err != nil {
+			return false, err
+		}
+		for _, fragment := range fragments {
+			if fragment.typ == handshakeTypeNewSessionTicket {
+				sentTicket.Store(true)
+			}
+		}
+		return false, nil
+	}}
+	server := Server(serverWire, serverConfig)
+	serverWire.owner = server
+	handshakePair(t, client, server)
+	request := clientConfig.SessionTicketRequest
+	requested := request.NewSessionCount
+	if server.ConnectionState().DidResume {
+		requested = request.ResumptionCount
 	}
-	if err := <-serverErr; err != nil {
-		t.Fatal(err)
+	// Handshake waits for serverIssueTickets, so this observes emission even
+	// when the client's zero quota causes it to discard the ticket.
+	if request.Enabled && requested == 0 && sentTicket.Load() {
+		t.Fatal("server sent a NewSessionTicket despite a zero ticket request")
 	}
 	return client, server
 }
@@ -240,8 +222,6 @@ func TestTicketRequestEndToEndCountsAndResumption(t *testing.T) {
 		t.Fatal("ticket_request resumption did not resume")
 	}
 	waitForTicketCount(t, cache, 2)
-	_ = client.Close()
-	_ = server.Close()
 }
 
 func TestTicketRequestZeroLegacyAndWeakNetwork(t *testing.T) {
@@ -275,14 +255,12 @@ func TestTicketRequestZeroLegacyAndWeakNetwork(t *testing.T) {
 				serverWire = &weakNetworkConn{Conn: right, enabled: true}
 				clientConn, serverConn = clientWire, serverWire
 			}
-			client, server := runTicketRequestHandshake(t, clientConfig, serverConfig, clientConn, serverConn)
+			runTicketRequestHandshake(t, clientConfig, serverConfig, clientConn, serverConn)
 			waitForTicketCount(t, cache, test.want)
 			if test.weak {
 				clientWire.disable()
 				serverWire.disable()
 			}
-			_ = client.Close()
-			_ = server.Close()
 		})
 	}
 }
@@ -432,8 +410,6 @@ func TestTicketRequestPoolConcurrentConsumptionAndRejectedResumption(t *testing.
 			t.Fatal("server accepted a ticket encrypted with the old key")
 		}
 		waitForTicketCount(t, cache, 0)
-		_ = client.Close()
-		_ = server.Close()
 	})
 }
 

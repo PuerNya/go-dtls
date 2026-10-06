@@ -1,7 +1,6 @@
 package dtls13
 
 import (
-	"context"
 	"slices"
 	"sync"
 	"time"
@@ -81,28 +80,6 @@ func reserveInitialRecordHistory(records []flightRecord, indices flightRecordInd
 	}
 }
 
-type flightState uint8
-
-const (
-	flightPreparing flightState = iota
-	flightSending
-	flightWaiting
-	flightFinished
-)
-
-type flightEventKind uint8
-
-const (
-	flightEventACK flightEventKind = iota
-	flightEventNextFlight
-	flightEventPeerRetransmit
-)
-
-type flightEvent struct {
-	kind    flightEventKind
-	numbers []recordNumber
-}
-
 type flightRecordIndices struct {
 	inline   [10]int
 	overflow []int
@@ -132,15 +109,12 @@ func (s *flightRecordIndices) at(index int) int {
 // retransmission is rebuilt with a fresh record sequence number while keeping
 // the original handshake message_seq and bytes.
 type flight struct {
-	mu              sync.Mutex
-	records         []flightRecord
-	initialInterval time.Duration
-	maxInterval     time.Duration
-	state           flightState
-	rebuildPending  func(flightRecordIndices) error
-	resizeForMTU    func(int) error
-	firstSentAt     time.Time
-	retransmitted   bool
+	mu             sync.Mutex
+	records        []flightRecord
+	rebuildPending func(flightRecordIndices) error
+	resizeForMTU   func(int) error
+	firstSentAt    time.Time
+	retransmitted  bool
 }
 
 func (f *flight) claimPartialRetransmission() bool {
@@ -247,7 +221,7 @@ func buildPlainFlight(messages []handshakeMessage, mtu int, epoch uint16, firstR
 	if err != nil {
 		return nil, firstRecordSequence, err
 	}
-	f := &flight{state: flightPreparing, records: make([]flightRecord, 0, fragmentCount)}
+	f := &flight{records: make([]flightRecord, 0, fragmentCount)}
 	recordSequence := firstRecordSequence
 	var fragmentStorage [10]handshakeFragment
 	for _, message := range messages {
@@ -318,7 +292,7 @@ func buildProtectedFlight(messages []handshakeMessage, mtu int, cipher *recordCi
 		}
 		wireBytes += len(message.body)
 	}
-	f := &flight{state: flightPreparing, records: make([]flightRecord, 0, fragmentCount)}
+	f := &flight{records: make([]flightRecord, 0, fragmentCount)}
 	// Keep fragment descriptors instead of a separately marshaled payload for
 	// every record. The record cipher writes each descriptor directly into the
 	// final plaintext window before sealing.
@@ -395,7 +369,7 @@ func combineFlightRecords(dst []flightRecord, first, second *flight) []flightRec
 }
 
 func combineFlights(first, second *flight) *flight {
-	combined := &flight{state: flightPreparing}
+	combined := &flight{}
 	combined.records = combineFlightRecords(nil, first, second)
 	combined.rebuildPending = func(_ flightRecordIndices) error {
 		if err := first.refreshPending(); err != nil {
@@ -468,19 +442,6 @@ func fragmentHandshakeMessageInto(dst []handshakeFragment, message handshakeMess
 	return out
 }
 
-func (f *flight) setIntervals(initial, max time.Duration) {
-	f.initialInterval = initial
-	f.maxInterval = max
-}
-func (f *flight) setState(state flightState) { f.mu.Lock(); f.state = state; f.mu.Unlock() }
-func (f *flight) currentState() flightState  { f.mu.Lock(); defer f.mu.Unlock(); return f.state }
-func (f *flight) ackAll() {
-	f.mu.Lock()
-	defer f.mu.Unlock()
-	for i := range f.records {
-		f.records[i].acked = true
-	}
-}
 func (f *flight) ack(numbers []recordNumber) int {
 	f.mu.Lock()
 	defer f.mu.Unlock()
@@ -495,22 +456,6 @@ func (f *flight) ack(numbers []recordNumber) int {
 		}
 	}
 	return changed
-}
-func (f *flight) pendingIndices(dst []int) []int {
-	f.mu.Lock()
-	defer f.mu.Unlock()
-	out := dst[:0]
-	for index, record := range f.records {
-		if !record.acked {
-			if len(out) == cap(out) {
-				grown := make([]int, len(out), len(f.records))
-				copy(grown, out)
-				out = grown
-			}
-			out = append(out, index)
-		}
-	}
-	return out
 }
 func (f *flight) nextRecordSequence() uint64 {
 	f.mu.Lock()
@@ -560,24 +505,7 @@ func (f *flight) hasAcknowledgedRecord() bool {
 
 // Wire windows alias immutable flight storage and are valid for synchronous
 // reads. Rebuilds replace, rather than modify, published backing arrays.
-func (f *flight) pendingWire(dst [][]byte) [][]byte {
-	f.mu.Lock()
-	defer f.mu.Unlock()
-	out := dst[:0]
-	for _, record := range f.records {
-		if !record.acked {
-			if len(out) == cap(out) {
-				grown := make([][]byte, len(out), len(f.records))
-				copy(grown, out)
-				out = grown
-			}
-			out = append(out, record.wire)
-		}
-	}
-	return out
-}
-
-func (f *flight) nextUnsentWire(maxOutstanding int, dst [][]byte) [][]byte {
+func (f *flight) nextUnsentWire(dst [][]byte) [][]byte {
 	f.mu.Lock()
 	defer f.mu.Unlock()
 	outstanding := 0
@@ -592,7 +520,7 @@ func (f *flight) nextUnsentWire(maxOutstanding int, dst [][]byte) [][]byte {
 	}
 	capacity := len(f.records)
 	if protected {
-		capacity = max(maxOutstanding-outstanding, 0)
+		capacity = max(10-outstanding, 0)
 	}
 	var out [][]byte
 	if cap(dst) < capacity {
@@ -633,169 +561,4 @@ func (f *flight) retransmitWire(maxRecords int, dst [][]byte) [][]byte {
 		}
 	}
 	return out
-}
-
-// transmit sends all unacknowledged records immediately and after every
-// timeout. ACKs may be applied concurrently through ack. The caller owns ACK
-// parsing because ACK records arrive through the normal record layer.
-func (f *flight) transmit(ctx context.Context, send func([]byte) error, acked <-chan struct{}) error {
-	f.setState(flightSending)
-	interval := f.initialInterval
-	if interval <= 0 {
-		interval = time.Second
-	}
-	max := f.maxInterval
-	if max < interval {
-		max = interval
-	}
-	sendPending := func(refresh bool) error {
-		if refresh {
-			if err := f.refreshPending(); err != nil {
-				return err
-			}
-		}
-		var storage [10][]byte
-		for _, wire := range f.pendingWire(storage[:0]) {
-			if err := send(wire); err != nil {
-				return err
-			}
-		}
-		return nil
-	}
-	if err := sendPending(false); err != nil {
-		return err
-	}
-	if f.complete() {
-		f.setState(flightFinished)
-		return nil
-	}
-	f.setState(flightWaiting)
-	timer := time.NewTimer(interval)
-	defer timer.Stop()
-	for {
-		select {
-		case <-ctx.Done():
-			return ctx.Err()
-		case <-acked:
-			if f.complete() {
-				f.setState(flightFinished)
-				return nil
-			}
-			if err := sendPending(true); err != nil {
-				return err
-			}
-			resetTimer(timer, interval)
-		case <-timer.C:
-			if err := sendPending(true); err != nil {
-				return err
-			}
-			if interval < max {
-				interval *= 2
-				if interval > max {
-					interval = max
-				}
-			}
-			timer.Reset(interval)
-		}
-	}
-}
-
-func resetTimer(timer *time.Timer, interval time.Duration) {
-	if !timer.Stop() {
-		select {
-		case <-timer.C:
-		default:
-		}
-	}
-	timer.Reset(interval)
-}
-
-// runStateMachine drives RFC 9147's SENDING/WAITING portion of the flight
-// state machine. For flights that are implicitly acknowledged, receipt of the
-// next flight completes this flight. Peer retransmissions trigger an immediate
-// retransmission without waiting for the timer.
-func (f *flight) runStateMachine(ctx context.Context, send func([]byte) error, events <-chan flightEvent, explicitACKRequired bool) error {
-	interval := f.initialInterval
-	if interval <= 0 {
-		interval = time.Second
-	}
-	max := f.maxInterval
-	if max < interval {
-		max = interval
-	}
-	sendPending := func(refresh bool) error {
-		f.setState(flightSending)
-		if refresh {
-			if err := f.refreshPending(); err != nil {
-				return err
-			}
-		}
-		var storage [10][]byte
-		for _, wire := range f.pendingWire(storage[:0]) {
-			if err := send(wire); err != nil {
-				return err
-			}
-		}
-		f.setState(flightWaiting)
-		return nil
-	}
-	if err := sendPending(false); err != nil {
-		return err
-	}
-	if f.complete() {
-		f.setState(flightFinished)
-		return nil
-	}
-	timer := time.NewTimer(interval)
-	defer timer.Stop()
-	reset := func(d time.Duration) {
-		if !timer.Stop() {
-			select {
-			case <-timer.C:
-			default:
-			}
-		}
-		timer.Reset(d)
-	}
-	for {
-		select {
-		case <-ctx.Done():
-			return ctx.Err()
-		case event := <-events:
-			switch event.kind {
-			case flightEventACK:
-				f.ack(event.numbers)
-				if f.complete() {
-					f.setState(flightFinished)
-					return nil
-				}
-				if err := sendPending(true); err != nil {
-					return err
-				}
-				reset(interval)
-			case flightEventNextFlight:
-				if !explicitACKRequired {
-					f.ackAll()
-					f.setState(flightFinished)
-					return nil
-				}
-			case flightEventPeerRetransmit:
-				if err := sendPending(true); err != nil {
-					return err
-				}
-				reset(interval)
-			}
-		case <-timer.C:
-			if err := sendPending(true); err != nil {
-				return err
-			}
-			if interval < max {
-				interval *= 2
-				if interval > max {
-					interval = max
-				}
-			}
-			timer.Reset(interval)
-		}
-	}
 }

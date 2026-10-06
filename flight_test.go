@@ -2,8 +2,6 @@ package dtls13
 
 import (
 	"bytes"
-	"context"
-	"errors"
 	"testing"
 	"time"
 )
@@ -381,18 +379,17 @@ func TestProtectedFlightUsesTenRecordSlidingWindow(t *testing.T) {
 
 func TestFlightWindowMethodsReuseDestination(t *testing.T) {
 	f := &flight{records: []flightRecord{{wire: []byte("record"), number: recordNumber{epoch: 2}}}}
-	var indexStorage [10]int
-	indices := f.pendingIndices(indexStorage[:0])
-	if len(indices) != 1 || &indices[0] != &indexStorage[0] {
-		t.Fatalf("pending indices did not reuse destination: %v", indices)
-	}
 	var wireStorage [10][]byte
-	wires := f.pendingWire(wireStorage[:0])
+	wires := f.nextUnsentWire(wireStorage[:0])
 	if len(wires) != 1 || &wires[0] != &wireStorage[0] || string(wires[0]) != "record" {
-		t.Fatalf("pending wire did not reuse destination: %q", wires)
+		t.Fatalf("unsent wire did not reuse destination: %q", wires)
 	}
 	if &wires[0][0] != &f.records[0].wire[0] {
-		t.Fatal("pending wire copied immutable flight storage")
+		t.Fatal("unsent wire copied immutable flight storage")
+	}
+	wires = f.retransmitWire(10, wireStorage[:0])
+	if len(wires) != 1 || &wires[0] != &wireStorage[0] || &wires[0][0] != &f.records[0].wire[0] {
+		t.Fatal("retransmission did not reuse destination and immutable flight storage")
 	}
 }
 
@@ -459,61 +456,6 @@ func TestFlightRTTAdjustsAndResetsRetransmitTimer(t *testing.T) {
 	conn.observeFlightRTT(retransmitted)
 	if got := conn.flightInterval(); got != time.Second {
 		t.Fatalf("retransmitted flight changed interval to %v", got)
-	}
-}
-
-func TestFlightRetransmitsOnlyUnackedRecords(t *testing.T) {
-	f, _, err := buildPlainFlight([]handshakeMessage{{typ: 1, sequence: 0, body: bytes.Repeat([]byte{1}, 40)}}, 40, 0, 0)
-	if err != nil {
-		t.Fatal(err)
-	}
-	if len(f.records) < 2 {
-		t.Fatal("test requires multiple records")
-	}
-	f.setIntervals(5*time.Millisecond, 10*time.Millisecond)
-	ackEvent := make(chan struct{}, 1)
-	ctx, cancel := context.WithTimeout(context.Background(), time.Second)
-	defer cancel()
-	counts := make([]int, len(f.records))
-	oldRemaining := make([]recordNumber, len(f.records)-1)
-	for i := 1; i < len(f.records); i++ {
-		oldRemaining[i-1] = f.records[i].number
-	}
-	completed := false
-	err = f.transmit(ctx, func(wire []byte) error {
-		for i := range f.records {
-			if bytes.Equal(f.records[i].wire, wire) {
-				counts[i]++
-				if i == 0 && counts[i] == 1 {
-					f.ack([]recordNumber{f.records[i].number})
-					ackEvent <- struct{}{}
-				}
-				break
-			}
-		}
-		allTwice := true
-		for i := 1; i < len(counts); i++ {
-			if counts[i] < 2 {
-				allTwice = false
-			}
-		}
-		if allTwice && !completed {
-			completed = true
-			f.ack(oldRemaining)
-			ackEvent <- struct{}{}
-		}
-		return nil
-	}, ackEvent)
-	if err != nil {
-		t.Fatal(err)
-	}
-	if counts[0] != 1 {
-		t.Fatalf("acked record sent %d times", counts[0])
-	}
-	for i := 1; i < len(f.records); i++ {
-		if counts[i] < 2 || !f.records[i].hasPrior || f.records[i].priorNumber == f.records[i].number {
-			t.Fatalf("record %d was not retransmitted", i)
-		}
 	}
 }
 
@@ -587,92 +529,6 @@ func TestFlightRefreshSupportsMoreThanInlineWindow(t *testing.T) {
 	}
 }
 
-func TestFlightContextCancellation(t *testing.T) {
-	f, _, err := buildPlainFlight([]handshakeMessage{{typ: 1, body: []byte{1}}}, 1200, 0, 0)
-	if err != nil {
-		t.Fatal(err)
-	}
-	ctx, cancel := context.WithCancel(context.Background())
-	cancel()
-	err = f.transmit(ctx, func([]byte) error { return nil }, make(chan struct{}))
-	if !errors.Is(err, context.Canceled) {
-		t.Fatalf("got %v", err)
-	}
-}
-
-func TestFlightImplicitAcknowledgement(t *testing.T) {
-	f, _, err := buildPlainFlight([]handshakeMessage{{typ: 1, body: []byte{1}}}, 1200, 0, 0)
-	if err != nil {
-		t.Fatal(err)
-	}
-	events := make(chan flightEvent, 1)
-	events <- flightEvent{kind: flightEventNextFlight}
-	sends := 0
-	if err = f.runStateMachine(context.Background(), func([]byte) error { sends++; return nil }, events, false); err != nil {
-		t.Fatal(err)
-	}
-	if sends != 1 || f.currentState() != flightFinished {
-		t.Fatalf("sends=%d state=%d", sends, f.currentState())
-	}
-}
-
-func TestFlightExplicitACKAndPeerRetransmit(t *testing.T) {
-	f, _, err := buildPlainFlight([]handshakeMessage{{typ: 1, body: []byte{1}}}, 1200, 0, 0)
-	if err != nil {
-		t.Fatal(err)
-	}
-	events := make(chan flightEvent, 3)
-	events <- flightEvent{kind: flightEventNextFlight} // Must not finish this flight.
-	events <- flightEvent{kind: flightEventPeerRetransmit}
-	events <- flightEvent{kind: flightEventACK, numbers: []recordNumber{f.records[0].number}}
-	sends := 0
-	if err = f.runStateMachine(context.Background(), func([]byte) error { sends++; return nil }, events, true); err != nil {
-		t.Fatal(err)
-	}
-	if sends != 2 || f.currentState() != flightFinished {
-		t.Fatalf("sends=%d state=%d", sends, f.currentState())
-	}
-}
-
-func TestFlightPartialACKImmediatelyRetransmitsOnlyPendingRecords(t *testing.T) {
-	f, _, err := buildPlainFlight([]handshakeMessage{{typ: 1, body: bytes.Repeat([]byte{1}, 40)}}, 40, 0, 0)
-	if err != nil {
-		t.Fatal(err)
-	}
-	if len(f.records) < 2 {
-		t.Fatal("test requires multiple records")
-	}
-	events := make(chan flightEvent, 2)
-	events <- flightEvent{kind: flightEventACK, numbers: []recordNumber{f.records[0].number}}
-	remaining := make([]recordNumber, 0, len(f.records)-1)
-	for i := 1; i < len(f.records); i++ {
-		remaining = append(remaining, f.records[i].number)
-	}
-	events <- flightEvent{kind: flightEventACK, numbers: remaining}
-
-	counts := make([]int, len(f.records))
-	err = f.runStateMachine(context.Background(), func(wire []byte) error {
-		for i := range f.records {
-			if bytes.Equal(f.records[i].wire, wire) {
-				counts[i]++
-				break
-			}
-		}
-		return nil
-	}, events, true)
-	if err != nil {
-		t.Fatal(err)
-	}
-	if counts[0] != 1 {
-		t.Fatalf("acked record sent %d times", counts[0])
-	}
-	for i := 1; i < len(counts); i++ {
-		if counts[i] != 2 {
-			t.Fatalf("pending record %d sent %d times, want immediate retransmission", i, counts[i])
-		}
-	}
-}
-
 func TestActivePartialACKRetransmitsAndFillsProtectedWindow(t *testing.T) {
 	sender, _ := recordCipherPair(t, TLS_AES_128_GCM_SHA256, 2)
 	messages := make([]handshakeMessage, 11)
@@ -683,7 +539,7 @@ func TestActivePartialACKRetransmitsAndFillsProtectedWindow(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	initial := f.nextUnsentWire(10, nil)
+	initial := f.nextUnsentWire(nil)
 	if len(initial) != 10 {
 		t.Fatalf("initial window=%d", len(initial))
 	}
@@ -720,7 +576,7 @@ func TestRepeatedPartialACKAdvancesProtectedWindowWithoutRepeatedRetransmission(
 	if err != nil {
 		t.Fatal(err)
 	}
-	if got := len(f.nextUnsentWire(10, nil)); got != 10 {
+	if got := len(f.nextUnsentWire(nil)); got != 10 {
 		t.Fatalf("initial window=%d", got)
 	}
 	firstNumbers := make([]recordNumber, 10)
