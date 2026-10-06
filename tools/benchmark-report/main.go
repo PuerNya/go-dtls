@@ -124,11 +124,11 @@ type realUDPSkipAllowance struct {
 
 var realUDPSkipAllowances = map[string]realUDPSkipAllowance{
 	"BenchmarkWolfSSLFeatureRealUDP/MutualTLSSessionResumption/WolfSSLClient/GoServer": {
-		output: "wolfSSL client cannot parse the go-dtls mTLS session ticket",
+		output: "wolfSSL client refuses to fragment the first ClientHello containing the mTLS ticket",
 		reason: [3]string{
-			"wolfSSL client cannot parse the go-dtls mTLS session ticket",
-			"wolfSSL 客户端无法解析 go-dtls 的 mTLS session ticket",
-			"Клиент wolfSSL не может разобрать mTLS session ticket от go-dtls",
+			"wolfSSL client refuses to fragment the first ClientHello containing the mTLS ticket",
+			"wolfSSL 客户端拒绝分片发送携带 mTLS ticket 的首个 ClientHello",
+			"Клиент wolfSSL отказывается фрагментировать первый ClientHello с билетом mTLS",
 		},
 		evidence:       "TestInteropWolfSSLClientMutualTLSSessionResumption: wolfSSL_connect resume error -328, malformed buffer input error",
 		verifiedCommit: reviewedWolfSSLCommit,
@@ -136,31 +136,31 @@ var realUDPSkipAllowances = map[string]realUDPSkipAllowance{
 	"BenchmarkWolfSSLFeatureRealUDP/EarlyData/GoClient/WolfSSLServer": {
 		output: "wolfSSL server rejects go-dtls 0-RTT after HelloRetryRequest",
 		reason: [3]string{
-			"wolfSSL server rejects go-dtls 0-RTT after HelloRetryRequest",
-			"wolfSSL 服务端在 HelloRetryRequest 后拒绝 go-dtls 0-RTT",
-			"Сервер wolfSSL отклоняет 0-RTT go-dtls после HelloRetryRequest",
+			"this fixture enables cookie HRR, which requires rejecting go-dtls 0-RTT",
+			"该场景启用了 cookie HRR，按 RFC 必须拒绝 go-dtls 0-RTT",
+			"В этом сценарии включён cookie HRR, требующий отклонить 0-RTT go-dtls",
 		},
-		evidence:       "TestInteropWolfSSLServerEarlyData: wolfSSL server rejects 0-RTT after its DTLS HelloRetryRequest",
+		evidence:       "RFC 9846 sections 4.2.2 and 4.3.10; the benchmark server uses cookie HRR",
 		verifiedCommit: reviewedWolfSSLCommit,
 	},
 	"BenchmarkWolfSSLFeatureRealUDP/EarlyData/WolfSSLClient/WolfSSLServer": {
 		output: "wolfSSL server rejects wolfSSL client 0-RTT after HelloRetryRequest",
 		reason: [3]string{
-			"wolfSSL server rejects wolfSSL client 0-RTT after HelloRetryRequest",
-			"wolfSSL 服务端在 HelloRetryRequest 后拒绝 wolfSSL 客户端 0-RTT",
-			"Сервер wolfSSL отклоняет 0-RTT клиента wolfSSL после HelloRetryRequest",
+			"this fixture enables cookie HRR, which requires rejecting wolfSSL client 0-RTT",
+			"该场景启用了 cookie HRR，按 RFC 必须拒绝 wolfSSL 客户端 0-RTT",
+			"В этом сценарии включён cookie HRR, требующий отклонить 0-RTT клиента wolfSSL",
 		},
-		evidence:       "wolfSSL 5.9.2 client/server output: Early Data was not sent",
+		evidence:       "RFC 9846 sections 4.2.2 and 4.3.10; the benchmark server uses cookie HRR",
 		verifiedCommit: reviewedWolfSSLCommit,
 	},
 	"BenchmarkHybridKeyExchangeRealUDP/SecP384r1MLKEM1024/GoClient/WolfSSLServer": {
-		output: "wolfSSL server does not complete this DTLS 1.3 hybrid handshake",
+		output: "wolfSSL server receive buffers cannot hold the P384 ClientHello at MTU 4096",
 		reason: [3]string{
-			"wolfSSL server does not complete this DTLS 1.3 hybrid handshake",
-			"wolfSSL 服务端无法完成该 DTLS 1.3 hybrid 握手",
-			"Сервер wolfSSL не завершает это гибридное рукопожатие DTLS 1.3",
+			"wolfSSL server receive buffers cannot hold the P384 ClientHello at MTU 4096",
+			"MTU 4096 下 P384 ClientHello 超出 wolfSSL 服务端接收缓冲",
+			"При MTU 4096 ClientHello P384 превышает приёмные буферы сервера wolfSSL",
 		},
-		evidence:       "TestInteropWolfSSLServerHybridKeyExchange/SecP384r1MLKEM1024",
+		evidence:       "wolfSSL default receive buffer is 1900 bytes; the cookie-bearing P384 ClientHello at MTU 4096 is 1913 bytes (Windows MSG_PEEK is limited to 1500 bytes)",
 		verifiedCommit: reviewedWolfSSLCommit,
 	},
 }
@@ -193,7 +193,7 @@ var reportLanguages = map[string]reportLanguage{
 			"Median time is measured by the wolfSSL client; `ms/conn` means one connection, while `ms/pair` means a full-plus-resumed connection pair and includes the client's built-in wait.",
 		},
 		columns:     [6]string{"Benchmark", "Samples", "Median time", "Throughput", "Harness memory", "Harness allocations"},
-		unsupported: "Unsupported",
+		unsupported: "Skipped",
 	},
 	"zh-CN": {
 		labelIndex:      1,
@@ -222,7 +222,7 @@ var reportLanguages = map[string]reportLanguage{
 			"中位耗时由 wolfSSL 客户端计时；`ms/conn` 表示单个连接，`ms/pair` 表示由完整连接和恢复连接组成的一组，并包含客户端内置等待。",
 		},
 		columns:     [6]string{"基准测试", "样本数", "中位耗时", "吞吐量", "测试框架内存", "测试框架分配次数"},
-		unsupported: "不支持",
+		unsupported: "跳过",
 	},
 	"ru": {
 		labelIndex:      2,
@@ -251,7 +251,7 @@ var reportLanguages = map[string]reportLanguage{
 			"Медианное время измеряет клиент wolfSSL; `ms/conn` означает одно соединение, а `ms/pair` означает пару из полного и возобновленного соединений с учетом встроенного ожидания клиента.",
 		},
 		columns:     [6]string{"Бенчмарк", "Замеры", "Медианное время", "Пропускная способность", "Память стенда", "Аллокации стенда"},
-		unsupported: "Не поддерживается",
+		unsupported: "Пропущено",
 	},
 }
 

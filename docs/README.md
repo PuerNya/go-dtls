@@ -512,7 +512,7 @@ serverConfig.MaxSessionTickets = 4
 - 发送端采用一条 record 一个 UDP datagram 的合法模式，未暴露可选的多 record 聚合 API。
 - 未暴露并行多个 PHA 请求；RFC 允许但不要求该能力。
 - RRC 自动 rebind 依赖 transport 能接收不同来源并定向发送；标准 Listener 支持，connected UDP 客户端受操作系统 peer 过滤约束。空 CID 不能跨五元组唯一路由。
-- wolfSSL master `6502cdd`（版本字符串 5.9.2）互通构建支持 CID、KeyUpdate、PHA、session ticket、0-RTT、`SESSION_CERTS`、direct external PSK 和三个 hybrid group，但不实现 RFC 8449、RFC 8879、RFC 9149、RFC 9258 importer 或 RFC 9853 RRC。其服务端会忽略本库客户端的 `ticket_request` 并保持普通恢复；这只证明兼容回退。其 ECH/HPKE 构建无法完成 DTLS accepted-ECH 握手，因此只记录成功的 GREASE ECH 普通握手，不声称 accepted-ECH 互通。Hybrid 互通中，wolfSSL 客户端方向三组均通过，服务端方向通过 X25519/P-256 hybrid；其服务端不能完成分片 hybrid ClientHello，且 P-384 hybrid 即使未分片仍超时。对端其他限制为：服务端 HRR 拒绝本库客户端 0-RTT；客户端不能解析本库 1421 字节 mTLS ticket；客户端在最终 ACK 丢失后不重传 Finished。
+- wolfSSL master `3136f17`（版本字符串 5.9.4）互通构建支持 CID、KeyUpdate、PHA、session ticket、0-RTT、`SESSION_CERTS`、direct external PSK 和三个 hybrid group，但不实现 RFC 8449、RFC 8879、RFC 9149、RFC 9258 importer 或 RFC 9853 RRC。其服务端会忽略本库客户端的 `ticket_request` 并保持普通恢复；这只证明兼容回退。其 ECH/HPKE 构建无法完成 DTLS accepted-ECH 握手，因此只记录成功的 GREASE ECH 普通握手，不声称 accepted-ECH 互通。Hybrid 互通中，wolfSSL 客户端方向三组均通过；服务端方向在 WSL 使用测试 MTU 1850 时三组均通过，Windows 示例的 1500 字节 MSG_PEEK 缓冲仍阻断 P-384。默认 stateless 入口不能重组该首个分片 ClientHello，1900 字节接收缓冲也容不下 MTU 4096 时带 cookie 的 P-384 ClientHello；这些是收包/分片边界，不是算法不支持。0-RTT 双向通过；wolfSSL 服务端的接受用例关闭 cookie HRR，另有独立用例验证 HRR 按 RFC 拒绝早期数据后仍可恢复并交换 1-RTT 数据。wolfSSL 客户端能够解析本库 1421 字节 mTLS ticket，但恢复时拒绝分片发送过大的首个 ClientHello。丢失全部最终 ACK 副本后，双方客户端均会重传 Finished。
 
 ## Benchmark
 
@@ -551,7 +551,7 @@ go test -run '^$' -bench '^BenchmarkProtectedRecord(Seal|RoundTripInPlace)$' -be
 - RFC 9846 alert 测试覆盖 wire 格式错误、非预期握手消息（包括同批次 Finished 后的消息）、未请求的 CertificateEntry 扩展、final ACK 等待、握手后乱序、`close_notify` 和本地加密失败。
 - RFC 9853 测试覆盖 RRC message/状态机、真实 UDP NAT rebind、CID 更新、弱网组合和连接资源生命周期。
 - parser/record fuzz 覆盖四套 AEAD 的复制与原地解密差分。
-- wolfSSL master `6502cdd` 双向真实 UDP 互通测试覆盖 HRR、RSA-PSS 证书握手、Finished ACK、应用数据、AES-GCM、AES-128-CCM、direct external PSK、CID、KeyUpdate、PHA、普通 session resumption 和受支持方向的三个 hybrid group；另覆盖本库发出的 RFC 8701 CH/CR/NST GREASE、RFC 9149 未协商回退、immediate CID 切换、mTLS 恢复、丢最终 ACK 后的 Finished 重传，以及 wolfSSL 客户端发起的 0-RTT。ECH 只验证 GREASE 回退；对端当前无法完成 DTLS accepted-ECH。
+- wolfSSL master `3136f17` 双向真实 UDP 互通测试覆盖 HRR、RSA-PSS 证书握手、Finished ACK、应用数据、AES-GCM、AES-128-CCM、direct external PSK、CID、KeyUpdate、PHA、普通 session resumption 和受支持方向的三个 hybrid group；另覆盖本库发出的 RFC 8701 CH/CR/NST GREASE、RFC 9149 未协商回退、immediate CID 切换、mTLS 恢复、丢最终 ACK 后的 Finished 重传，以及双向 0-RTT 和 HRR 拒绝后的 1-RTT 回退。ECH 只验证 GREASE 回退；对端当前无法完成 DTLS accepted-ECH。
 
 开发环境、必需检查、性能验证和提交规范见 [CONTRIBUTING.md](CONTRIBUTING.md)。
 

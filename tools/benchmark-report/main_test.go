@@ -418,7 +418,7 @@ func TestParseRealUDPJSON(t *testing.T) {
 	var input bytes.Buffer
 	encoder := json.NewEncoder(&input)
 	for _, event := range []goTestEvent{
-		{Action: "output", Test: skipped, Output: "    interop_test.go:1079: wolfSSL server does not complete this DTLS 1.3 hybrid handshake\n"},
+		{Action: "output", Test: skipped, Output: "    interop_test.go:1079: wolfSSL server receive buffers cannot hold the P384 ClientHello at MTU 4096\n"},
 		{Action: "skip", Test: skipped},
 		{Action: "output", Test: result, Output: result + "\t"},
 		{Action: "output", Output: "1 100 ns/op 10 B/op 1 allocs/op\n"},
@@ -431,7 +431,7 @@ func TestParseRealUDPJSON(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if !report.realUDPJSON || report.realUDPSkips[skipped] != "wolfSSL server does not complete this DTLS 1.3 hybrid handshake" || report.realUDPSamples[skipped] != 1 {
+	if !report.realUDPJSON || report.realUDPSkips[skipped] != "wolfSSL server receive buffers cannot hold the P384 ClientHello at MTU 4096" || report.realUDPSamples[skipped] != 1 {
 		t.Fatalf("structured skip was not preserved: %#v", report)
 	}
 	if len(report.benchmarks) != 1 || report.benchmarks[0].name != result || report.benchmarks[0].samples != 1 {
@@ -457,7 +457,7 @@ func TestValidateRealUDPMatrix(t *testing.T) {
 	if err := writeReport(&output, report, "", "", "", reportLanguages["zh-CN"], ""); err != nil {
 		t.Fatal(err)
 	}
-	if !strings.Contains(output.String(), "不支持: wolfSSL 服务端无法完成该 DTLS 1.3 hybrid 握手") {
+	if !strings.Contains(output.String(), "跳过: MTU 4096 下 P384 ClientHello 超出 wolfSSL 服务端接收缓冲") {
 		t.Fatalf("report does not expose the allowlisted reason:\n%s", output.String())
 	}
 	if !strings.Contains(output.String(), "该限制最后验证于 wolfSSL commit "+reviewedWolfSSLCommit) {

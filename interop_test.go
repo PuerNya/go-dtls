@@ -13,6 +13,7 @@ import (
 	"os"
 	"os/exec"
 	"path/filepath"
+	"runtime"
 	"strconv"
 	"strings"
 	"sync"
@@ -28,16 +29,18 @@ type wolfSSLInteropOptions struct {
 	args                     []string
 	connections              int
 	clientEarlyData          []byte
+	rejectEarlyData          bool
 	disableServerEcho        bool
 	requireClientCertificate bool
 	loadClientCertificate    bool
 	configure                func(*testing.T, string, *Config)
-	wrapClientConn           func(net.Conn) net.Conn
+	wrapClientConn           func(*Conn)
 	connected                func(*testing.T, *Conn, int)
 	exchanged                func(*testing.T, *Conn, int)
 	exchange                 func(*testing.T, *Conn, int)
 	outputContains           []string
 	unsupportedOutput        string
+	unsupportedReason        string
 	dropClientFinalACK       bool
 }
 
@@ -49,8 +52,8 @@ type lockedBuffer struct {
 
 type dropFinalACKConn struct {
 	net.Conn
+	owner          *Conn
 	mu             sync.Mutex
-	dropNextRead   bool
 	dropped        bool
 	finishedWrites int
 }
@@ -62,8 +65,8 @@ type finalACKProxy struct {
 	mu             sync.Mutex
 	client         *net.UDPAddr
 	dropped        bool
-	armed          bool
 	finishedWrites int
+	clientRecords  [][]byte
 	err            error
 }
 
@@ -89,10 +92,11 @@ func (p *finalACKProxy) run() {
 		if from.Port == p.server.Port && from.IP.Equal(p.server.IP) {
 			p.mu.Lock()
 			client := p.client
-			drop := p.armed && !p.dropped
+			// With no client authentication or tickets, only final ACKs are
+			// sent here. Drop every copy until the client retransmits Finished.
+			drop := p.finishedWrites == 1
 			if drop {
 				p.dropped = true
-				p.armed = false
 			}
 			p.mu.Unlock()
 			if client != nil && !drop {
@@ -108,9 +112,7 @@ func (p *finalACKProxy) run() {
 		p.client = &net.UDPAddr{IP: append(net.IP(nil), from.IP...), Port: from.Port, Zone: from.Zone}
 		if isEpoch2Datagram(buffer[:n]) {
 			p.finishedWrites++
-			if p.finishedWrites == 1 {
-				p.armed = true
-			}
+			p.clientRecords = append(p.clientRecords, bytes.Clone(buffer[:n]))
 		}
 		p.mu.Unlock()
 		if _, err = p.conn.WriteToUDP(buffer[:n], p.server); err != nil {
@@ -153,14 +155,40 @@ func (p *finalACKProxy) Close() {
 	<-p.done
 }
 
+func (p *finalACKProxy) requireFinishedRecords(t *testing.T, conn *Conn) {
+	t.Helper()
+	p.mu.Lock()
+	defer p.mu.Unlock()
+	conn.dispatchMu.Lock()
+	defer conn.dispatchMu.Unlock()
+	for _, wire := range p.clientRecords {
+		original, err := conn.receiveEpochs.selectCipher(wire[0])
+		if err != nil {
+			t.Fatal(err)
+		}
+		cipher := *original
+		cipher.replay = newReplayWindow(64)
+		content, typ, _, err := cipher.open(wire)
+		if err != nil || typ != recordTypeHandshake || len(content) == 0 || content[0] != handshakeTypeFinished {
+			t.Fatalf("final-ACK proxy counted a non-Finished record: type=%d err=%v", typ, err)
+		}
+	}
+}
+
 func (c *dropFinalACKConn) Write(p []byte) (int, error) {
 	if isEpoch2Datagram(p) {
-		c.mu.Lock()
-		c.finishedWrites++
-		if c.finishedWrites == 1 {
-			c.dropNextRead = true
+		// The client also sends epoch-2 ACKs while reading the server flight.
+		// Inspect a copy of the sending cipher so only Finished arms the loss.
+		cipher := *c.owner.sendCipher
+		content, typ, _, err := cipher.open(p)
+		if err != nil {
+			return 0, err
 		}
-		c.mu.Unlock()
+		if typ == recordTypeHandshake && len(content) > 0 && content[0] == handshakeTypeFinished {
+			c.mu.Lock()
+			c.finishedWrites++
+			c.mu.Unlock()
+		}
 	}
 	return c.Conn.Write(p)
 }
@@ -169,9 +197,8 @@ func (c *dropFinalACKConn) Read(p []byte) (int, error) {
 	for {
 		n, err := c.Conn.Read(p)
 		c.mu.Lock()
-		drop := err == nil && c.dropNextRead && !c.dropped
+		drop := err == nil && c.finishedWrites == 1
 		if drop {
-			c.dropNextRead = false
 			c.dropped = true
 		}
 		c.mu.Unlock()
@@ -305,14 +332,16 @@ func TestInteropWolfSSLServerExternalPSK(t *testing.T) {
 func TestInteropWolfSSLServerHybridKeyExchange(t *testing.T) {
 	for _, test := range wolfSSLHybridGroups {
 		t.Run(test.name, func(t *testing.T) {
-			if !test.wolfSSLServer {
-				t.Skip("wolfSSL server does not complete this DTLS 1.3 hybrid handshake")
+			if test.group == tls.SecP384r1MLKEM1024 && runtime.GOOS == "windows" && os.Getenv("GO_DTLS_PROBE_WOLFSSL_SKIPS") != "1" {
+				t.Skip("wolfSSL example server's 1500-byte MSG_PEEK buffer rejects the 1824-byte ClientHello with WSAEMSGSIZE")
 			}
 			testInteropWolfSSLServerOptions(t, wolfSSLInteropOptions{
 				args: []string{"--pqc", test.name},
 				configure: func(_ *testing.T, _ string, config *Config) {
 					config.CurvePreferences = []tls.CurveID{test.group}
-					config.MTU = 4096
+					// wolfSSL's stateless path needs an unfragmented first
+					// ClientHello; its default receive buffer is 1900 bytes.
+					config.MTU = 1850
 				},
 			})
 		})
@@ -414,10 +443,26 @@ func TestInteropWolfSSLServerMutualTLSSessionResumption(t *testing.T) {
 }
 
 func TestInteropWolfSSLServerEarlyData(t *testing.T) {
+	testInteropWolfSSLServerEarlyData(t, false)
+}
+
+func TestInteropWolfSSLServerRejectsEarlyDataAfterHRR(t *testing.T) {
+	testInteropWolfSSLServerEarlyData(t, true)
+}
+
+func testInteropWolfSSLServerEarlyData(t *testing.T, reject bool) {
+	t.Helper()
+	args := []string{"-r", "-0"}
+	if !reject {
+		// RFC 9846 forbids accepting early data after HRR. Disable the
+		// example's cookie exchange only for this acceptance fixture.
+		args = append(args, "-J", "n")
+	}
 	testInteropWolfSSLServerOptions(t, wolfSSLInteropOptions{
-		args:            []string{"-r", "-0"},
+		args:            args,
 		connections:     2,
 		clientEarlyData: []byte("early go-dtls"),
+		rejectEarlyData: reject,
 		configure: func(_ *testing.T, _ string, config *Config) {
 			config.ClientSessionCache = NewLRUClientSessionCache(2)
 		},
@@ -431,9 +476,9 @@ func TestInteropWolfSSLServerRetransmitsFinishedAfterDroppedFinalACK(t *testing.
 		configure: func(_ *testing.T, _ string, config *Config) {
 			config.FlightInterval = 20 * time.Millisecond
 		},
-		wrapClientConn: func(conn net.Conn) net.Conn {
-			wire = &dropFinalACKConn{Conn: conn}
-			return wire
+		wrapClientConn: func(conn *Conn) {
+			wire = &dropFinalACKConn{Conn: conn.conn, owner: conn}
+			conn.conn = wire
 		},
 		exchanged: func(t *testing.T, _ *Conn, _ int) {
 			dropped, finishedWrites := wire.result()
@@ -515,11 +560,12 @@ func testInteropWolfSSLServerOptions(t *testing.T, options wolfSSLInteropOptions
 			clientConfig.ServerName = "127.0.0.1"
 			conn = Client(raw, clientConfig)
 			n, earlyErr := conn.WriteEarlyData(options.clientEarlyData)
-			if errors.Is(earlyErr, ErrEarlyDataRejected) {
-				_ = conn.Close()
-				t.Skip("wolfSSL server rejects 0-RTT after its DTLS HelloRetryRequest")
-			}
-			if earlyErr != nil || n != len(options.clientEarlyData) {
+			if options.rejectEarlyData {
+				if !errors.Is(earlyErr, ErrEarlyDataRejected) || n != 0 {
+					_ = conn.Close()
+					t.Fatalf("expected HRR to reject early data: n=%d err=%v", n, earlyErr)
+				}
+			} else if earlyErr != nil || n != len(options.clientEarlyData) {
 				_ = conn.Close()
 				t.Fatalf("write early data: n=%d err=%v", n, earlyErr)
 			}
@@ -530,13 +576,14 @@ func testInteropWolfSSLServerOptions(t *testing.T, options wolfSSLInteropOptions
 			}
 			clientConfig := config.Clone()
 			clientConfig.ServerName = "127.0.0.1"
-			conn = Client(options.wrapClientConn(raw), clientConfig)
+			conn = Client(raw, clientConfig)
+			options.wrapClientConn(conn)
 			err = conn.Handshake()
 		} else {
 			conn, err = DialWithDialer(dialer, "udp4", address, config)
 		}
 		if err != nil {
-			t.Fatalf("Go client to wolfSSL 5.9.2 server: %v\n%s", err, output.String())
+			t.Fatalf("Go client to wolfSSL server: %v\n%s", err, output.String())
 		}
 		_ = conn.SetDeadline(time.Now().Add(5 * time.Second))
 		if options.connected != nil {
@@ -700,6 +747,7 @@ func TestInteropWolfSSLClientMutualTLSSessionResumption(t *testing.T) {
 		},
 		connected:         requireResumptionOnSecondConnection,
 		unsupportedOutput: "wolfSSL_connect resume error -328, malformed buffer input error",
+		unsupportedReason: "wolfSSL client refuses to fragment the first ClientHello containing the 1421-byte mTLS ticket",
 	})
 }
 
@@ -826,8 +874,8 @@ func testInteropWolfSSLClientOptions(t *testing.T, options wolfSSLInteropOptions
 			conn, err = result.conn, result.err
 		case processErr := <-done:
 			text := output.String()
-			if options.unsupportedOutput != "" && strings.Contains(text, options.unsupportedOutput) {
-				t.Skipf("wolfSSL peer limitation: %s", options.unsupportedOutput)
+			if index > 0 && options.unsupportedOutput != "" && strings.Contains(text, options.unsupportedOutput) && os.Getenv("GO_DTLS_PROBE_WOLFSSL_SKIPS") != "1" {
+				t.Skipf("%s: %s", options.unsupportedReason, options.unsupportedOutput)
 			}
 			t.Fatalf("wolfSSL client exited before connection %d: %v\n%s", index+1, processErr, text)
 		case <-time.After(5 * time.Second):
@@ -847,11 +895,8 @@ func testInteropWolfSSLClientOptions(t *testing.T, options wolfSSLInteropOptions
 			if err = conn.Handshake(); err != nil {
 				t.Fatalf("handshake through final-ACK proxy: %v", err)
 			}
-			if !proxy.waitForRetransmit(1500 * time.Millisecond) {
+			if !proxy.waitForRetransmit(3 * time.Second) {
 				dropped, finishedWrites, proxyErr := proxy.result()
-				if dropped && finishedWrites == 1 && proxyErr == nil {
-					t.Skip("wolfSSL client did not retransmit Finished after its final ACK was dropped")
-				}
 				t.Fatalf("final-ACK proxy dropped=%v Finished writes=%d err=%v", dropped, finishedWrites, proxyErr)
 			}
 		}
@@ -873,6 +918,9 @@ func testInteropWolfSSLClientOptions(t *testing.T, options wolfSSLInteropOptions
 		}
 		if options.exchanged != nil {
 			options.exchanged(t, conn, index)
+		}
+		if proxy != nil {
+			proxy.requireFinishedRecords(t, conn)
 		}
 		_ = conn.Close()
 	}
@@ -1091,7 +1139,7 @@ func BenchmarkWolfSSLFeatureRealUDP(b *testing.B) {
 			return client, server
 		}, wolfClientArgs: []string{"-Q", "-l", "TLS13-AES128-GCM-SHA256"}, wolfServerArgs: []string{"-Q", "-l", "TLS13-AES128-GCM-SHA256"}, wolfServerOutput: []string{"Successfully requested post-hs certificate"}},
 		{name: "SessionResumption", configs: resumptionConfigs(false), suite: TLS_AES_128_GCM_SHA256, resume: true, wolfClientProcess: true, wolfClientArgs: []string{"-r", "--waitTicket", "-l", "TLS13-AES128-GCM-SHA256"}, wolfServerArgs: []string{"-r", "-l", "TLS13-AES128-GCM-SHA256"}, wolfClientOutput: []string{"reused session id"}},
-		{name: "MutualTLSSessionResumption", configs: mutualTLSConfigs(true), suite: TLS_AES_128_GCM_SHA256, resume: true, mutualTLS: true, wolfClientProcess: true, loadWolfClientCertificate: true, requireWolfClientCertificate: true, wolfClientArgs: []string{"-r", "--waitTicket", "-l", "TLS13-AES128-GCM-SHA256"}, wolfServerArgs: []string{"-r", "-l", "TLS13-AES128-GCM-SHA256"}, wolfClientOutput: []string{"reused session id"}, wolfClientGoServerUnsupported: "wolfSSL client cannot parse the go-dtls mTLS session ticket"},
+		{name: "MutualTLSSessionResumption", configs: mutualTLSConfigs(true), suite: TLS_AES_128_GCM_SHA256, resume: true, mutualTLS: true, wolfClientProcess: true, loadWolfClientCertificate: true, requireWolfClientCertificate: true, wolfClientArgs: []string{"-r", "--waitTicket", "-l", "TLS13-AES128-GCM-SHA256"}, wolfServerArgs: []string{"-r", "-l", "TLS13-AES128-GCM-SHA256"}, wolfClientOutput: []string{"reused session id"}, wolfClientGoServerUnsupported: "wolfSSL client refuses to fragment the first ClientHello containing the mTLS ticket"},
 		{name: "EarlyData", configs: resumptionConfigs(true), suite: TLS_AES_128_GCM_SHA256, batch: 1, resume: true, earlyData: true, wolfClientProcess: true, wolfClientArgs: []string{"-r", "--waitTicket", "-0", "-l", "TLS13-AES128-GCM-SHA256"}, wolfServerArgs: []string{"-r", "-0", "-l", "TLS13-AES128-GCM-SHA256"}, wolfClientOutput: []string{"reused session id"}, goClientWolfServerUnsupported: "wolfSSL server rejects go-dtls 0-RTT after HelloRetryRequest", wolfClientWolfServerUnsupported: "wolfSSL server rejects wolfSSL client 0-RTT after HelloRetryRequest"},
 	}
 	for _, feature := range features {
@@ -1123,7 +1171,7 @@ func BenchmarkHybridKeyExchangeRealUDP(b *testing.B) {
 			wolfClientArgs: []string{"--pqc", test.name}, wolfServerArgs: []string{"--pqc", test.name},
 		}
 		if !test.wolfSSLServer {
-			feature.goClientWolfServerUnsupported = "wolfSSL server does not complete this DTLS 1.3 hybrid handshake"
+			feature.goClientWolfServerUnsupported = "wolfSSL server receive buffers cannot hold the P384 ClientHello at MTU 4096"
 		}
 		b.Run(test.name, func(b *testing.B) {
 			benchmarkWolfSSLFeatureDirections(b, root, serverPath, clientPath, feature)
