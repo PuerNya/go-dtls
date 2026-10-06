@@ -621,7 +621,11 @@ func (c *Conn) clientProcessServerFlight(s *clientHandshakeState) error {
 	verifiedServerSignature := false
 	stage := serverExpectEncryptedExtensions
 	for stage != serverHandshakeComplete {
-		messages, err := receiveHandshakeMessageWithEarlyBatch(c.conn, s.inbox, s.receiveCipher, nil, nil, nil, s.sendCipher, c.currentMTU(), c)
+		messages, err := receiveHandshakeMessageWithEarlyBatch(c.conn, s.inbox, s.receiveCipher, handshakeReceiveOptions{
+			ackCipher: s.sendCipher,
+			mtu:       c.currentMTU(),
+			owner:     c,
+		})
 		if err != nil {
 			return err
 		}

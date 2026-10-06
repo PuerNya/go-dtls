@@ -201,7 +201,14 @@ func (c *Conn) receiveHandshakeWithRetransmitOnEarly(conn net.Conn, inbox *hands
 		if err := conn.SetReadDeadline(next); err != nil {
 			return completedHandshakeBatch{}, err
 		}
-		messages, err := receiveHandshakeMessageWithEarlyBatch(conn, inbox, cipher, early, onEarly, outgoing, ackCipher, c.currentMTU(), c)
+		messages, err := receiveHandshakeMessageWithEarlyBatch(conn, inbox, cipher, handshakeReceiveOptions{
+			early:     early,
+			onEarly:   onEarly,
+			outgoing:  outgoing,
+			ackCipher: ackCipher,
+			mtu:       c.currentMTU(),
+			owner:     c,
+		})
 		if err == nil {
 			_ = conn.SetReadDeadline(c.handshakeDeadline)
 			return messages, nil
@@ -242,7 +249,7 @@ func receiveHandshakeMessage(conn net.Conn, inbox *handshakeInbox, cipher *recor
 }
 
 func receiveHandshakeMessageBatch(conn net.Conn, inbox *handshakeInbox, cipher *recordCipher) (completedHandshakeBatch, error) {
-	return receiveHandshakeMessageWithEarlyBatch(conn, inbox, cipher, nil, nil, nil, nil, 0, nil)
+	return receiveHandshakeMessageWithEarlyBatch(conn, inbox, cipher, handshakeReceiveOptions{})
 }
 
 func (c *Conn) receiveSecondClientHello(conn net.Conn, inbox *handshakeInbox, hrr *flight) (completedHandshakeBatch, error) {
@@ -295,14 +302,31 @@ func (c *Conn) receiveSecondClientHello(conn net.Conn, inbox *handshakeInbox, hr
 }
 
 func receiveHandshakeMessageWithEarly(conn net.Conn, inbox *handshakeInbox, cipher *recordCipher, outgoing *flight, ackCipher *recordCipher, mtu int, owner *Conn) ([]completedHandshake, error) {
-	batch, err := receiveHandshakeMessageWithEarlyBatch(conn, inbox, cipher, nil, nil, outgoing, ackCipher, mtu, owner)
+	batch, err := receiveHandshakeMessageWithEarlyBatch(conn, inbox, cipher, handshakeReceiveOptions{
+		outgoing:  outgoing,
+		ackCipher: ackCipher,
+		mtu:       mtu,
+		owner:     owner,
+	})
 	if err != nil {
 		return nil, err
 	}
 	return batch.slice(), nil
 }
 
-func receiveHandshakeMessageWithEarlyBatch(conn net.Conn, inbox *handshakeInbox, cipher, early *recordCipher, onEarly func([]byte) error, outgoing *flight, ackCipher *recordCipher, mtu int, owner *Conn) (completedHandshakeBatch, error) {
+type handshakeReceiveOptions struct {
+	early     *recordCipher
+	onEarly   func([]byte) error
+	outgoing  *flight
+	ackCipher *recordCipher
+	mtu       int
+	owner     *Conn
+}
+
+func receiveHandshakeMessageWithEarlyBatch(conn net.Conn, inbox *handshakeInbox, cipher *recordCipher, options handshakeReceiveOptions) (completedHandshakeBatch, error) {
+	early, onEarly := options.early, options.onEarly
+	outgoing, ackCipher := options.outgoing, options.ackCipher
+	mtu, owner := options.mtu, options.owner
 	buffer := acquireDatagramBuffer()
 	defer releaseDatagramBuffer(buffer)
 	for {
