@@ -363,10 +363,7 @@ func (c *Conn) respondToConnectionIDRequest(count uint8) {
 	if available < 0 {
 		available = 0
 	}
-	requested := int(count)
-	if requested > available {
-		requested = available
-	}
+	requested := min(int(count), available)
 	connectionIDs := make([][]byte, 0, requested)
 	for i := 0; i < requested && c.config.GetConnectionID != nil; i++ {
 		cid, err := c.config.GetConnectionID()

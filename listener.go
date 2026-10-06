@@ -508,10 +508,7 @@ func (s *packetSession) Read(p []byte) (int, error) {
 		var timer *time.Timer
 		var timeout <-chan time.Time
 		if !deadline.IsZero() {
-			delay := time.Until(deadline)
-			if delay < 0 {
-				delay = 0
-			}
+			delay := max(time.Until(deadline), 0)
 			timer = time.NewTimer(delay)
 			timeout = timer.C
 		}

@@ -16,6 +16,7 @@ import (
 	"hash"
 	"io"
 	"net"
+	"slices"
 	"sync"
 	"time"
 )
@@ -710,13 +711,7 @@ func validateClientSession(config *Config, state *ClientSessionState) *cipherSui
 		return nil
 	}
 	if state.protocol != "" {
-		found := false
-		for _, protocol := range config.NextProtos {
-			if protocol == state.protocol {
-				found = true
-				break
-			}
-		}
+		found := slices.Contains(config.NextProtos, state.protocol)
 		if !found {
 			return nil
 		}
@@ -984,10 +979,7 @@ func (c *Conn) acceptSessionTicket(hello *clientHello, clientHelloBody, initialC
 }
 
 func obfuscatedTicketAge(state *ClientSessionState, now time.Time) uint32 {
-	age := now.Sub(state.receivedAt)
-	if age < 0 {
-		age = 0
-	}
+	age := max(now.Sub(state.receivedAt), 0)
 	return uint32(age/time.Millisecond) + state.ageAdd
 }
 

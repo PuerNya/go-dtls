@@ -82,13 +82,7 @@ func validateEncryptedExtension(hello *clientHello, typ uint16, raw []byte) (pro
 		if parseErr != nil || len(protocols) != 1 {
 			return "", false, &ProtocolError{"invalid server ALPN selection"}
 		}
-		found := false
-		for _, offered := range hello.alpn {
-			if offered == protocols[0] {
-				found = true
-				break
-			}
-		}
+		found := slices.Contains(hello.alpn, protocols[0])
 		if !found {
 			return "", false, alertError(alertNoApplicationProtocol, &ProtocolError{"server selected an unoffered ALPN protocol"})
 		}

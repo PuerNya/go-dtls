@@ -1271,10 +1271,7 @@ func BenchmarkHandshakeReassembly(b *testing.B) {
 	for b.Loop() {
 		r := newReassemblerWithLimit(messageSize)
 		for offset := 0; offset < len(body); offset += fragmentSize {
-			end := offset + fragmentSize
-			if end > len(body) {
-				end = len(body)
-			}
+			end := min(offset+fragmentSize, len(body))
 			fragment := handshakeFragment{typ: handshakeTypeCertificate, messageSequence: 1, length: messageSize, offset: uint32(offset), body: body[offset:end]}
 			if _, _, err := r.add(fragment); err != nil {
 				b.Fatal(err)

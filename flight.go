@@ -2,6 +2,7 @@ package dtls13
 
 import (
 	"context"
+	"slices"
 	"sync"
 	"time"
 )
@@ -38,12 +39,7 @@ func (r *flightRecord) hasNumber(number recordNumber) bool {
 	if r.hasPrior && r.priorNumber == number {
 		return true
 	}
-	for _, prior := range r.earlierNumbers {
-		if prior == number {
-			return true
-		}
-	}
-	return false
+	return slices.Contains(r.earlierNumbers, number)
 }
 
 func (r *flightRecord) historyLength() int {
@@ -54,12 +50,7 @@ func (r *flightRecord) historyLength() int {
 }
 
 func (r *flightRecord) acknowledgedBy(numbers []recordNumber) bool {
-	for _, number := range numbers {
-		if r.hasNumber(number) {
-			return true
-		}
-	}
-	return false
+	return slices.ContainsFunc(numbers, r.hasNumber)
 }
 
 const initialRecordHistoryCapacity = 3
@@ -471,10 +462,7 @@ func fragmentHandshakeMessageInto(dst []handshakeFragment, message handshakeMess
 		out = dst[:0]
 	}
 	for off := 0; off < length; off += maxFragment {
-		end := off + maxFragment
-		if end > length {
-			end = length
-		}
+		end := min(off+maxFragment, length)
 		out = append(out, handshakeFragment{typ: message.typ, messageSequence: message.sequence, length: uint32(length), offset: uint32(off), body: message.body[off:end]})
 	}
 	return out
@@ -604,10 +592,7 @@ func (f *flight) nextUnsentWire(maxOutstanding int, dst [][]byte) [][]byte {
 	}
 	capacity := len(f.records)
 	if protected {
-		capacity = maxOutstanding - outstanding
-		if capacity < 0 {
-			capacity = 0
-		}
+		capacity = max(maxOutstanding-outstanding, 0)
 	}
 	var out [][]byte
 	if cap(dst) < capacity {

@@ -8,6 +8,7 @@ import (
 	"errors"
 	"fmt"
 	"io"
+	"slices"
 	"strings"
 )
 
@@ -702,12 +703,7 @@ func processSecondECHClientHello(outer *clientHello, outerBody []byte, context *
 }
 
 func echConfigOffersCipher(config *echConfig, cipher echCipher) bool {
-	for _, offered := range config.cipherSuites {
-		if offered == cipher {
-			return true
-		}
-	}
-	return false
+	return slices.Contains(config.cipherSuites, cipher)
 }
 
 func echAcceptConfirmation(suite *cipherSuite, random [32]byte, label string, transcriptHash []byte) []byte {

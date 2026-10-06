@@ -118,10 +118,7 @@ func mergeConnectionIDs(existing, additions [][]byte) ([][]byte, error) {
 				duplicate = true
 				break
 			}
-			shorter := len(current)
-			if len(cid) < shorter {
-				shorter = len(cid)
-			}
+			shorter := min(len(cid), len(current))
 			if equalBytes(current[:shorter], cid[:shorter]) {
 				return nil, &ConfigError{"connection IDs must be prefix-free"}
 			}
@@ -148,10 +145,7 @@ func (c *recordCipher) shouldRequestKeyUpdateForAuthFailures() bool {
 	if c.authFailureLimit == 0 {
 		return false
 	}
-	margin := uint64(1024)
-	if c.authFailureLimit/4 < margin {
-		margin = c.authFailureLimit / 4
-	}
+	margin := min(c.authFailureLimit/4, uint64(1024))
 	if margin < 1 {
 		margin = 1
 	}

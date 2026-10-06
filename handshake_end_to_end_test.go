@@ -269,10 +269,7 @@ func (c *memoryDatagramConn) Read(p []byte) (int, error) {
 	c.mu.Unlock()
 	var timer <-chan time.Time
 	if !deadline.IsZero() {
-		duration := time.Until(deadline)
-		if duration < 0 {
-			duration = 0
-		}
+		duration := max(time.Until(deadline), 0)
 		timer = time.After(duration)
 	}
 	select {
@@ -291,10 +288,7 @@ func (c *memoryDatagramConn) Write(p []byte) (int, error) {
 	c.mu.Unlock()
 	var timer <-chan time.Time
 	if !deadline.IsZero() {
-		duration := time.Until(deadline)
-		if duration < 0 {
-			duration = 0
-		}
+		duration := max(time.Until(deadline), 0)
 		timer = time.After(duration)
 	}
 	select {

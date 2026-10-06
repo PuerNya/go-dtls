@@ -328,10 +328,7 @@ func (c *Conn) observeFlightRTT(flight *flight) {
 	if !ok {
 		return
 	}
-	interval := sample + sample/2
-	if interval < time.Millisecond {
-		interval = time.Millisecond
-	}
+	interval := max(sample+sample/2, time.Millisecond)
 	if interval > c.config.MaxFlightInterval {
 		interval = c.config.MaxFlightInterval
 	}
@@ -357,10 +354,7 @@ func (c *Conn) reducePathMTU() (int, bool) {
 		if current <= floor {
 			return current, false
 		}
-		next := current * 3 / 4
-		if next < floor {
-			next = floor
-		}
+		next := max(current*3/4, floor)
 		if c.pathMTU.CompareAndSwap(int64(current), int64(next)) {
 			return next, true
 		}
@@ -679,18 +673,12 @@ func (c *Conn) bufferIncompleteHandshakeApplicationLocked(content []byte, number
 }
 
 func (c *Conn) maxPendingOrderingRecords() int {
-	limit := c.config.ReplayWindow * c.config.MaxBufferedHandshakeMessages
-	if limit < 8 {
-		limit = 8
-	}
+	limit := max(c.config.ReplayWindow*c.config.MaxBufferedHandshakeMessages, 8)
 	return limit
 }
 
 func (c *Conn) trimRecordOrderingHistoryLocked() {
-	limit := 2 * c.config.ReplayWindow
-	if limit < 2 {
-		limit = 2
-	}
+	limit := max(2*c.config.ReplayWindow, 2)
 	if len(c.recentApplicationRecords) > limit {
 		c.recentApplicationRecords = c.recentApplicationRecords[len(c.recentApplicationRecords)-limit:]
 	}
@@ -1079,10 +1067,7 @@ func (c *Conn) maybeStartAutomaticKeyUpdateLocked() (bool, error) {
 	if c.sendingTraffic == nil || !c.sendingTraffic.update.canUseNewKeys() || c.sendCipher.epoch >= maxSendingEpoch {
 		return false, nil
 	}
-	margin := uint64(1024)
-	if c.sendCipher.recordLimit/4 < margin {
-		margin = c.sendCipher.recordLimit / 4
-	}
+	margin := min(c.sendCipher.recordLimit/4, uint64(1024))
 	if margin < 1 {
 		margin = 1
 	}

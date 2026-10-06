@@ -7,6 +7,7 @@ import (
 	"crypto/rsa"
 	"crypto/tls"
 	"errors"
+	"slices"
 )
 
 func selectCipherSuite(preferences, offered []uint16) (*cipherSuite, error) {
@@ -87,10 +88,8 @@ func negotiateALPN(server, client []string) (string, error) {
 		return "", nil
 	}
 	for _, serverProto := range server {
-		for _, clientProto := range client {
-			if serverProto == clientProto {
-				return serverProto, nil
-			}
+		if slices.Contains(client, serverProto) {
+			return serverProto, nil
 		}
 	}
 	return "", alertError(alertNoApplicationProtocol, errors.New("dtls13: no mutually supported ALPN protocol"))

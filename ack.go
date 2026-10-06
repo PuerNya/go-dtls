@@ -112,10 +112,7 @@ func buildACKRecordsInto(dst [][]byte, numbers []recordNumber, mtu int, plainSeq
 		return append(records, wire), plainSequence, nil
 	}
 	for start := 0; start < len(numbers); start += maxEntries {
-		end := start + maxEntries
-		if end > len(numbers) {
-			end = len(numbers)
-		}
+		end := min(start+maxEntries, len(numbers))
 		var wire []byte
 		var marshalErr error
 		if cipher == nil {

@@ -3,6 +3,7 @@ package dtls13
 import (
 	"crypto/tls"
 	"errors"
+	"slices"
 	"sync"
 )
 
@@ -176,17 +177,15 @@ func (s *keyUpdateState) ack(numbers []recordNumber) bool {
 		return false
 	}
 	for _, number := range numbers {
-		for _, record := range s.records {
-			if number == record {
-				s.pending = false
-				if cap(s.records) == 1 {
-					clear(s.records)
-					s.records = s.records[:0]
-				} else {
-					s.records = nil
-				}
-				return true
+		if slices.Contains(s.records, number) {
+			s.pending = false
+			if cap(s.records) == 1 {
+				clear(s.records)
+				s.records = s.records[:0]
+			} else {
+				s.records = nil
 			}
+			return true
 		}
 	}
 	return false

@@ -4,6 +4,7 @@ import (
 	"crypto/tls"
 	"encoding/binary"
 	"errors"
+	"slices"
 )
 
 const (
@@ -581,10 +582,8 @@ func parsePSKKeyExchangeModes(b []byte) (bool, error) {
 	if len(b) < 2 || int(b[0]) != len(b)-1 {
 		return false, alertError(alertDecodeError, &ProtocolError{"invalid psk_key_exchange_modes extension length"})
 	}
-	for _, mode := range b[1:] {
-		if mode == 1 {
-			return true, nil
-		}
+	if slices.Contains(b[1:], 1) {
+		return true, nil
 	}
 	return false, nil
 }
@@ -720,10 +719,8 @@ func parseKeySharesMode(b []byte, vector, copyData bool, dst []keyShareEntry) ([
 			return nil, alertError(alertDecodeError, &ProtocolError{"empty key share"})
 		}
 		if seen == nil {
-			for _, candidate := range groups {
-				if candidate == group {
-					return nil, alertError(alertIllegalParameter, &ProtocolError{"duplicate key_share group"})
-				}
+			if slices.Contains(groups, group) {
+				return nil, alertError(alertIllegalParameter, &ProtocolError{"duplicate key_share group"})
 			}
 			if len(groups) < cap(groups) {
 				groups = append(groups, group)

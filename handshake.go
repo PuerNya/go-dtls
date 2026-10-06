@@ -112,10 +112,7 @@ type partialMessage struct {
 func bitmapRangeClear(bitmap []uint64, start, end int) bool {
 	for start < end {
 		word := start >> 6
-		wordEnd := (word + 1) << 6
-		if wordEnd > end {
-			wordEnd = end
-		}
+		wordEnd := min((word+1)<<6, end)
 		mask := ^uint64(0) << uint(start&63)
 		if high := wordEnd & 63; high != 0 {
 			mask &= (uint64(1) << uint(high)) - 1
@@ -131,10 +128,7 @@ func bitmapRangeClear(bitmap []uint64, start, end int) bool {
 func setBitmapRange(bitmap []uint64, start, end int) {
 	for start < end {
 		word := start >> 6
-		wordEnd := (word + 1) << 6
-		if wordEnd > end {
-			wordEnd = end
-		}
+		wordEnd := min((word+1)<<6, end)
 		mask := ^uint64(0) << uint(start&63)
 		if high := wordEnd & 63; high != 0 {
 			mask &= (uint64(1) << uint(high)) - 1
