@@ -20,10 +20,12 @@ func TestProtectedRecordReceiveErrorClassification(t *testing.T) {
 	}
 
 	authenticated := fmt.Errorf("wrapped authenticated error: %w", authenticatedRecordAlert(alertRecordOverflow, &ProtocolError{"oversized record"}))
-	got := protectedRecordReceiveError(authenticated)
-	description, ok := protocolAlert(got)
-	if !ok || description != alertRecordOverflow {
-		t.Fatalf("authenticated error returned description=%d ok=%v err=%v", description, ok, got)
+	for _, err := range []error{authenticated, errors.Join(unauthenticated, authenticated)} {
+		got := protectedRecordReceiveError(err)
+		description, ok := protocolAlert(got)
+		if !ok || description != alertRecordOverflow {
+			t.Fatalf("authenticated error returned description=%d ok=%v err=%v", description, ok, got)
+		}
 	}
 }
 

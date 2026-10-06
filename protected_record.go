@@ -26,19 +26,12 @@ func protectedRecordReceiveError(err error) error {
 	if errors.Is(err, errAEADAuthenticationFailureLimit) {
 		return err
 	}
-	for current := err; current != nil; {
-		if authenticatedErr, ok := current.(*authenticatedRecordError); ok {
-			description := authenticatedErr.description
-			if description == 0 {
-				description = alertUnexpectedMessage
-			}
-			return alertError(description, authenticatedErr)
+	if authenticatedErr, ok := errors.AsType[*authenticatedRecordError](err); ok {
+		description := authenticatedErr.description
+		if description == 0 {
+			description = alertUnexpectedMessage
 		}
-		unwrapper, ok := current.(interface{ Unwrap() error })
-		if !ok {
-			break
-		}
-		current = unwrapper.Unwrap()
+		return alertError(description, authenticatedErr)
 	}
 	return nil
 }
@@ -145,10 +138,7 @@ func (c *recordCipher) shouldRequestKeyUpdateForAuthFailures() bool {
 	if c.authFailureLimit == 0 {
 		return false
 	}
-	margin := min(c.authFailureLimit/4, uint64(1024))
-	if margin < 1 {
-		margin = 1
-	}
+	margin := max(min(c.authFailureLimit/4, uint64(1024)), 1)
 	return c.authFailures >= c.authFailureLimit-margin
 }
 

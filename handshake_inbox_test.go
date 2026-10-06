@@ -3,9 +3,66 @@ package dtls13
 import (
 	"bytes"
 	"errors"
+	"fmt"
+	"io"
+	"net"
 	"testing"
 	"time"
 )
+
+type readErrorThenEOFConn struct {
+	net.Conn
+	err error
+}
+
+func (c *readErrorThenEOFConn) Read([]byte) (int, error) {
+	err := c.err
+	c.err = io.EOF
+	return 0, err
+}
+
+func TestHandshakeRetransmitsOnWrappedTimeout(t *testing.T) {
+	for _, ack := range []bool{false, true} {
+		for _, expired := range []bool{false, true} {
+			t.Run(fmt.Sprintf("ACK=%t/expired=%t", ack, expired), func(t *testing.T) {
+				left, right := memoryDatagramPair()
+				defer left.Close()
+				defer right.Close()
+				wrapped := fmt.Errorf("transport read: %w", &timeoutError{})
+				wire := &captureWritesConn{Conn: &readErrorThenEOFConn{Conn: left, err: wrapped}}
+				now := time.Now()
+				config, err := (&Config{FlightInterval: time.Millisecond, Time: func() time.Time { return now }}).normalized()
+				if err != nil {
+					t.Fatal(err)
+				}
+				deadline := now.Add(time.Second)
+				if expired {
+					deadline = now.Add(-time.Second)
+				}
+				conn := &Conn{conn: wire, config: config, handshakeDeadline: deadline}
+				outgoing, _, err := buildPlainFlight([]handshakeMessage{{typ: handshakeTypeClientHello, body: []byte{1}}}, config.MTU, 0, 0)
+				if err != nil {
+					t.Fatal(err)
+				}
+				if err = conn.writeFlight(wire, outgoing); err != nil {
+					t.Fatal(err)
+				}
+				if ack {
+					_, err = conn.receiveACKWithRetransmit(outgoing)
+				} else {
+					_, err = conn.receiveHandshakeWithRetransmit(newHandshakeInbox(0, 1024, 8, 4096), nil, outgoing)
+				}
+				wantErr, wantWrites := error(io.EOF), 2
+				if expired {
+					wantErr, wantWrites = wrapped, 1
+				}
+				if !errors.Is(err, wantErr) || len(wire.writes) != wantWrites {
+					t.Fatalf("receive returned %v with %d writes; want %v with %d writes", err, len(wire.writes), wantErr, wantWrites)
+				}
+			})
+		}
+	}
+}
 
 func TestCompletedHandshakeBatchInlineAndOverflow(t *testing.T) {
 	first := completedHandshake{typ: handshakeTypeClientHello, sequence: 0, body: []byte("first")}

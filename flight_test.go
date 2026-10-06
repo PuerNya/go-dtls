@@ -3,6 +3,7 @@ package dtls13
 import (
 	"bytes"
 	"context"
+	"errors"
 	"testing"
 	"time"
 )
@@ -594,7 +595,7 @@ func TestFlightContextCancellation(t *testing.T) {
 	ctx, cancel := context.WithCancel(context.Background())
 	cancel()
 	err = f.transmit(ctx, func([]byte) error { return nil }, make(chan struct{}))
-	if err != context.Canceled {
+	if !errors.Is(err, context.Canceled) {
 		t.Fatalf("got %v", err)
 	}
 }

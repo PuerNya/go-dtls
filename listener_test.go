@@ -3,6 +3,7 @@ package dtls13
 import (
 	"bytes"
 	"crypto/tls"
+	"errors"
 	"fmt"
 	"net"
 	"sync"
@@ -336,7 +337,7 @@ func TestListenerConnReadDeadlineCanRecover(t *testing.T) {
 	buffer := make([]byte, 16)
 	if _, _, err = server.ReadDatagram(buffer); err == nil {
 		t.Fatal("Read did not time out")
-	} else if networkErr, ok := err.(net.Error); !ok || !networkErr.Timeout() {
+	} else if networkErr, ok := errors.AsType[net.Error](err); !ok || !networkErr.Timeout() {
 		t.Fatalf("Read returned non-timeout error: %v", err)
 	}
 	if err = server.SetReadDeadline(time.Time{}); err != nil {

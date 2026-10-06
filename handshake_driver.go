@@ -213,7 +213,7 @@ func (c *Conn) receiveHandshakeWithRetransmitOnEarly(conn net.Conn, inbox *hands
 			_ = conn.SetReadDeadline(c.handshakeDeadline)
 			return messages, nil
 		}
-		networkErr, ok := err.(net.Error)
+		networkErr, ok := errors.AsType[net.Error](err)
 		if !ok || !networkErr.Timeout() || !c.config.Time().Before(c.handshakeDeadline) {
 			return completedHandshakeBatch{}, err
 		}
@@ -598,7 +598,7 @@ func (c *Conn) receiveACKWithRetransmit(outgoing *flight, ciphers ...*recordCiph
 			}
 			continue
 		}
-		networkErr, ok := err.(net.Error)
+		networkErr, ok := errors.AsType[net.Error](err)
 		if !ok || !networkErr.Timeout() || !c.config.Time().Before(c.handshakeDeadline) {
 			return nil, err
 		}

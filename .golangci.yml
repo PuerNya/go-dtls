@@ -9,14 +9,18 @@ run:
 linters:
   default: standard
   enable:
+    - asasalint
     - asciicheck
     - bidichk
     - copyloopvar
     - durationcheck
+    - errchkjson
     - errname
+    - errorlint
     - fatcontext
     - gocheckcompilerdirectives
     - gochecksumtype
+    - gocritic
     - godoclint
     - godot
     - gosec
@@ -25,6 +29,7 @@ linters:
     - modernize
     - nilnesserr
     - nolintlint
+    - nosprintfhostport
     - reassign
     - recvcheck
     - unparam
@@ -32,14 +37,27 @@ linters:
     - wastedassign
     - whitespace
   settings:
+    gocritic:
+      disable-all: true
+      enabled-checks:
+        - badLock
+        - badCond
+        - badCall
+        - badSyncOnceFunc
+        - dupArg
+        - dupCase
+        - exitAfterDefer
+        - offBy1
     gosec:
       # Wire encoders intentionally narrow values to their RFC field widths.
       excludes:
         - G115
-    modernize:
-      disable:
-        - minmax
-        - slicescontains
+    govet:
+      enable:
+        - nilness
+    nolintlint:
+      require-explanation: true
+      require-specific: true
   exclusions:
     rules:
       - path: _test\.go

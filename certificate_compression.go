@@ -248,7 +248,7 @@ func decompressCertificate(body []byte, algorithms *certificateCompressionAlgori
 	n, readErr := reader.Read(extra[:])
 	closeErr := reader.Close()
 	certificateZlibReaders.Put(reader)
-	if n != 0 || readErr != io.EOF || closeErr != nil || source.Len() != 0 {
+	if n != 0 || readErr != io.EOF || closeErr != nil || source.Len() != 0 { //nolint:errorlint // io.Reader requires EOF itself, not a wrapped error.
 		if pooled {
 			releaseCertificateDecompressionBuffer(decompressed)
 		}

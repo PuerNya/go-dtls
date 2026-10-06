@@ -328,10 +328,7 @@ func (c *Conn) observeFlightRTT(flight *flight) {
 	if !ok {
 		return
 	}
-	interval := max(sample+sample/2, time.Millisecond)
-	if interval > c.config.MaxFlightInterval {
-		interval = c.config.MaxFlightInterval
-	}
+	interval := min(max(sample+sample/2, time.Millisecond), c.config.MaxFlightInterval)
 	c.retransmitNanos.Store(int64(interval))
 	c.lastRTTSampleUnixNano.Store(now.UnixNano())
 }
@@ -1067,10 +1064,7 @@ func (c *Conn) maybeStartAutomaticKeyUpdateLocked() (bool, error) {
 	if c.sendingTraffic == nil || !c.sendingTraffic.update.canUseNewKeys() || c.sendCipher.epoch >= maxSendingEpoch {
 		return false, nil
 	}
-	margin := min(c.sendCipher.recordLimit/4, uint64(1024))
-	if margin < 1 {
-		margin = 1
-	}
+	margin := max(min(c.sendCipher.recordLimit/4, uint64(1024)), 1)
 	if c.sendCipher.nextSequence < c.sendCipher.recordLimit-margin {
 		return false, nil
 	}

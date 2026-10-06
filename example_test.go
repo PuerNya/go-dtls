@@ -32,7 +32,7 @@ func ExampleDial() {
 	defer conn.Close()
 
 	if _, err := conn.WriteDatagram([]byte("ping")); err != nil {
-		log.Fatal(err)
+		log.Print(err)
 	}
 }
 
