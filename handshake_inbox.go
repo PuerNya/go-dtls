@@ -53,12 +53,13 @@ func (b *completedHandshakeBatch) slice() []completedHandshake {
 // fragment reassembly. Future complete messages remain buffered until every
 // preceding message has arrived.
 type handshakeInbox struct {
-	expected    uint16
-	reassembler *reassembler
-	ready       map[uint16]completedHandshake
-	maxReady    int
-	maxBytes    int
-	readyBytes  int
+	expected        uint16
+	reassembler     *reassembler
+	ready           map[uint16]completedHandshake
+	maxReady        int
+	maxBytes        int
+	readyBytes      int
+	pendingDatagram []byte // Used by receive helpers without a Conn owner.
 }
 
 func newHandshakeInbox(expected uint16, maxMessage, maxMessages, maxBytes int) *handshakeInbox {

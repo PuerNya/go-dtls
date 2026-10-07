@@ -400,6 +400,38 @@ func TestRecordReaderAlertsOnAuthenticatedHandshakeDecodeError(t *testing.T) {
 	}
 }
 
+func TestRecordReaderReceivesApplicationDataCoalescedWithFinalACK(t *testing.T) {
+	client, server := establishedConnPair(t)
+	_ = server.conn.SetReadDeadline(time.Now().Add(time.Second))
+	wantACK := recordNumber{epoch: 2, sequence: 5}
+	acks, _, err := buildACKRecords([]recordNumber{wantACK}, 1200, 0, client.sendCipher)
+	if err != nil {
+		t.Fatal(err)
+	}
+	wantData := []byte("after final ACK")
+	application, err := client.sendCipher.seal(recordTypeApplicationData, wantData)
+	if err != nil {
+		t.Fatal(err)
+	}
+	written := make(chan error, 1)
+	go func() {
+		_, writeErr := client.conn.Write(append(acks[0], application...))
+		written <- writeErr
+	}()
+	numbers, err := receiveACKRecordWithPending(server.conn, nil, &server.pendingDatagram, server.receiveEpochs.ciphers[3])
+	if err != nil || len(numbers) != 1 || numbers[0] != wantACK {
+		t.Fatalf("ACK numbers=%v err=%v", numbers, err)
+	}
+	if err = <-written; err != nil {
+		t.Fatal(err)
+	}
+	buffer := make([]byte, 64)
+	n, _, err := server.ReadDatagram(buffer)
+	if err != nil || !bytes.Equal(buffer[:n], wantData) {
+		t.Fatalf("application data=%q err=%v", buffer[:n], err)
+	}
+}
+
 func TestConnUsesRecordOverflowForOversizedAuthenticatedInnerPlaintext(t *testing.T) {
 	client, server := establishedConnPair(t)
 	plain := make([]byte, (1<<14)+2)

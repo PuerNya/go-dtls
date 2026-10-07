@@ -228,6 +228,53 @@ func TestHandshakeReceivePropagatesAEADAuthenticationFailureLimit(t *testing.T) 
 	}
 }
 
+func TestHandshakeReceivesCoalescedRecordsAcrossEpochs(t *testing.T) {
+	for _, owned := range []bool{false, true} {
+		t.Run(fmt.Sprintf("owner=%t", owned), func(t *testing.T) {
+			left, right := memoryDatagramPair()
+			defer left.Close()
+			defer right.Close()
+			_ = right.SetReadDeadline(time.Now().Add(time.Second))
+			sender, receiver := recordCipherPair(t, TLS_AES_128_GCM_SHA256, 2)
+			messages := []handshakeMessage{
+				{typ: handshakeTypeServerHello, body: []byte("hello")},
+				{typ: handshakeTypeEncryptedExtensions, sequence: 1, body: []byte("extensions")},
+				{typ: handshakeTypeCertificate, sequence: 2, body: []byte("certificate")},
+			}
+			plain, _, err := buildPlainFlight(messages[:1], 1200, 0, 0)
+			if err != nil {
+				t.Fatal(err)
+			}
+			datagram := bytes.Clone(plain.records[0].wire)
+			for _, message := range messages[1:] {
+				protected, buildErr := buildProtectedFlight([]handshakeMessage{message}, 1200, sender)
+				if buildErr != nil {
+					t.Fatal(buildErr)
+				}
+				datagram = append(datagram, protected.records[0].wire...)
+			}
+			if _, err = left.Write(datagram); err != nil {
+				t.Fatal(err)
+			}
+			inbox := newHandshakeInbox(0, 1024, 8, 4096)
+			var owner *Conn
+			if owned {
+				owner = &Conn{conn: right}
+			}
+			for i, want := range messages {
+				var cipher *recordCipher
+				if i > 0 {
+					cipher = receiver
+				}
+				got, receiveErr := receiveHandshakeMessageWithEarly(right, inbox, cipher, nil, nil, 1200, owner)
+				if receiveErr != nil || len(got) != 1 || got[0].typ != want.typ || !bytes.Equal(got[0].body, want.body) {
+					t.Fatalf("message %d: got=%v err=%v", i, got, receiveErr)
+				}
+			}
+		})
+	}
+}
+
 func TestHandshakeReceiveTreatsPlaintextIllegalParameterAsFatal(t *testing.T) {
 	for _, test := range []struct {
 		name  string

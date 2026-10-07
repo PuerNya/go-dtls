@@ -138,7 +138,7 @@ func (c *Conn) serverHandshake() error {
 // amplification-limited connection and parses it.
 func (c *Conn) serverReceiveClientHello(s *serverHandshakeState) error {
 	s.inbox = newHandshakeInbox(0, c.config.MaxHandshakeMessage, c.config.MaxBufferedHandshakeMessages, c.config.MaxBufferedHandshakeBytes)
-	messages, err := receiveHandshakeMessageBatch(s.preValidationConn, s.inbox, nil)
+	messages, err := receiveHandshakeMessageWithEarlyBatch(s.preValidationConn, s.inbox, nil, handshakeReceiveOptions{owner: c, mtu: c.currentMTU()})
 	if err != nil {
 		return err
 	}

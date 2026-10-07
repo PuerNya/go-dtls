@@ -80,31 +80,39 @@ func parsePlainRecordsMode(datagram []byte, copyPayload bool, dst []record) ([]r
 	}
 	out := dst[:0]
 	for len(datagram) != 0 {
-		if len(datagram) < plainRecordHeaderLen {
-			return nil, alertError(alertDecodeError, &ProtocolError{"truncated record header"})
+		r, consumed, err := parsePlainRecordView(datagram)
+		if err != nil {
+			return nil, err
 		}
-		if !validPlainContentType(datagram[0]) {
-			return nil, &ProtocolError{"invalid DTLS 1.3 plaintext content type"}
+		if copyPayload && len(r.payload) > 0 {
+			r.payload = append([]byte(nil), r.payload...)
 		}
-		n := int(binary.BigEndian.Uint16(datagram[11:13]))
-		if n > maxRecordContent || len(datagram) < plainRecordHeaderLen+n {
-			return nil, alertError(alertDecodeError, &ProtocolError{"invalid record length"})
-		}
-		epoch := binary.BigEndian.Uint16(datagram[3:5])
-		if epoch != 0 {
-			return nil, &ProtocolError{"DTLSPlaintext epoch must be zero"}
-		}
-		var payload []byte
-		if n > 0 {
-			payload = datagram[13 : 13+n]
-		}
-		if copyPayload && len(payload) > 0 {
-			payload = append([]byte(nil), payload...)
-		}
-		out = append(out, record{typ: datagram[0], epoch: epoch, sequence: getUint48(datagram[5:11]), payload: payload})
-		datagram = datagram[13+n:]
+		out = append(out, r)
+		datagram = datagram[consumed:]
 	}
 	return out, nil
+}
+
+// parsePlainRecordView parses one record, allowing protected records to follow.
+func parsePlainRecordView(datagram []byte) (record, int, error) {
+	if len(datagram) < plainRecordHeaderLen {
+		return record{}, 0, alertError(alertDecodeError, &ProtocolError{"truncated record header"})
+	}
+	if !validPlainContentType(datagram[0]) {
+		return record{}, 0, &ProtocolError{"invalid DTLS 1.3 plaintext content type"}
+	}
+	n := int(binary.BigEndian.Uint16(datagram[11:13]))
+	if n > maxRecordContent || len(datagram) < plainRecordHeaderLen+n {
+		return record{}, 0, alertError(alertDecodeError, &ProtocolError{"invalid record length"})
+	}
+	if binary.BigEndian.Uint16(datagram[3:5]) != 0 {
+		return record{}, 0, &ProtocolError{"DTLSPlaintext epoch must be zero"}
+	}
+	var payload []byte
+	if n > 0 {
+		payload = datagram[plainRecordHeaderLen : plainRecordHeaderLen+n]
+	}
+	return record{typ: datagram[0], sequence: getUint48(datagram[5:11]), payload: payload}, plainRecordHeaderLen + n, nil
 }
 
 func validPlainContentType(contentType uint8) bool {

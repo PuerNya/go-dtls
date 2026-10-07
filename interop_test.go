@@ -6,17 +6,19 @@ import (
 	"crypto"
 	"crypto/tls"
 	"crypto/x509"
+	"encoding/base64"
 	"errors"
 	"fmt"
 	"io"
 	"net"
+	"net/http"
 	"os"
 	"os/exec"
 	"path/filepath"
-	"runtime"
 	"strconv"
 	"strings"
 	"sync"
+	"sync/atomic"
 	"testing"
 	"time"
 )
@@ -40,9 +42,8 @@ type wolfSSLInteropOptions struct {
 	exchanged                func(*testing.T, *Conn, int)
 	exchange                 func(*testing.T, *Conn, int)
 	outputContains           []string
-	unsupportedOutput        string
-	unsupportedReason        string
 	dropClientFinalACK       bool
+	wantHandshakeAlert       uint8
 }
 
 type lockedBuffer struct {
@@ -297,6 +298,261 @@ func TestInteropWolfSSLServer(t *testing.T) {
 	testInteropWolfSSLServer(t, "", nil, false, nil)
 }
 
+func TestInteropWolfSSLBuildFeatures(t *testing.T) {
+	_, server, client := wolfSSLPaths(t)
+	for _, executable := range []string{server, client} {
+		for _, option := range []string{
+			"HAVE_AESCCM", "HAVE_ALPN", "HAVE_CURVE25519", "HAVE_ED25519",
+			"HAVE_ECH", "HAVE_HPKE", "HAVE_KEYING_MATERIAL", "HAVE_OCSP",
+			"HAVE_CERTIFICATE_STATUS_REQUEST", "HAVE_SESSION_TICKET", "HAVE_SNI",
+			"SESSION_CERTS", "WOLFSSL_DTLS13", "WOLFSSL_DTLS_CH_FRAG", "WOLFSSL_DTLS_CID",
+			"WOLFSSL_DTLS_MTU", "WOLFSSL_EARLY_DATA", "WOLFSSL_HAVE_MLKEM", "WOLFSSL_POST_HANDSHAKE_AUTH",
+			"NO_PSK",
+		} {
+			defined, found := wolfSSLBuildOption(executable, option)
+			if !found {
+				t.Fatalf("cannot verify build options for %s: options.h not found", executable)
+			}
+			if defined != (option != "NO_PSK") {
+				t.Errorf("%s: unexpected build option %s=%v", executable, option, defined)
+			}
+		}
+	}
+}
+
+func TestInteropWolfSSLTransportModes(t *testing.T) {
+	for _, test := range []struct {
+		name string
+		args []string
+	}{
+		{"NonBlocking", []string{"-N"}},
+		{"GroupedFlights", []string{"-f"}},
+		{"WantWrite", []string{"-N", "-6"}},
+	} {
+		t.Run(test.name, func(t *testing.T) {
+			options := wolfSSLInteropOptions{args: test.args}
+			t.Run("Server", func(t *testing.T) {
+				serverOptions := options
+				serverOptions.disableServerEcho = true
+				testInteropWolfSSLServerOptions(t, serverOptions)
+			})
+			t.Run("Client", func(t *testing.T) { testInteropWolfSSLClientOptions(t, options) })
+		})
+	}
+}
+
+func TestInteropWolfSSLALPNSessionResumption(t *testing.T) {
+	options := wolfSSLInteropOptions{
+		args: []string{"-r", "-L", "F:coap"}, connections: 2, disableServerEcho: true,
+		configure: func(_ *testing.T, _ string, config *Config) {
+			config.NextProtos = []string{"coap"}
+			config.SessionTicketsDisabled = false
+			config.ClientSessionCache = NewLRUClientSessionCache(2)
+		},
+		connected: func(t *testing.T, conn *Conn, index int) {
+			requireResumptionOnSecondConnection(t, conn, index)
+			if got := conn.ConnectionState().NegotiatedProtocol; got != "coap" {
+				t.Fatalf("ALPN=%q", got)
+			}
+		},
+	}
+	t.Run("Server", func(t *testing.T) { testInteropWolfSSLServerOptions(t, options) })
+	t.Run("Client", func(t *testing.T) {
+		options.args = append(options.args, "--waitTicket")
+		testInteropWolfSSLClientOptions(t, options)
+	})
+}
+
+func TestInteropWolfSSLCipherSuites(t *testing.T) {
+	for _, test := range []struct {
+		name  string
+		suite uint16
+	}{
+		{"TLS13-AES128-GCM-SHA256", TLS_AES_128_GCM_SHA256},
+		{"TLS13-AES256-GCM-SHA384", TLS_AES_256_GCM_SHA384},
+		{"TLS13-CHACHA20-POLY1305-SHA256", TLS_CHACHA20_POLY1305_SHA256},
+		{"TLS13-AES128-CCM-SHA256", TLS_AES_128_CCM_SHA256},
+	} {
+		t.Run(test.name, func(t *testing.T) {
+			options := wolfSSLInteropOptions{cipherName: test.name, suites: []uint16{test.suite}}
+			t.Run("Server", func(t *testing.T) { testInteropWolfSSLServerOptions(t, options) })
+			t.Run("Client", func(t *testing.T) { testInteropWolfSSLClientOptions(t, options) })
+		})
+	}
+}
+
+func TestInteropWolfSSLALPN(t *testing.T) {
+	for _, test := range []struct {
+		name     string
+		wolf     string
+		goProtos []string
+		want     string
+		alert    uint8
+	}{
+		{"Match", "F:coap", []string{"coap"}, "coap", 0},
+		{"CommonProtocol", "F:other,coap", []string{"go-only", "coap"}, "coap", 0},
+		{"GoOmits", "F:coap", nil, "", 0},
+		{"WolfSSLOmits", "", []string{"coap"}, "", 0},
+		{"Mismatch", "F:other", []string{"coap"}, "", alertNoApplicationProtocol},
+	} {
+		t.Run(test.name, func(t *testing.T) {
+			options := wolfSSLInteropOptions{
+				wantHandshakeAlert: test.alert,
+				configure:          func(_ *testing.T, _ string, config *Config) { config.NextProtos = test.goProtos },
+				connected: func(t *testing.T, conn *Conn, _ int) {
+					if got := conn.ConnectionState().NegotiatedProtocol; got != test.want {
+						t.Fatalf("ALPN=%q, want %q", got, test.want)
+					}
+				},
+			}
+			if test.wolf != "" {
+				options.args = []string{"-L", test.wolf}
+			}
+			t.Run("Server", func(t *testing.T) {
+				// The example's ALPN queries leave err=1 and bypass its echo
+				// loop. Its normal application-data path resets that status.
+				serverOptions := options
+				serverOptions.disableServerEcho = true
+				testInteropWolfSSLServerOptions(t, serverOptions)
+			})
+			t.Run("Client", func(t *testing.T) { testInteropWolfSSLClientOptions(t, options) })
+		})
+	}
+}
+
+func TestInteropWolfSSLCurves(t *testing.T) {
+	for _, group := range []tls.CurveID{tls.X25519, tls.CurveP256, tls.CurveP384} {
+		t.Run(group.String(), func(t *testing.T) {
+			options := wolfSSLInteropOptions{
+				configure: func(_ *testing.T, _ string, config *Config) { config.CurvePreferences = []tls.CurveID{group} },
+			}
+			t.Run("Server", func(t *testing.T) { testInteropWolfSSLServerOptions(t, options) })
+			t.Run("Client", func(t *testing.T) { testInteropWolfSSLClientOptions(t, options) })
+		})
+	}
+}
+
+func TestInteropWolfSSLCertificates(t *testing.T) {
+	for _, test := range []struct{ name, cert, key, ca string }{
+		{"RSA", "server-cert.pem", "server-key.pem", "ca-cert.pem"},
+		{"ECDSAP256", "server-ecc.pem", "ecc-key.pem", "ca-ecc-cert.pem"},
+		{"ECDSAP384", "server-ecc384-cert.pem", "server-ecc384-key.pem", "ca-ecc384-cert.pem"},
+		{"Ed25519", "ed25519/server-ed25519.pem", "ed25519/server-ed25519-priv.pem", "ed25519/root-ed25519.pem"},
+	} {
+		t.Run(test.name, func(t *testing.T) {
+			t.Run("Server", func(t *testing.T) {
+				testInteropWolfSSLServerOptions(t, wolfSSLInteropOptions{
+					args:                    []string{"-c", filepath.Join("certs", test.cert), "-k", filepath.Join("certs", test.key)},
+					verifyServerCertificate: true,
+					configure: func(t *testing.T, root string, config *Config) {
+						config.RootCAs = wolfSSLRootCAs(t, root, filepath.Join("certs", test.ca))
+						// Only the RSA fixture has SANs; the others exercise
+						// certificate-chain verification without a hostname.
+						if test.name == "RSA" {
+							config.ServerName = "example.com"
+						}
+					},
+					connected: func(t *testing.T, conn *Conn, _ int) {
+						if len(conn.ConnectionState().VerifiedChains) == 0 {
+							t.Fatal("server certificate was not verified")
+						}
+					},
+				})
+			})
+			t.Run("Client", func(t *testing.T) {
+				testInteropWolfSSLClientOptions(t, wolfSSLInteropOptions{
+					args:                    []string{"-A", filepath.Join("certs", test.ca)},
+					verifyServerCertificate: true,
+					configure: func(t *testing.T, root string, config *Config) {
+						certificate, err := tls.LoadX509KeyPair(filepath.Join(root, "certs", test.cert), filepath.Join(root, "certs", test.key))
+						if err != nil {
+							t.Fatal(err)
+						}
+						config.Certificates = []tls.Certificate{certificate}
+					},
+				})
+			})
+		})
+	}
+}
+
+func TestInteropWolfSSLServerSNI(t *testing.T) {
+	testInteropWolfSSLServerOptions(t, wolfSSLInteropOptions{
+		args: []string{"-S", "server.test"},
+		configure: func(_ *testing.T, _ string, config *Config) {
+			config.ServerName = "server.test"
+		},
+	})
+}
+
+func TestInteropWolfSSLServerHelloRetryRequest(t *testing.T) {
+	testInteropWolfSSLServerOptions(t, wolfSSLInteropOptions{
+		args: []string{"--force-curve", "SECP256R1"},
+		configure: func(_ *testing.T, _ string, config *Config) {
+			config.CurvePreferences = []tls.CurveID{tls.X25519, tls.CurveP256}
+		},
+	})
+}
+
+func TestInteropWolfSSLServerFragmentedHandshake(t *testing.T) {
+	testInteropWolfSSLServerOptions(t, wolfSSLInteropOptions{
+		args: []string{"-u", "256"},
+		configure: func(_ *testing.T, _ string, config *Config) {
+			config.MTU = 256
+		},
+	})
+}
+
+func TestInteropWolfSSLServerOCSPStapling(t *testing.T) {
+	wolfSSLPaths(t)
+	requests := startWolfSSLOCSPResponder(t, filepath.Join("testdata", "ocsp", "server1-response-no-nonce.der"))
+	testInteropWolfSSLServerOptions(t, wolfSSLInteropOptions{
+		args: []string{
+			"-c", filepath.Join("certs", "ocsp", "server1-chain-noroot.pem"),
+			"-k", filepath.Join("certs", "ocsp", "server1-key.pem"),
+		},
+		verifyServerCertificate: true,
+		configure: func(t *testing.T, root string, config *Config) {
+			config.RootCAs = wolfSSLRootCAs(t, root, filepath.Join("certs", "ocsp", "root-ca-cert.pem"))
+			config.EnableOCSPStapling = true
+		},
+		connected: func(t *testing.T, conn *Conn, _ int) {
+			if requests.Load() == 0 {
+				t.Fatal("wolfSSL server did not query the OCSP responder")
+			}
+			if len(conn.ConnectionState().OCSPResponse) == 0 {
+				t.Fatal("wolfSSL server did not staple an OCSP response")
+			}
+		},
+	})
+}
+
+func startWolfSSLOCSPResponder(t *testing.T, responsePath string) *atomic.Int32 {
+	t.Helper()
+	response, err := os.ReadFile(responsePath) // #nosec G304 -- path is a fixed repository test fixture.
+	if err != nil {
+		t.Fatal(err)
+	}
+	listener, err := net.Listen("tcp4", "127.0.0.1:22221")
+	if err != nil {
+		t.Skipf("wolfSSL OCSP responder port is unavailable: %v", err)
+	}
+	var requests atomic.Int32
+	server := &http.Server{ReadHeaderTimeout: time.Second, Handler: http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+		requests.Add(1)
+		w.Header().Set("Content-Type", "application/ocsp-response")
+		w.WriteHeader(http.StatusOK)
+		_, _ = w.Write(response)
+	})}
+	go func() {
+		_ = server.Serve(listener)
+	}()
+	t.Cleanup(func() {
+		_ = server.Close()
+	})
+	return &requests
+}
+
 func TestInteropWolfSSLServerGREASE(t *testing.T) {
 	testInteropWolfSSLServerOptions(t, wolfSSLInteropOptions{
 		configure: func(_ *testing.T, _ string, config *Config) {
@@ -318,10 +574,6 @@ func TestInteropWolfSSLServerECHGrease(t *testing.T) {
 	})
 }
 
-func TestInteropWolfSSLServerAES128CCM(t *testing.T) {
-	testInteropWolfSSLServer(t, "TLS13-AES128-CCM-SHA256", []uint16{TLS_AES_128_CCM_SHA256}, false, nil)
-}
-
 func TestInteropWolfSSLServerCertificateCompressionOffer(t *testing.T) {
 	testInteropWolfSSLServer(t, "", nil, true, nil)
 }
@@ -333,16 +585,17 @@ func TestInteropWolfSSLServerExternalPSK(t *testing.T) {
 func TestInteropWolfSSLServerHybridKeyExchange(t *testing.T) {
 	for _, test := range wolfSSLHybridGroups {
 		t.Run(test.name, func(t *testing.T) {
-			if test.group == tls.SecP384r1MLKEM1024 && runtime.GOOS == "windows" && os.Getenv("GO_DTLS_PROBE_WOLFSSL_SKIPS") != "1" {
-				t.Skip("wolfSSL example server's 1500-byte MSG_PEEK buffer rejects the 1824-byte ClientHello with WSAEMSGSIZE")
+			_, server, _ := wolfSSLPaths(t)
+			if test.group == tls.X25519MLKEM768 {
+				requireWolfSSLBuildOption(t, server, "HAVE_CURVE25519")
 			}
 			testInteropWolfSSLServerOptions(t, wolfSSLInteropOptions{
 				args: []string{"--pqc", test.name},
 				configure: func(_ *testing.T, _ string, config *Config) {
-					config.CurvePreferences = []tls.CurveID{test.group}
-					// wolfSSL's stateless path needs an unfragmented first
-					// ClientHello; its default receive buffer is 1900 bytes.
-					config.MTU = 1850
+					// Keep CH1 below the example server's 1500-byte peek
+					// buffer; HRR requests the larger, fragmented share.
+					config.CurvePreferences = []tls.CurveID{tls.X25519, test.group}
+					config.MTU = 1400
 				},
 			})
 		})
@@ -359,9 +612,6 @@ func TestInteropWolfSSLServerConnectionID(t *testing.T) {
 		},
 		connected: func(t *testing.T, conn *Conn, _ int) {
 			state := conn.ConnectionState()
-			if len(state.LocalConnectionID) == 0 && len(state.PeerConnectionID) == 0 {
-				return
-			}
 			if !bytes.Equal(state.LocalConnectionID, []byte("go-cli")) || !bytes.Equal(state.PeerConnectionID, []byte("wolf-srv")) {
 				t.Fatalf("negotiated CIDs local=%q peer=%q", state.LocalConnectionID, state.PeerConnectionID)
 			}
@@ -379,16 +629,20 @@ func TestInteropWolfSSLServerConnectionID(t *testing.T) {
 
 func TestInteropWolfSSLServerKeyUpdate(t *testing.T) {
 	testInteropWolfSSLServerOptions(t, wolfSSLInteropOptions{
-		args: []string{"-U"},
+		args:              []string{"-U"},
+		disableServerEcho: true,
 		connected: func(t *testing.T, conn *Conn, _ int) {
 			if err := conn.SendKeyUpdate(false); err != nil {
 				t.Fatalf("send KeyUpdate: %v", err)
 			}
 		},
+		exchanged: requireWolfSSLKeyUpdate,
 	})
 }
 
 func TestInteropWolfSSLServerPostHandshakeAuthentication(t *testing.T) {
+	_, server, _ := wolfSSLPaths(t)
+	requireWolfSSLBuildOption(t, server, "WOLFSSL_POST_HANDSHAKE_AUTH")
 	testInteropWolfSSLServerOptions(t, wolfSSLInteropOptions{
 		args:              []string{"-Q"},
 		disableServerEcho: true,
@@ -415,6 +669,21 @@ func TestInteropWolfSSLServerSessionResumption(t *testing.T) {
 			config.ClientSessionCache = NewLRUClientSessionCache(2)
 		},
 		connected: requireResumptionOnSecondConnection,
+	})
+}
+
+func TestInteropWolfSSLServerDisablesSessionTickets(t *testing.T) {
+	testInteropWolfSSLServerOptions(t, wolfSSLInteropOptions{
+		args:        []string{"-r", "-T", "n"},
+		connections: 2,
+		configure: func(_ *testing.T, _ string, config *Config) {
+			config.ClientSessionCache = NewLRUClientSessionCache(2)
+		},
+		connected: func(t *testing.T, conn *Conn, index int) {
+			if conn.ConnectionState().DidResume {
+				t.Fatalf("connection %d resumed after wolfSSL disabled TLS 1.3 tickets", index+1)
+			}
+		},
 	})
 }
 
@@ -466,6 +735,7 @@ func testInteropWolfSSLServerEarlyData(t *testing.T, reject bool) {
 		rejectEarlyData: reject,
 		configure: func(_ *testing.T, _ string, config *Config) {
 			config.ClientSessionCache = NewLRUClientSessionCache(2)
+			config.CurvePreferences = []tls.CurveID{tls.CurveP256}
 		},
 		connected: requireResumptionOnSecondConnection,
 	})
@@ -538,7 +808,7 @@ func testInteropWolfSSLServerOptions(t *testing.T, options wolfSSLInteropOptions
 
 	dialer := &net.Dialer{Timeout: 5 * time.Second}
 	config := &Config{
-		InsecureSkipVerify: true, CipherSuites: options.suites, EnableCertificateCompression: options.certificateCompression,
+		InsecureSkipVerify: !options.verifyServerCertificate, CipherSuites: options.suites, EnableCertificateCompression: options.certificateCompression,
 		ExternalPSKs: externalPSKList(options.externalPSK), HandshakeTimeout: 5 * time.Second,
 	}
 	if options.configure != nil {
@@ -550,16 +820,22 @@ func testInteropWolfSSLServerOptions(t *testing.T, options wolfSSLInteropOptions
 	}
 	address := fmt.Sprintf("127.0.0.1:%d", port)
 	for index := 0; index < connections; index++ {
-		var conn *Conn
-		var err error
-		if index > 0 && len(options.clientEarlyData) > 0 {
-			raw, dialErr := dialer.Dial("udp4", address)
-			if dialErr != nil {
-				t.Fatal(dialErr)
-			}
-			clientConfig := config.Clone()
+		raw, err := dialer.Dial("udp4", address)
+		if err != nil {
+			t.Fatal(err)
+		}
+		clientConfig := config.Clone()
+		// An empty verified ServerName deliberately checks only the chain
+		// for wolfSSL fixtures without SANs. Hostname tests set it explicitly.
+		if clientConfig.ServerName == "" && !options.verifyServerCertificate {
 			clientConfig.ServerName = "127.0.0.1"
-			conn = Client(raw, clientConfig)
+		}
+		conn := Client(raw, clientConfig)
+		t.Cleanup(func() { _ = conn.Close() })
+		if options.wrapClientConn != nil {
+			options.wrapClientConn(conn)
+		}
+		if index > 0 && len(options.clientEarlyData) > 0 {
 			n, earlyErr := conn.WriteEarlyData(options.clientEarlyData)
 			if options.rejectEarlyData {
 				if !errors.Is(earlyErr, ErrEarlyDataRejected) || n != 0 {
@@ -570,22 +846,19 @@ func testInteropWolfSSLServerOptions(t *testing.T, options wolfSSLInteropOptions
 				_ = conn.Close()
 				t.Fatalf("write early data: n=%d err=%v", n, earlyErr)
 			}
-		} else if options.wrapClientConn != nil {
-			raw, dialErr := dialer.Dial("udp4", address)
-			if dialErr != nil {
-				t.Fatal(dialErr)
-			}
-			clientConfig := config.Clone()
-			clientConfig.ServerName = "127.0.0.1"
-			conn = Client(raw, clientConfig)
-			options.wrapClientConn(conn)
-			err = conn.Handshake()
 		} else {
-			conn, err = DialWithDialer(dialer, "udp4", address, config)
+			err = conn.Handshake()
+		}
+		if options.wantHandshakeAlert != 0 {
+			if !errors.Is(err, AlertError(options.wantHandshakeAlert)) {
+				t.Fatalf("handshake error=%v, want peer alert %d\n%s", err, options.wantHandshakeAlert, output.String())
+			}
+			return
 		}
 		if err != nil {
 			t.Fatalf("Go client to wolfSSL server: %v\n%s", err, output.String())
 		}
+		requireWolfSSLConnection(t, conn, options)
 		_ = conn.SetDeadline(time.Now().Add(5 * time.Second))
 		if options.connected != nil {
 			options.connected(t, conn, index)
@@ -626,9 +899,97 @@ func TestInteropWolfSSLClient(t *testing.T) {
 	testInteropWolfSSLClient(t, "", nil, false, nil)
 }
 
-func TestInteropWolfSSLClientOCSPStapling(t *testing.T) {
+func TestInteropWolfSSLClientSNI(t *testing.T) {
+	var serverName string
 	testInteropWolfSSLClientOptions(t, wolfSSLInteropOptions{
-		args:                    []string{"-A", filepath.Join("certs", "ocsp", "root-ca-cert.pem"), "-W", "1"},
+		args: []string{"-S", "server.test"},
+		configure: func(_ *testing.T, _ string, config *Config) {
+			config.GetCertificate = func(info *ClientHelloInfo) (*tls.Certificate, error) {
+				serverName = info.ServerName
+				return &config.Certificates[0], nil
+			}
+		},
+		connected: func(t *testing.T, _ *Conn, _ int) {
+			if serverName != "server.test" {
+				t.Fatalf("SNI=%q", serverName)
+			}
+		},
+	})
+}
+
+func TestInteropWolfSSLClientECH(t *testing.T) {
+	_, _, client := wolfSSLPaths(t)
+	requireWolfSSLBuildOption(t, client, "HAVE_ECH")
+	if os.Getenv("GO_DTLS_PROBE_WOLFSSL_SKIPS") != "1" {
+		t.Skip("wolfSSL 7a8aae3 DTLS ECH uses TLS offsets and hashes DTLS-only fields; set GO_DTLS_PROBE_WOLFSSL_SKIPS=1 to test a corrected peer")
+	}
+	for _, test := range []struct {
+		name, cipher string
+		suite        uint16
+		mtu          int
+		keyShareHRR  bool
+	}{
+		{"CookieHRR", "TLS13-AES128-GCM-SHA256", TLS_AES_128_GCM_SHA256, 1400, false},
+		{"KeyShareHRR", "TLS13-AES128-GCM-SHA256", TLS_AES_128_GCM_SHA256, 1400, true},
+		{"SHA384", "TLS13-AES256-GCM-SHA384", TLS_AES_256_GCM_SHA384, 1400, false},
+		{"FragmentedServerFlight", "TLS13-AES128-GCM-SHA256", TLS_AES_128_GCM_SHA256, 256, false},
+	} {
+		t.Run(test.name, func(t *testing.T) {
+			list, key := testECHConfig(t, "public.test", 1)
+			var innerName string
+			args := []string{"--ech", base64.StdEncoding.EncodeToString(list), "-S", "server.test", "-t"}
+			if test.keyShareHRR {
+				args = append(args, "-J")
+			}
+			testInteropWolfSSLClientOptions(t, wolfSSLInteropOptions{
+				args: args, cipherName: test.cipher, suites: []uint16{test.suite},
+				configure: func(_ *testing.T, _ string, config *Config) {
+					config.EncryptedClientHelloKeys = []EncryptedClientHelloKey{key}
+					config.MTU = test.mtu
+					config.GetCertificate = func(info *ClientHelloInfo) (*tls.Certificate, error) {
+						innerName = info.ServerName
+						return &config.Certificates[0], nil
+					}
+				},
+				connected: func(t *testing.T, conn *Conn, _ int) {
+					state := conn.ConnectionState()
+					if !state.ECHAccepted || innerName != "server.test" {
+						t.Fatalf("ECH accepted=%v inner SNI=%q", state.ECHAccepted, innerName)
+					}
+				},
+			})
+		})
+	}
+}
+
+func TestInteropWolfSSLClientHelloRetryRequest(t *testing.T) {
+	testInteropWolfSSLClientOptions(t, wolfSSLInteropOptions{args: []string{"-J"}})
+}
+
+func TestInteropWolfSSLClientFragmentedHandshake(t *testing.T) {
+	testInteropWolfSSLClientOptions(t, wolfSSLInteropOptions{
+		// Keep ClientHello below wolfSSL's MTU; fragment its certificate flight.
+		args:                  []string{"-u", "1200"},
+		loadClientCertificate: true,
+		configure: func(_ *testing.T, _ string, config *Config) {
+			config.MTU = 256
+			config.ClientAuth = tls.RequireAnyClientCert
+		},
+	})
+}
+
+func TestInteropWolfSSLClientOCSPStapling(t *testing.T) {
+	testInteropWolfSSLClientOCSPStapling(t, "1")
+}
+
+func TestInteropWolfSSLClientOCSPMustStaple(t *testing.T) {
+	testInteropWolfSSLClientOCSPStapling(t, "1m")
+}
+
+func testInteropWolfSSLClientOCSPStapling(t *testing.T, statusRequest string) {
+	t.Helper()
+	testInteropWolfSSLClientOptions(t, wolfSSLInteropOptions{
+		args:                    []string{"-A", filepath.Join("certs", "ocsp", "root-ca-cert.pem"), "-W", statusRequest},
 		verifyServerCertificate: true,
 		configure: func(t *testing.T, root string, config *Config) {
 			certificate, err := tls.LoadX509KeyPair(
@@ -673,10 +1034,6 @@ func TestInteropWolfSSLClientGREASESessionTicket(t *testing.T) {
 	})
 }
 
-func TestInteropWolfSSLClientAES128CCM(t *testing.T) {
-	testInteropWolfSSLClient(t, "TLS13-AES128-CCM-SHA256", []uint16{TLS_AES_128_CCM_SHA256}, false, nil)
-}
-
 func TestInteropWolfSSLClientCertificateCompressionFallback(t *testing.T) {
 	testInteropWolfSSLClient(t, "", nil, true, nil)
 }
@@ -688,6 +1045,10 @@ func TestInteropWolfSSLClientExternalPSK(t *testing.T) {
 func TestInteropWolfSSLClientHybridKeyExchange(t *testing.T) {
 	for _, test := range wolfSSLHybridGroups {
 		t.Run(test.name, func(t *testing.T) {
+			_, _, client := wolfSSLPaths(t)
+			if test.group == tls.X25519MLKEM768 {
+				requireWolfSSLBuildOption(t, client, "HAVE_CURVE25519")
+			}
 			testInteropWolfSSLClientOptions(t, wolfSSLInteropOptions{
 				args: []string{"--pqc", test.name},
 				configure: func(_ *testing.T, _ string, config *Config) {
@@ -723,10 +1084,13 @@ func TestInteropWolfSSLClientKeyUpdate(t *testing.T) {
 				t.Fatalf("send KeyUpdate: %v", err)
 			}
 		},
+		exchanged: requireWolfSSLKeyUpdate,
 	})
 }
 
 func TestInteropWolfSSLClientPostHandshakeAuthentication(t *testing.T) {
+	_, _, client := wolfSSLPaths(t)
+	requireWolfSSLBuildOption(t, client, "WOLFSSL_POST_HANDSHAKE_AUTH")
 	testInteropWolfSSLClientOptions(t, wolfSSLInteropOptions{
 		args:                  []string{"-Q"},
 		loadClientCertificate: true,
@@ -761,7 +1125,8 @@ func TestInteropWolfSSLClientSessionResumption(t *testing.T) {
 
 func TestInteropWolfSSLClientMutualTLSSessionResumption(t *testing.T) {
 	testInteropWolfSSLClientOptions(t, wolfSSLInteropOptions{
-		args:                  []string{"-r", "--waitTicket"},
+		// The client cannot fragment CH1, which contains the mTLS ticket.
+		args:                  []string{"-r", "--waitTicket", "-u", "4096"},
 		connections:           2,
 		loadClientCertificate: true,
 		configure: func(t *testing.T, root string, config *Config) {
@@ -769,9 +1134,7 @@ func TestInteropWolfSSLClientMutualTLSSessionResumption(t *testing.T) {
 			config.ClientCAs = wolfSSLClientCAs(t, root)
 			config.SessionTicketsDisabled = false
 		},
-		connected:         requireResumptionOnSecondConnection,
-		unsupportedOutput: "wolfSSL_connect resume error -328, malformed buffer input error",
-		unsupportedReason: "wolfSSL client refuses to fragment the first ClientHello containing the 1421-byte mTLS ticket",
+		connected: requireResumptionOnSecondConnection,
 	})
 }
 
@@ -901,11 +1264,7 @@ func testInteropWolfSSLClientOptions(t *testing.T, options wolfSSLInteropOptions
 		case result := <-accepted:
 			conn, err = result.conn, result.err
 		case processErr := <-done:
-			text := output.String()
-			if index > 0 && options.unsupportedOutput != "" && strings.Contains(text, options.unsupportedOutput) && os.Getenv("GO_DTLS_PROBE_WOLFSSL_SKIPS") != "1" {
-				t.Skipf("%s: %s", options.unsupportedReason, options.unsupportedOutput)
-			}
-			t.Fatalf("wolfSSL client exited before connection %d: %v\n%s", index+1, processErr, text)
+			t.Fatalf("wolfSSL client exited before connection %d: %v\n%s", index+1, processErr, output.String())
 		case <-time.After(5 * time.Second):
 			_ = listener.Close()
 			_ = cmd.Process.Kill()
@@ -916,13 +1275,25 @@ func testInteropWolfSSLClientOptions(t *testing.T, options wolfSSLInteropOptions
 			t.Fatalf("accept wolfSSL client: %v\n%s", err, output.String())
 		}
 		_ = conn.SetDeadline(time.Now().Add(5 * time.Second))
+		t.Cleanup(func() { _ = conn.Close() })
+		err = conn.Handshake()
+		if options.wantHandshakeAlert != 0 {
+			alert, ok := protocolAlert(err)
+			if !ok || alert != options.wantHandshakeAlert {
+				t.Fatalf("handshake error=%v, want local alert %d\n%s", err, options.wantHandshakeAlert, output.String())
+			}
+			// An epoch-0 alert is unauthenticated; the peer may ignore it.
+			// Assert our rejection, then let process cleanup stop the peer.
+			return
+		}
+		if err != nil {
+			t.Fatalf("handshake with wolfSSL client: %v\n%s", err, output.String())
+		}
+		requireWolfSSLConnection(t, conn, options)
 		if options.connected != nil {
 			options.connected(t, conn, index)
 		}
 		if proxy != nil {
-			if err = conn.Handshake(); err != nil {
-				t.Fatalf("handshake through final-ACK proxy: %v", err)
-			}
 			if !proxy.waitForRetransmit(3 * time.Second) {
 				dropped, finishedWrites, proxyErr := proxy.result()
 				t.Fatalf("final-ACK proxy dropped=%v Finished writes=%d err=%v", dropped, finishedWrites, proxyErr)
@@ -970,6 +1341,29 @@ func testInteropWolfSSLClientOptions(t *testing.T, options wolfSSLInteropOptions
 	}
 }
 
+func requireWolfSSLKeyUpdate(t *testing.T, conn *Conn, _ int) {
+	t.Helper()
+	conn.dispatchMu.Lock()
+	defer conn.dispatchMu.Unlock()
+	if conn.receivingTraffic.current < 4 {
+		t.Fatalf("wolfSSL KeyUpdate did not advance the receive epoch: %d", conn.receivingTraffic.current)
+	}
+}
+
+func requireWolfSSLConnection(t *testing.T, conn *Conn, options wolfSSLInteropOptions) {
+	t.Helper()
+	state := conn.ConnectionState()
+	if !state.HandshakeComplete || state.Version != VersionDTLS13 {
+		t.Fatalf("incomplete DTLS 1.3 handshake: %#v", state)
+	}
+	if len(options.suites) == 1 && state.CipherSuite != options.suites[0] {
+		t.Fatalf("cipher suite=%#x, want %#x", state.CipherSuite, options.suites[0])
+	}
+	if options.externalPSK != nil && !bytes.Equal(state.ExternalPSKIdentity(), options.externalPSK.identity) {
+		t.Fatal("external PSK was not negotiated")
+	}
+}
+
 func wolfSSLCertificate(t testing.TB, root, name string) tls.Certificate {
 	t.Helper()
 	certificate, err := tls.LoadX509KeyPair(filepath.Join(root, "certs", name+"-cert.pem"), filepath.Join(root, "certs", name+"-key.pem"))
@@ -981,7 +1375,12 @@ func wolfSSLCertificate(t testing.TB, root, name string) tls.Certificate {
 
 func wolfSSLClientCAs(t testing.TB, root string) *x509.CertPool {
 	t.Helper()
-	pem, err := os.ReadFile(filepath.Join(root, "certs", "client-cert.pem")) // #nosec G304 -- root is the explicit local WOLFSSL_ROOT test fixture.
+	return wolfSSLRootCAs(t, root, filepath.Join("certs", "client-cert.pem"))
+}
+
+func wolfSSLRootCAs(t testing.TB, root, relativePath string) *x509.CertPool {
+	t.Helper()
+	pem, err := os.ReadFile(filepath.Join(root, relativePath)) // #nosec G304 -- root is the explicit local WOLFSSL_ROOT test fixture.
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -1009,6 +1408,69 @@ func requireWolfSSLOutput(t *testing.T, output *lockedBuffer, required []string)
 		if !strings.Contains(text, substring) {
 			t.Fatalf("wolfSSL output does not contain %q:\n%s", substring, text)
 		}
+	}
+}
+
+func wolfSSLBuildOption(executable, option string) (defined, found bool) {
+	directory := filepath.Dir(executable)
+	for range 6 {
+		path := filepath.Join(directory, "wolfssl", "options.h")
+		data, err := os.ReadFile(path) // #nosec G304 -- executable is an explicit local wolfSSL test binary.
+		if err == nil {
+			for line := range strings.SplitSeq(string(data), "\n") {
+				fields := strings.Fields(line)
+				if len(fields) >= 2 && fields[1] == option {
+					switch fields[0] {
+					case "#define":
+						defined = true
+					case "#undef":
+						defined = false
+					}
+				}
+			}
+			return defined, true
+		}
+		next := filepath.Dir(directory)
+		if next == directory {
+			break
+		}
+		directory = next
+	}
+	return false, false
+}
+
+func TestWolfSSLBuildOption(t *testing.T) {
+	root := t.TempDir()
+	if err := os.Mkdir(filepath.Join(root, "wolfssl"), 0o700); err != nil {
+		t.Fatal(err)
+	}
+	path := filepath.Join(root, "wolfssl", "options.h")
+	for _, test := range []struct {
+		name, header string
+		defined      bool
+	}{
+		{"enabled", "#undef HAVE_ALPN\n#define HAVE_ALPN\n", true},
+		{"disabled", "#define HAVE_ALPN\n#undef HAVE_ALPN\n", false},
+		{"commented", "#undef HAVE_ALPN\n/* #undef HAVE_ALPN */\n", false},
+		{"different", "#define HAVE_ALPN_OTHER\n", false},
+	} {
+		t.Run(test.name, func(t *testing.T) {
+			if err := os.WriteFile(path, []byte(test.header), 0o600); err != nil {
+				t.Fatal(err)
+			}
+			defined, found := wolfSSLBuildOption(filepath.Join(root, "examples", "client", "Release", "client.exe"), "HAVE_ALPN")
+			if !found || defined != test.defined {
+				t.Fatalf("defined=%v found=%v", defined, found)
+			}
+		})
+	}
+}
+
+func requireWolfSSLBuildOption(t testing.TB, executable, option string) {
+	t.Helper()
+	defined, found := wolfSSLBuildOption(executable, option)
+	if found && !defined {
+		t.Skipf("wolfSSL build does not enable %s", option)
 	}
 }
 
@@ -1759,6 +2221,12 @@ func TestParseWolfSSLBenchmarkAverage(t *testing.T) {
 
 func requireWolfSSLPSK(t testing.TB, root, executable string) {
 	t.Helper()
+	if defined, found := wolfSSLBuildOption(executable, "NO_PSK"); found {
+		if defined {
+			t.Skip("wolfSSL interoperability build does not enable PSK callbacks")
+		}
+		return
+	}
 	cmd := exec.Command(executable, "-?") // #nosec G204 -- validated local WOLFSSL_ROOT executable in this opt-in test.
 	cmd.Dir = root
 	output, _ := cmd.CombinedOutput()

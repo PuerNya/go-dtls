@@ -170,6 +170,10 @@ type Conn struct {
 	handshakeErr      error
 	handshakeDeadline time.Time
 
+	// Owned by the handshake, then by the single record reader. At most one
+	// datagram tail is retained across a handshake message or epoch boundary.
+	pendingDatagram []byte
+
 	// Set during the handshake, before the reader goroutine starts, and
 	// read-only thereafter; no lock is needed.
 	hasCompletedPeerFlight           bool
@@ -732,9 +736,8 @@ func (c *Conn) promoteEarlyApplicationData() error {
 func (c *Conn) readRecords() {
 	buffer := acquireDatagramBuffer()
 	defer releaseDatagramBuffer(buffer)
-	datagram := buffer[:]
 	for {
-		n, err := c.conn.Read(datagram)
+		datagram, err := readDatagramWithPending(c.conn, buffer[:], &c.pendingDatagram)
 		if err != nil {
 			c.finishRecordReader(err)
 			return
@@ -745,7 +748,7 @@ func (c *Conn) readRecords() {
 				from = actual
 			}
 		}
-		if err = c.dispatchDatagramFrom(datagram[:n], from); err != nil {
+		if err = c.dispatchDatagramFrom(datagram, from); err != nil {
 			c.failConnection(err)
 			return
 		}

@@ -55,9 +55,9 @@ jobs:
           path: |
             ${{ runner.temp }}/wolfssl
             ${{ runner.temp }}/wolfssl-build
-          key: wolfssl-${{ runner.os }}-${{ runner.arch }}-release-static-v1-${{ steps.wolfssl.outputs.commit }}
+          key: wolfssl-${{ runner.os }}-${{ runner.arch }}-release-static-v2-${{ steps.wolfssl.outputs.commit }}
           restore-keys: |
-            wolfssl-${{ runner.os }}-${{ runner.arch }}-release-static-v1-
+            wolfssl-${{ runner.os }}-${{ runner.arch }}-release-static-v2-
       - name: Build wolfSSL
         env:
           WOLFSSL_COMMIT: ${{ steps.wolfssl.outputs.commit }}
@@ -84,18 +84,27 @@ jobs:
             -DCMAKE_BUILD_TYPE=Release \
             -DBUILD_SHARED_LIBS=OFF \
             -DWOLFSSL_AESCCM=yes \
+            -DWOLFSSL_ALPN=yes \
             -DWOLFSSL_CURVE25519=yes \
             -DWOLFSSL_DTLS=yes \
             -DWOLFSSL_DTLS13=yes \
             -DWOLFSSL_DTLS_CH_FRAG=yes \
             -DWOLFSSL_DTLS_CID=yes \
+            -DWOLFSSL_DTLS_MTU=yes \
             -DWOLFSSL_EARLYDATA=yes \
+            -DWOLFSSL_ECH=yes \
+            -DWOLFSSL_ED25519=yes \
             -DWOLFSSL_EXAMPLES=yes \
+            -DWOLFSSL_HPKE=yes \
+            -DWOLFSSL_KEYING_MATERIAL=yes \
             -DWOLFSSL_MLKEM=yes \
+            -DWOLFSSL_OCSP=yes \
+            -DWOLFSSL_OCSPSTAPLING=yes \
             -DWOLFSSL_POSTAUTH=yes \
             -DWOLFSSL_PSK=yes \
             -DWOLFSSL_SESSIONCERTS=yes \
             -DWOLFSSL_SESSION_TICKET=yes \
+            -DWOLFSSL_SNI=yes \
             -DWOLFSSL_TLS13=yes
           cmake --build "$WOLFSSL_BUILD" --parallel 2
           test -x "$WOLFSSL_BUILD/examples/server/server"

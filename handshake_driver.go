@@ -1,6 +1,7 @@
 package dtls13
 
 import (
+	"bytes"
 	"context"
 	"crypto/tls"
 	"errors"
@@ -256,17 +257,16 @@ func (c *Conn) receiveSecondClientHello(conn net.Conn, inbox *handshakeInbox, hr
 	buffer := acquireDatagramBuffer()
 	defer releaseDatagramBuffer(buffer)
 	for {
-		datagram := buffer[:]
-		n, err := conn.Read(datagram)
+		datagram, err := readDatagramWithPending(conn, buffer[:], &c.pendingDatagram)
 		if err != nil {
 			return completedHandshakeBatch{}, err
 		}
-		var recordScratch [1]record
-		records, err := parsePlainRecordsViewInto(datagram[:n], recordScratch[:0])
-		if err != nil {
-			continue
-		}
-		for _, record := range records {
+		for len(datagram) > 0 {
+			record, consumed, parseErr := parsePlainRecordView(datagram)
+			if parseErr != nil {
+				break
+			}
+			datagram = datagram[consumed:]
 			if record.typ != recordTypeHandshake {
 				continue
 			}
@@ -295,6 +295,7 @@ func (c *Conn) receiveSecondClientHello(conn net.Conn, inbox *handshakeInbox, hr
 				}
 			}
 			if delivered.len() > 0 {
+				c.pendingDatagram = bytes.Clone(datagram)
 				return delivered, nil
 			}
 		}
@@ -327,15 +328,17 @@ func receiveHandshakeMessageWithEarlyBatch(conn net.Conn, inbox *handshakeInbox,
 	early, onEarly := options.early, options.onEarly
 	outgoing, ackCipher := options.outgoing, options.ackCipher
 	mtu, owner := options.mtu, options.owner
+	pending := &inbox.pendingDatagram
+	if owner != nil {
+		pending = &owner.pendingDatagram
+	}
 	buffer := acquireDatagramBuffer()
 	defer releaseDatagramBuffer(buffer)
 	for {
-		datagram := buffer[:]
-		n, err := conn.Read(datagram)
+		datagram, err := readDatagramWithPending(conn, buffer[:], pending)
 		if err != nil {
 			return completedHandshakeBatch{}, err
 		}
-		datagram = datagram[:n]
 		for len(datagram) > 0 {
 			var payload []byte
 			var typ uint8
@@ -356,26 +359,20 @@ func receiveHandshakeMessageWithEarlyBatch(conn net.Conn, inbox *handshakeInbox,
 					}
 					break
 				}
-				var recordScratch [1]record
-				records, parseErr := parsePlainRecordsViewInto(datagram, recordScratch[:0])
+				r, recordWireLen, parseErr := parsePlainRecordView(datagram)
 				if parseErr != nil {
 					break
 				}
-				if len(records) == 0 {
-					break
-				}
-				recordWireLen := plainRecordHeaderLen + len(records[0].payload)
-				typ = records[0].typ
-				payload = records[0].payload
+				typ = r.typ
+				payload = r.payload
 				consumed = recordWireLen
 			} else {
 				var openErr error
 				if datagram[0] == recordTypeACK {
-					var recordScratch [1]record
-					records, parseErr := parsePlainRecordsViewInto(datagram, recordScratch[:0])
-					if parseErr == nil && len(records) > 0 && records[0].typ == recordTypeACK {
-						consumed = plainRecordHeaderLen + len(records[0].payload)
-						numbers, ackErr := parseACK(records[0].payload)
+					r, recordWireLen, parseErr := parsePlainRecordView(datagram)
+					if parseErr == nil && r.typ == recordTypeACK {
+						consumed = recordWireLen
+						numbers, ackErr := parseACK(r.payload)
 						if ackErr != nil {
 							return completedHandshakeBatch{}, ackErr
 						}
@@ -486,6 +483,7 @@ func receiveHandshakeMessageWithEarlyBatch(conn net.Conn, inbox *handshakeInbox,
 				}
 			}
 			if delivered.len() > 0 {
+				*pending = bytes.Clone(datagram)
 				return delivered, nil
 			}
 		}
@@ -493,16 +491,28 @@ func receiveHandshakeMessageWithEarlyBatch(conn net.Conn, inbox *handshakeInbox,
 }
 
 func receiveACKRecord(conn net.Conn, dst []recordNumber, ciphers ...*recordCipher) ([]recordNumber, error) {
+	return receiveACKRecordWithPending(conn, dst, nil, ciphers...)
+}
+
+func readDatagramWithPending(conn net.Conn, buffer []byte, pending *[]byte) ([]byte, error) {
+	if pending != nil && len(*pending) > 0 {
+		datagram := *pending
+		*pending = nil
+		return datagram, nil
+	}
+	n, err := conn.Read(buffer)
+	return buffer[:n], err
+}
+
+func receiveACKRecordWithPending(conn net.Conn, dst []recordNumber, pending *[]byte, ciphers ...*recordCipher) ([]recordNumber, error) {
 	buffer := acquireDatagramBuffer()
 	defer releaseDatagramBuffer(buffer)
 
 	for {
-		datagram := buffer[:]
-		n, err := conn.Read(datagram)
+		datagram, err := readDatagramWithPending(conn, buffer[:], pending)
 		if err != nil {
 			return nil, err
 		}
-		datagram = datagram[:n]
 		for len(datagram) > 0 && isUnifiedRecord(datagram) {
 			lastCipher := -1
 			for i, cipher := range ciphers {
@@ -541,6 +551,9 @@ func receiveACKRecord(conn net.Conn, dst []recordNumber, ciphers ...*recordCiphe
 					}
 					if parseErr = validateACKEpoch(numbers, cipher.epoch); parseErr != nil {
 						return nil, parseErr
+					}
+					if pending != nil {
+						*pending = bytes.Clone(datagram[consumed:])
 					}
 					return numbers, nil
 				case recordTypeAlert:
@@ -585,7 +598,7 @@ func (c *Conn) receiveACKWithRetransmit(outgoing *flight, ciphers ...*recordCiph
 		if err := c.conn.SetReadDeadline(next); err != nil {
 			return nil, err
 		}
-		numbers, err := receiveACKRecord(c.conn, ackScratch[:0], ciphers...)
+		numbers, err := receiveACKRecordWithPending(c.conn, ackScratch[:0], &c.pendingDatagram, ciphers...)
 		if err == nil {
 			acknowledged = append(acknowledged, numbers...)
 			outgoing.ack(numbers)
