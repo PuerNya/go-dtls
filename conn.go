@@ -49,6 +49,9 @@ type ConnectionState struct {
 	// It is nil when built-in verification was skipped or the peer did not send
 	// a certificate.
 	VerifiedChains [][]*x509.Certificate
+	// OCSPResponse contains the stapled OCSP response sent with the peer's
+	// certificate, when status_request was negotiated.
+	OCSPResponse []byte
 	// LocalConnectionID is the CID the peer currently uses when sending
 	// protected records to this endpoint. It is empty when no non-empty CID is
 	// active in that direction.
@@ -1192,6 +1195,7 @@ func (c *Conn) ConnectionState() ConnectionState {
 	state := c.state
 	state.LocalConnectionID = append([]byte(nil), state.LocalConnectionID...)
 	state.PeerConnectionID = append([]byte(nil), state.PeerConnectionID...)
+	state.OCSPResponse = append([]byte(nil), state.OCSPResponse...)
 	return state
 }
 

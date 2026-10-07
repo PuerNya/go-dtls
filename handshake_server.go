@@ -88,11 +88,13 @@ type serverHandshakeState struct {
 	clientCertificateSchemes     []tls.SignatureScheme
 	clientCertificateOIDFilters  []CertificateOIDFilter
 	clientCertificateCompression *certificateCompressionAlgorithms
+	clientStatusRequest          bool
 
 	// serverProcessClientFlight
 	clientFinalFlightStart uint16
 	clientCerts            []*x509.Certificate
 	clientChains           [][]*x509.Certificate
+	ocspResponse           []byte
 	clientAuthAt           int64
 	clientRecords          []recordNumber
 }
@@ -565,6 +567,7 @@ func (c *Conn) serverSendFlight(s *serverHandshakeState) error {
 	s.serverSequence++
 	if s.requestsClientCertificate(c) {
 		request := c.newCertificateRequest(nil)
+		s.clientStatusRequest = request.statusRequest
 		if c.config.EnableCertificateCompression {
 			s.clientCertificateCompression = &certificateCompressionZlibOffer
 		}
@@ -591,7 +594,21 @@ func (c *Conn) serverSendFlight(s *serverHandshakeState) error {
 		for i, der := range s.cert.Certificate {
 			entry := certificateEntry{data: der}
 			if i == 0 && c.config.serverCertificateEntryExtensions != nil {
-				entry.extensions = c.config.serverCertificateEntryExtensions
+				entry.extensions = make(map[uint16][]byte, len(c.config.serverCertificateEntryExtensions)+1)
+				for typ, value := range c.config.serverCertificateEntryExtensions {
+					entry.extensions[typ] = append([]byte(nil), value...)
+				}
+			}
+			if i == 0 && s.ch.statusRequest && len(s.cert.OCSPStaple) > 0 {
+				if entry.extensions == nil {
+					entry.extensions = make(map[uint16][]byte, 1)
+				}
+				if _, injected := entry.extensions[extStatusRequest]; !injected {
+					entry.extensions[extStatusRequest], err = marshalOCSPResponse(s.cert.OCSPStaple)
+					if err != nil {
+						return err
+					}
+				}
 			}
 			certMsg.certificates = append(certMsg.certificates, entry)
 		}
@@ -704,11 +721,12 @@ func (c *Conn) serverClientCertificate(s *serverHandshakeState, message complete
 	if err != nil {
 		return false, err
 	}
-	if err = validateCertificateMessage(certMessage, nil); err != nil {
+	if err = validateCertificateMessageWithStatusRequest(certMessage, nil, s.clientStatusRequest); err != nil {
 		return false, err
 	}
 	hasCertificates := len(certMessage.certificates) > 0
 	if hasCertificates {
+		s.ocspResponse = append([]byte(nil), certMessage.certificates[0].ocspResponse...)
 		if s.clientCerts, s.clientChains, err = verifyClientCertificate(c.config, certMessage, s.clientCertificateSchemes); err != nil {
 			return false, err
 		}
@@ -790,6 +808,7 @@ func (c *Conn) serverFinalize(s *serverHandshakeState) error {
 		negotiated:        s.negotiated,
 		peerCerts:         s.clientCerts,
 		chains:            s.clientChains,
+		ocspResponse:      s.ocspResponse,
 		promoteEarly:      true,
 		finishedACKCipher: s.serverCipher,
 	}); err != nil {

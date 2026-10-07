@@ -741,6 +741,7 @@ func cloneClientHello(source *clientHello) *clientHello {
 		clone.pskBinders[i] = bytes.Clone(binder)
 	}
 	clone.connectionID = bytes.Clone(source.connectionID)
+	clone.statusRequestRaw = bytes.Clone(source.statusRequestRaw)
 	clone.unknownExtensions = nil
 	if source.unknownExtensions != nil {
 		clone.unknownExtensions = make(map[uint16][]byte, len(source.unknownExtensions))

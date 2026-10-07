@@ -32,12 +32,14 @@ const (
 	extReturnRoutability       uint16 = 61
 )
 
+const statusTypeOCSP byte = 1
+
 func knownExtensionType(typ uint16) bool {
 	switch typ {
 	case extServerName, extSupportedGroups, extSupportedVersions, extKeyShare,
 		extSignatureAlgorithms, extALPN, extPadding, extCompressCertificate, extRecordSizeLimit, extPreSharedKey, extEarlyData,
 		extCookie, extPSKKeyExchangeModes, extPostHandshakeAuth,
-		extCertificateAuthorities, extOIDFilters, extSignatureAlgorithmsCert, extConnectionID, extTicketRequest, extReturnRoutability,
+		extCertificateAuthorities, extOIDFilters, extSignatureAlgorithmsCert, extConnectionID, extTicketRequest, extReturnRoutability, extStatusRequest,
 		extECH, extECHOuterExtensions:
 		return true
 	default:
@@ -86,7 +88,47 @@ type clientHello struct {
 	recordSizeLimit               uint16
 	hasRecordSizeLimit            bool
 	certificateCompressionOffered bool
+	statusRequest                 bool
+	statusRequestRaw              []byte
 	unknownExtensions             map[uint16][]byte
+}
+
+func marshalStatusRequest() []byte { return []byte{statusTypeOCSP, 0, 0, 0, 0} }
+
+func parseStatusRequest(raw []byte) (bool, error) {
+	p := wireParser{b: raw}
+	statusType := byte(p.u8())
+	_ = p.bytes16()
+	_ = p.bytes16()
+	if err := p.done(); err != nil {
+		return false, err
+	}
+	return statusType == statusTypeOCSP, nil
+}
+
+func marshalOCSPResponse(response []byte) ([]byte, error) {
+	if len(response) == 0 {
+		return nil, &ProtocolError{"empty OCSP response"}
+	}
+	w := newWireBuilder(4 + len(response))
+	w.u8(int(statusTypeOCSP))
+	w.bytes24(response)
+	return w.b, w.err
+}
+
+func parseOCSPResponse(raw []byte) ([]byte, error) {
+	p := wireParser{b: raw}
+	if p.u8() != int(statusTypeOCSP) {
+		return nil, alertError(alertDecodeError, &ProtocolError{"unsupported OCSP response status type"})
+	}
+	response := append([]byte(nil), p.bytes24()...)
+	if err := p.done(); err != nil {
+		return nil, err
+	}
+	if len(response) == 0 {
+		return nil, alertError(alertDecodeError, &ProtocolError{"empty OCSP response"})
+	}
+	return response, nil
 }
 
 func (h *clientHello) greaseExtension() (uint16, bool) {
@@ -974,7 +1016,7 @@ func (h *clientHello) marshal() ([]byte, error) {
 			return nil, err
 		}
 	}
-	var extensionStorage [20]orderedExtension
+	var extensionStorage [21]orderedExtension
 	extensions := extensionStorage[:0]
 	if serverName != nil {
 		extensions = append(extensions, orderedExtension{typ: extServerName, value: serverName})
@@ -994,6 +1036,9 @@ func (h *clientHello) marshal() ([]byte, error) {
 	}
 	if certificateCompression != nil {
 		extensions = append(extensions, orderedExtension{typ: extCompressCertificate, value: certificateCompression})
+	}
+	if h.statusRequest {
+		extensions = append(extensions, orderedExtension{typ: extStatusRequest, value: marshalStatusRequest()})
 	}
 	if h.hasRecordSizeLimit {
 		extensions = append(extensions, orderedExtension{typ: extRecordSizeLimit, value: recordSizeLimit[:]})
@@ -1082,7 +1127,7 @@ func parseClientHello(b []byte) (*clientHello, error) {
 		h.cipherSuites = append(h.cipherSuites, binary.BigEndian.Uint16(suites))
 		suites = suites[2:]
 	}
-	var extensionStorage [19]orderedExtension
+	var extensionStorage [20]orderedExtension
 	exts, err := parseOrderedExtensionsView(extBytes, extensionStorage[:0])
 	if err != nil {
 		return nil, err
@@ -1091,7 +1136,7 @@ func parseClientHello(b []byte) (*clientHello, error) {
 		switch extension.typ {
 		case extServerName, extSupportedGroups, extSignatureAlgorithms, extSignatureAlgorithmsCert, extCertificateAuthorities, extALPN, extPadding, extCompressCertificate, extRecordSizeLimit,
 			extSupportedVersions, extCookie, extKeyShare, extPostHandshakeAuth,
-			extConnectionID, extTicketRequest, extReturnRoutability, extEarlyData, extPSKKeyExchangeModes, extPreSharedKey, extECH:
+			extConnectionID, extTicketRequest, extReturnRoutability, extEarlyData, extPSKKeyExchangeModes, extPreSharedKey, extECH, extStatusRequest:
 		case extOIDFilters:
 			return nil, alertError(alertIllegalParameter, &ProtocolError{"oid_filters is not permitted in ClientHello"})
 		default:
@@ -1217,6 +1262,13 @@ func parseClientHello(b []byte) (*clientHello, error) {
 			return nil, err
 		}
 		h.hasRecordSizeLimit = true
+	}
+	if raw, ok := orderedExtensionValue(exts, extStatusRequest); ok {
+		h.statusRequestRaw = append([]byte(nil), raw...)
+		h.statusRequest, err = parseStatusRequest(raw)
+		if err != nil {
+			return nil, err
+		}
 	}
 	if raw, ok := orderedExtensionValue(exts, extCookie); ok {
 		h.cookie, err = parseCookie(raw)

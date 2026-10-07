@@ -71,6 +71,7 @@ type clientHandshakeState struct {
 	negotiated             string
 	certificateRequest     *certificateRequestMessage
 	certReqCompression     *certificateCompressionAlgorithms
+	ocspResponse           []byte
 	serverFinishedSequence uint16
 }
 
@@ -122,7 +123,7 @@ func (c *Conn) clientPrepareHello(s *clientHandshakeState) error {
 	if group, public, ok := key.fallbackPublicBytes(); ok && slices.Contains(c.config.CurvePreferences, group) {
 		keyShares = append(keyShares, keyShareEntry{group: group, data: public})
 	}
-	hello := &clientHello{cipherSuites: append([]uint16(nil), c.config.CipherSuites...), keyShares: keyShares, supportedGroups: c.config.CurvePreferences, signatureSchemes: defaultSignatureSchemes(), serverName: c.config.ServerName, alpn: c.config.NextProtos, postHandshakeAuth: c.config.PostHandshakeAuth, recordSizeLimit: c.config.RecordSizeLimit, hasRecordSizeLimit: true}
+	hello := &clientHello{cipherSuites: append([]uint16(nil), c.config.CipherSuites...), keyShares: keyShares, supportedGroups: c.config.CurvePreferences, signatureSchemes: defaultSignatureSchemes(), serverName: c.config.ServerName, alpn: c.config.NextProtos, postHandshakeAuth: c.config.PostHandshakeAuth, recordSizeLimit: c.config.RecordSizeLimit, hasRecordSizeLimit: true, statusRequest: c.config.EnableOCSPStapling}
 	if err = hello.setCertificateAuthorities(c.config.ServerCertificateAuthorities); err != nil {
 		return err
 	}
@@ -617,6 +618,7 @@ func (c *Conn) clientProcessServerFlight(s *clientHandshakeState) error {
 		for i := range s.selectedOffer.session.verifiedChains {
 			s.chains[i] = append([]*x509.Certificate(nil), s.selectedOffer.session.verifiedChains[i]...)
 		}
+		s.ocspResponse = append([]byte(nil), s.selectedOffer.session.ocspResponse...)
 	}
 	verifiedServerSignature := false
 	stage := serverExpectEncryptedExtensions
@@ -713,8 +715,11 @@ func (c *Conn) clientServerCertificate(s *clientHandshakeState, message complete
 	if err != nil {
 		return err
 	}
-	if err = validateCertificateMessage(certMsg, nil); err != nil {
+	if err = validateCertificateMessageWithStatusRequest(certMsg, nil, s.hello.statusRequest); err != nil {
 		return err
+	}
+	if len(certMsg.certificates) > 0 {
+		s.ocspResponse = append([]byte(nil), certMsg.certificates[0].ocspResponse...)
 	}
 	certificateSchemes := s.hello.certificateSignatureSchemes
 	if len(certificateSchemes) == 0 {
@@ -729,7 +734,7 @@ func (c *Conn) clientServerCertificate(s *clientHandshakeState, message complete
 		return err
 	}
 	if s.ech != nil && s.ech.rejected && c.config.EncryptedClientHelloRejectionVerify != nil {
-		rejectionState := ConnectionState{Version: VersionDTLS13, CipherSuite: s.suite.id, NegotiatedProtocol: s.negotiated, ServerName: s.ech.config.publicName, PeerCertificates: s.peerCerts, VerifiedChains: s.chains, ECHAccepted: false}
+		rejectionState := ConnectionState{Version: VersionDTLS13, CipherSuite: s.suite.id, NegotiatedProtocol: s.negotiated, ServerName: s.ech.config.publicName, PeerCertificates: s.peerCerts, VerifiedChains: s.chains, OCSPResponse: append([]byte(nil), s.ocspResponse...), ECHAccepted: false}
 		if verifyErr := c.config.EncryptedClientHelloRejectionVerify(rejectionState); verifyErr != nil {
 			return alertError(alertAccessDenied, verifyErr)
 		}
@@ -813,6 +818,13 @@ func (c *Conn) clientSendAuthAndFinished(s *clientHandshakeState) error {
 			if clientCertificate != nil {
 				for _, der := range clientCertificate.Certificate {
 					certMessage.certificates = append(certMessage.certificates, certificateEntry{data: der})
+				}
+				if s.certificateRequest.statusRequest && len(clientCertificate.OCSPStaple) > 0 && len(certMessage.certificates) > 0 {
+					response, responseErr := marshalOCSPResponse(clientCertificate.OCSPStaple)
+					if responseErr != nil {
+						return responseErr
+					}
+					certMessage.certificates[0].extensions = map[uint16][]byte{extStatusRequest: response}
 				}
 			}
 		}
@@ -901,6 +913,7 @@ func (c *Conn) clientFinalize(s *clientHandshakeState) error {
 		peerCerts:       s.peerCerts,
 		chains:          s.chains,
 		serverName:      c.config.ServerName,
+		ocspResponse:    s.ocspResponse,
 	}); err != nil {
 		return err
 	}

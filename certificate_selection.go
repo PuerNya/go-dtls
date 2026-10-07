@@ -426,6 +426,7 @@ func (c *Conn) newCertificateRequest(context []byte) *certificateRequestMessage 
 		requestContext:   context,
 		signatureSchemes: defaultSignatureSchemes(),
 		oidFilters:       c.config.ClientCertificateOIDFilters,
+		statusRequest:    c.config.EnableOCSPStapling,
 	}
 	if c.config.ClientCAs != nil {
 		//nolint:staticcheck // CertPool has no replacement that exposes configured subjects.

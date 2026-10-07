@@ -192,6 +192,11 @@ type Config struct {
 	// The zero value is false. Decompressed messages remain subject to
 	// MaxHandshakeMessage.
 	EnableCertificateCompression bool
+	// EnableOCSPStapling advertises the RFC 6066 status_request extension from
+	// clients and requests it in CertificateRequest messages from servers.
+	// A configured tls.Certificate.OCSPStaple is sent only when the peer made
+	// the corresponding request.
+	EnableOCSPStapling bool
 	// RecordSizeLimit is the maximum complete protected plaintext, including
 	// the inner content type, that this endpoint accepts. Zero selects the
 	// DTLS 1.3 maximum of 2^14+1 bytes. Values from 64 through 2^14+1 are

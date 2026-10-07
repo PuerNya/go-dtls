@@ -28,19 +28,23 @@ func TestCertificateMessageContextAndExtensionValidation(t *testing.T) {
 // extensions in the wrong message. Check every entry through the wire parser.
 func TestCertificateEntryExtensionClassification(t *testing.T) {
 	const maxCertificateMessageForTesting = 1 << 16
+	ocsp := []byte{statusTypeOCSP, 0, 0, 1, 0xaa}
 	for _, tc := range []struct {
 		name       string
 		extensions []map[uint16][]byte
+		requested  bool
 		wantAlert  uint8
 		wantErr    bool
 	}{
 		{name: "no extensions", extensions: []map[uint16][]byte{{}, {}}},
-		{name: "unsolicited status_request", extensions: []map[uint16][]byte{{extStatusRequest: {0x01, 0x00, 0x00}}, {}}, wantErr: true, wantAlert: alertUnsupportedExtension},
+		{name: "requested status_request", extensions: []map[uint16][]byte{{extStatusRequest: ocsp}, {}}, requested: true},
+		{name: "unsolicited status_request", extensions: []map[uint16][]byte{{extStatusRequest: ocsp}, {}}, wantErr: true, wantAlert: alertUnsupportedExtension},
 		{name: "unsolicited sct", extensions: []map[uint16][]byte{{extSCT: {0x00, 0x00}}, {}}, wantErr: true, wantAlert: alertUnsupportedExtension},
-		{name: "unsolicited extension on non-leaf entry", extensions: []map[uint16][]byte{{}, {extStatusRequest: {0x01}}}, wantErr: true, wantAlert: alertUnsupportedExtension},
+		{name: "unsolicited extension on non-leaf entry", extensions: []map[uint16][]byte{{}, {extStatusRequest: ocsp}}, wantErr: true, wantAlert: alertUnsupportedExtension},
+		{name: "requested status_request on non-leaf entry", extensions: []map[uint16][]byte{{}, {extStatusRequest: ocsp}}, requested: true, wantErr: true, wantAlert: alertIllegalParameter},
 		{name: "unknown extension", extensions: []map[uint16][]byte{{0xffa5: {1}}, {}}, wantErr: true, wantAlert: alertUnsupportedExtension},
 		{name: "recognized extension", extensions: []map[uint16][]byte{{extServerName: {}}, {}}, wantErr: true, wantAlert: alertIllegalParameter},
-		{name: "recognized after status_request", extensions: []map[uint16][]byte{{extStatusRequest: {0x01}, extKeyShare: {}}, {}}, wantErr: true, wantAlert: alertIllegalParameter},
+		{name: "recognized after status_request", extensions: []map[uint16][]byte{{extStatusRequest: ocsp, extKeyShare: {}}, {}}, wantErr: true, wantAlert: alertIllegalParameter},
 		{name: "recognized wins over unknown", extensions: []map[uint16][]byte{{0xffa5: {1}, extKeyShare: {}}, {}}, wantErr: true, wantAlert: alertIllegalParameter},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
@@ -61,7 +65,7 @@ func TestCertificateEntryExtensionClassification(t *testing.T) {
 					t.Fatalf("entry %d: receive path must not allocate an extension map", i)
 				}
 			}
-			err = validateCertificateMessage(parsed, nil)
+			err = validateCertificateMessageWithStatusRequest(parsed, nil, tc.requested)
 			if !tc.wantErr {
 				if err != nil {
 					t.Fatalf("unexpected rejection: %v", err)
@@ -76,8 +80,18 @@ func TestCertificateEntryExtensionClassification(t *testing.T) {
 			}
 		})
 	}
-	if knownExtensionType(extStatusRequest) || knownExtensionType(extSCT) {
-		t.Fatal("status_request and sct must stay unknown outside CertificateEntry so other messages keep rejecting them")
+	malformed := &certificateMessage{certificates: []certificateEntry{{data: []byte{1}, extensions: map[uint16][]byte{extStatusRequest: {1}}}}}
+	wire, err := malformed.marshal()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err = parseCertificateMessage(wire, maxCertificateMessageForTesting); err == nil {
+		t.Fatal("accepted malformed CertificateEntry status_request")
+	} else if description, ok := protocolAlert(err); !ok || description != alertDecodeError {
+		t.Fatalf("malformed CertificateEntry status_request alert=%d ok=%v err=%v", description, ok, err)
+	}
+	if !knownExtensionType(extStatusRequest) || knownExtensionType(extSCT) {
+		t.Fatal("status_request must be recognized outside CertificateEntry while SCT remains unsupported")
 	}
 }
 

@@ -216,6 +216,7 @@ type ClientSessionState struct {
 	recordSizeLimit  uint16
 	peerCertificates []*x509.Certificate
 	verifiedChains   [][]*x509.Certificate
+	ocspResponse     []byte
 	externalPSK      *externalPSKSelection
 	ticketGroup      [32]byte
 }
@@ -262,6 +263,7 @@ func cloneClientSessionState(state *ClientSessionState) *ClientSessionState {
 	clone.psk = append([]byte(nil), state.psk...)
 	clone.nonce = append([]byte(nil), state.nonce...)
 	clone.peerCertificates = append([]*x509.Certificate(nil), state.peerCertificates...)
+	clone.ocspResponse = append([]byte(nil), state.ocspResponse...)
 	clone.verifiedChains = make([][]*x509.Certificate, len(state.verifiedChains))
 	for i := range state.verifiedChains {
 		clone.verifiedChains[i] = append([]*x509.Certificate(nil), state.verifiedChains[i]...)
@@ -1268,7 +1270,8 @@ func (c *Conn) processNewSessionTicket(sequence uint16, body []byte) error {
 		suite: c.resumptionSuite.id, receivedAt: c.config.Time(), lifetime: message.lifetime,
 		ageAdd: message.ageAdd, serverName: c.config.ServerName, protocol: connectionState.NegotiatedProtocol,
 		maxEarlyData: message.maxEarlyData, recordSizeLimit: connectionState.PeerRecordSizeLimit, peerCertificates: connectionState.PeerCertificates, verifiedChains: connectionState.VerifiedChains,
-		externalPSK: connectionState.externalPSKSelection(), ticketGroup: group,
+		ocspResponse: connectionState.OCSPResponse,
+		externalPSK:  connectionState.externalPSKSelection(), ticketGroup: group,
 	}
 	key := clientSessionCacheKey(c.config, c.conn)
 	if request != nil {

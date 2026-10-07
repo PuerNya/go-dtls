@@ -217,8 +217,10 @@ const (
 )
 
 type certificateEntry struct {
-	data       []byte
-	extensions map[uint16][]byte
+	data          []byte
+	extensions    map[uint16][]byte
+	ocspResponse  []byte
+	statusRequest bool
 	// peerVerdict is populated by parseCertificateMessage; entries built
 	// locally for sending leave it zero and use extensions instead.
 	peerVerdict certificateEntryExtensionVerdict
@@ -231,8 +233,8 @@ type certificateMessage struct {
 // classifyCertificateEntryExtension maps one CertificateEntry extension type
 // to its verdict. Recognized-but-misplaced wins over unsolicited so the RFC
 // 9846 §4.3 illegal_parameter rule is reported even when both kinds appear.
-// This endpoint requests no CertificateEntry extensions, so every other type
-// requires unsupported_extension, including status_request and SCT.
+// status_request is handled separately because it is permitted on the first
+// entry only after the peer requested it in ClientHello or CertificateRequest.
 func classifyCertificateEntryExtension(typ uint16) certificateEntryExtensionVerdict {
 	if knownExtensionType(typ) {
 		return certificateEntryExtensionsRecognized
@@ -262,12 +264,34 @@ func certificateEntryVerdictError(verdict certificateEntryExtensionVerdict) erro
 }
 
 func validateCertificateMessage(message *certificateMessage, expectedContext []byte) error {
+	return validateCertificateMessageWithStatusRequest(message, expectedContext, false)
+}
+
+func validateCertificateMessageWithStatusRequest(message *certificateMessage, expectedContext []byte, requested bool) error {
 	if message == nil || !equalBytes(message.requestContext, expectedContext) {
 		return alertError(alertIllegalParameter, &ProtocolError{"Certificate request context mismatch"})
 	}
-	for _, certificate := range message.certificates {
+	for index, certificate := range message.certificates {
 		verdict := certificate.peerVerdict
-		for typ := range certificate.extensions {
+		if certificate.statusRequest {
+			if !requested {
+				verdict = mergeCertificateEntryVerdict(verdict, certificateEntryExtensionsUnsolicited)
+			} else if index != 0 {
+				verdict = mergeCertificateEntryVerdict(verdict, certificateEntryExtensionsRecognized)
+			}
+		}
+		for typ, raw := range certificate.extensions {
+			if typ == extStatusRequest {
+				if _, err := parseOCSPResponse(raw); err != nil {
+					return err
+				}
+				if !requested {
+					verdict = mergeCertificateEntryVerdict(verdict, certificateEntryExtensionsUnsolicited)
+				} else if index != 0 {
+					verdict = mergeCertificateEntryVerdict(verdict, certificateEntryExtensionsRecognized)
+				}
+				continue
+			}
 			verdict = mergeCertificateEntryVerdict(verdict, classifyCertificateEntryExtension(typ))
 		}
 		if err := certificateEntryVerdictError(verdict); err != nil {
@@ -341,7 +365,16 @@ func parseCertificateMessage(b []byte, maxSize int) (*certificateMessage, error)
 		}
 		entry := certificateEntry{data: append([]byte(nil), data...)}
 		for i := range exts {
-			entry.peerVerdict = mergeCertificateEntryVerdict(entry.peerVerdict, classifyCertificateEntryExtension(exts[i].typ))
+			extension := exts[i]
+			if extension.typ == extStatusRequest {
+				entry.ocspResponse, err = parseOCSPResponse(extension.value)
+				if err != nil {
+					return nil, err
+				}
+				entry.statusRequest = true
+				continue
+			}
+			entry.peerVerdict = mergeCertificateEntryVerdict(entry.peerVerdict, classifyCertificateEntryExtension(extension.typ))
 		}
 		m.certificates = append(m.certificates, entry)
 	}

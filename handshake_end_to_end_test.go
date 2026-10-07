@@ -638,11 +638,15 @@ func TestEndToEndRejectsUnsolicitedCertificateEntryExtensions(t *testing.T) {
 			left, right := memoryDatagramPair()
 			defer left.Close()
 			defer right.Close()
+			extensionValue := []byte{0, 0, 1, 0xaa}
+			if extension.typ == extStatusRequest {
+				extensionValue = []byte{statusTypeOCSP, 0, 0, 1, 0xaa}
+			}
 			client := Client(left, &Config{RootCAs: roots, ServerName: "server.test", HandshakeTimeout: time.Second})
 			server := Server(right, &Config{
 				Certificates:                     []tls.Certificate{certificate},
 				HandshakeTimeout:                 time.Second,
-				serverCertificateEntryExtensions: map[uint16][]byte{extension.typ: {0}},
+				serverCertificateEntryExtensions: map[uint16][]byte{extension.typ: extensionValue},
 			})
 			serverErr := make(chan error, 1)
 			go func() { serverErr <- server.Handshake() }()
@@ -658,6 +662,64 @@ func TestEndToEndRejectsUnsolicitedCertificateEntryExtensions(t *testing.T) {
 				t.Fatal("handshake completed with an unsolicited CertificateEntry extension")
 			}
 		})
+	}
+}
+
+func TestEndToEndOCSPStaplingNegotiation(t *testing.T) {
+	certificate, roots := testServerCertificate(t)
+	certificate.OCSPStaple = []byte("stapled-ocsp")
+	client, _ := completeHandshakePair(t,
+		&Config{RootCAs: roots, ServerName: "server.test", EnableOCSPStapling: true, HandshakeTimeout: time.Second},
+		&Config{Certificates: []tls.Certificate{certificate}, HandshakeTimeout: time.Second})
+	state := client.ConnectionState()
+	if got := state.OCSPResponse; !bytes.Equal(got, certificate.OCSPStaple) {
+		t.Fatalf("OCSPResponse=%x, want %x", got, certificate.OCSPStaple)
+	}
+	state.OCSPResponse[0] ^= 0xff
+	if got := client.ConnectionState().OCSPResponse; !bytes.Equal(got, certificate.OCSPStaple) {
+		t.Fatalf("ConnectionState exposed mutable OCSPResponse %x", got)
+	}
+
+	client, _ = completeHandshakePair(t,
+		&Config{RootCAs: roots, ServerName: "server.test", HandshakeTimeout: time.Second},
+		&Config{Certificates: []tls.Certificate{certificate}, HandshakeTimeout: time.Second})
+	if got := client.ConnectionState().OCSPResponse; got != nil {
+		t.Fatalf("received unsolicited OCSPResponse %x", got)
+	}
+}
+
+func TestEndToEndRejectsMalformedRequestedOCSPStaple(t *testing.T) {
+	certificate, roots := testServerCertificate(t)
+	left, right := memoryDatagramPair()
+	defer left.Close()
+	defer right.Close()
+	client := Client(left, &Config{RootCAs: roots, ServerName: "server.test", EnableOCSPStapling: true, HandshakeTimeout: time.Second})
+	server := Server(right, &Config{
+		Certificates:                     []tls.Certificate{certificate},
+		HandshakeTimeout:                 time.Second,
+		serverCertificateEntryExtensions: map[uint16][]byte{extStatusRequest: {statusTypeOCSP, 0, 0, 0}},
+	})
+	serverErr := make(chan error, 1)
+	go func() { serverErr <- server.Handshake() }()
+	err := client.Handshake()
+	peerErr := <-serverErr
+	if description, ok := protocolAlert(err); !ok || description != alertDecodeError {
+		t.Fatalf("client alert=%d ok=%v err=%v, want decode_error", description, ok, err)
+	}
+	if !errors.Is(peerErr, AlertError(alertDecodeError)) {
+		t.Fatalf("server received %v, want decode_error", peerErr)
+	}
+}
+
+func TestEndToEndOCSPStaplingInCertificateRequest(t *testing.T) {
+	serverCertificate, serverRoots := testServerCertificate(t)
+	clientCertificate, clientRoots := testClientCertificate(t)
+	clientCertificate.OCSPStaple = []byte("client-ocsp")
+	_, server := completeHandshakePair(t,
+		&Config{Certificates: []tls.Certificate{clientCertificate}, RootCAs: serverRoots, ServerName: "server.test", EnableOCSPStapling: true, HandshakeTimeout: time.Second},
+		&Config{Certificates: []tls.Certificate{serverCertificate}, ClientAuth: tls.RequireAndVerifyClientCert, ClientCAs: clientRoots, EnableOCSPStapling: true, HandshakeTimeout: time.Second})
+	if got := server.ConnectionState().OCSPResponse; !bytes.Equal(got, clientCertificate.OCSPStaple) {
+		t.Fatalf("client OCSPResponse=%x, want %x", got, clientCertificate.OCSPStaple)
 	}
 }
 
@@ -1377,13 +1439,15 @@ func TestSessionTicketsDisabled(t *testing.T) {
 
 func TestEndToEndSessionResumption(t *testing.T) {
 	certificate, roots := testServerCertificate(t)
+	certificate.OCSPStaple = []byte("resumed-ocsp")
 	cache := NewLRUClientSessionCache(4)
 	var ticketKey [32]byte
 	copy(ticketKey[:], bytes.Repeat([]byte{0x5c}, 32))
 	clientConfig := &Config{
 		RootCAs: roots, ServerName: "server.test", NextProtos: []string{"coap"}, ClientSessionCache: cache,
-		CipherSuites:     []uint16{TLS_CHACHA20_POLY1305_SHA256},
-		HandshakeTimeout: 2 * time.Second, FlightInterval: 5 * time.Millisecond,
+		EnableOCSPStapling: true,
+		CipherSuites:       []uint16{TLS_CHACHA20_POLY1305_SHA256},
+		HandshakeTimeout:   2 * time.Second, FlightInterval: 5 * time.Millisecond,
 	}
 	serverConfig := &Config{
 		Certificates: []tls.Certificate{certificate}, NextProtos: []string{"coap"}, SessionTicketKey: ticketKey,
@@ -1403,6 +1467,9 @@ func TestEndToEndSessionResumption(t *testing.T) {
 	}
 	if client.ConnectionState().NegotiatedProtocol != "coap" {
 		t.Fatalf("resumed ALPN %q", client.ConnectionState().NegotiatedProtocol)
+	}
+	if got := client.ConnectionState().OCSPResponse; !bytes.Equal(got, certificate.OCSPStaple) {
+		t.Fatalf("resumed OCSPResponse=%x, want %x", got, certificate.OCSPStaple)
 	}
 	if _, err := client.WriteDatagram([]byte("resumed")); err != nil {
 		t.Fatal(err)

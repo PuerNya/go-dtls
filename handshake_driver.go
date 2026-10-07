@@ -661,10 +661,27 @@ func equalClientHelloAfterHRR(initial, second *clientHello, requestedGroup tls.C
 		initial.postHandshakeAuth == second.postHandshakeAuth &&
 		initial.ticketRequest == second.ticketRequest &&
 		initial.certificateCompressionOffered == second.certificateCompressionOffered &&
+		equalStatusRequest(initial, second) &&
 		initial.recordSizeLimit == second.recordSizeLimit &&
 		initial.hasRecordSizeLimit == second.hasRecordSizeLimit &&
 		initial.grease == second.grease &&
 		equalExtensionMaps(initial.unknownExtensions, second.unknownExtensions)
+}
+
+func equalStatusRequest(initial, second *clientHello) bool {
+	if initial.statusRequest != second.statusRequest {
+		return false
+	}
+	if len(initial.statusRequestRaw) == 0 && len(second.statusRequestRaw) == 0 {
+		return true
+	}
+	if len(initial.statusRequestRaw) == 0 {
+		return initial.statusRequest && equalBytes(second.statusRequestRaw, marshalStatusRequest())
+	}
+	if len(second.statusRequestRaw) == 0 {
+		return second.statusRequest && equalBytes(initial.statusRequestRaw, marshalStatusRequest())
+	}
+	return equalBytes(initial.statusRequestRaw, second.statusRequestRaw)
 }
 
 func equalByteSlices(left, right [][]byte) bool {

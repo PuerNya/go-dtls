@@ -16,6 +16,7 @@ type certificateRequestMessage struct {
 	certificateSignatureSchemes []tls.SignatureScheme
 	certificateAuthorities      [][]byte
 	oidFilters                  []CertificateOIDFilter
+	statusRequest               bool
 }
 
 func (m *certificateRequestMessage) marshal() ([]byte, error) {
@@ -46,13 +47,16 @@ func (m *certificateRequestMessage) marshalWithCertificateCompression(algorithms
 			return nil, err
 		}
 	}
+	if m.statusRequest {
+		items[extStatusRequest] = marshalStatusRequest()
+	}
 	if algorithms != nil {
 		items[extCompressCertificate], err = marshalCertificateCompressionAlgorithms(algorithms)
 		if err != nil {
 			return nil, err
 		}
 	}
-	order := [...]uint16{extSignatureAlgorithms, extSignatureAlgorithmsCert, extCertificateAuthorities, extOIDFilters, extCompressCertificate, greaseExtension}
+	order := [...]uint16{extSignatureAlgorithms, extSignatureAlgorithmsCert, extCertificateAuthorities, extOIDFilters, extCompressCertificate, extStatusRequest, greaseExtension}
 	orderLength := len(order) - 1
 	if greaseExtension != 0 {
 		items[greaseExtension] = nil
@@ -113,8 +117,14 @@ func parseCertificateRequestWithCompression(b []byte) (*certificateRequestMessag
 			return nil, nil, err
 		}
 	}
+	if raw, ok = orderedExtensionValue(exts, extStatusRequest); ok {
+		m.statusRequest, err = parseStatusRequest(raw)
+		if err != nil {
+			return nil, nil, err
+		}
+	}
 	for _, extension := range exts {
-		if extension.typ != extSignatureAlgorithms && extension.typ != extSignatureAlgorithmsCert && extension.typ != extCertificateAuthorities && extension.typ != extOIDFilters && extension.typ != extCompressCertificate && knownExtensionType(extension.typ) {
+		if extension.typ != extSignatureAlgorithms && extension.typ != extSignatureAlgorithmsCert && extension.typ != extCertificateAuthorities && extension.typ != extOIDFilters && extension.typ != extCompressCertificate && extension.typ != extStatusRequest && knownExtensionType(extension.typ) {
 			return nil, nil, alertError(alertIllegalParameter, &ProtocolError{"recognized extension is not permitted in CertificateRequest"})
 		}
 	}

@@ -27,6 +27,7 @@ type postHandshakeAuthState struct {
 	certificateSchemes               []tls.SignatureScheme
 	oidFilters                       []CertificateOIDFilter
 	certificateCompressionAlgorithms *certificateCompressionAlgorithms
+	statusRequest                    bool
 	stage                            uint8
 	responseEpoch                    uint64
 	hasResponseEpoch                 bool
@@ -142,6 +143,7 @@ func (c *Conn) RequestClientCertificate(ctx context.Context) error {
 		inbox:            newHandshakeInbox(c.finishedMessageSequence+1, c.config.MaxHandshakeMessage, c.config.MaxBufferedHandshakeMessages, c.config.MaxBufferedHandshakeBytes),
 		done:             make(chan error, 1),
 		signatureSchemes: append([]tls.SignatureScheme(nil), request.signatureSchemes...),
+		statusRequest:    request.statusRequest,
 	}
 	state.certificateSchemes = append([]tls.SignatureScheme(nil), request.certificateSignatureSchemes...)
 	state.oidFilters = cloneOIDFilters(request.oidFilters)
@@ -195,6 +197,13 @@ func (c *Conn) processPostHandshakeCertificateRequest(sequence uint16, body []by
 	if local != nil {
 		for _, der := range local.Certificate {
 			certificate.certificates = append(certificate.certificates, certificateEntry{data: der})
+		}
+		if request.statusRequest && len(local.OCSPStaple) > 0 && len(certificate.certificates) > 0 {
+			response, responseErr := marshalOCSPResponse(local.OCSPStaple)
+			if responseErr != nil {
+				return responseErr
+			}
+			certificate.certificates[0].extensions = map[uint16][]byte{extStatusRequest: response}
 		}
 	}
 	certificateBody, err := certificate.marshal()
@@ -331,7 +340,7 @@ func (c *Conn) processPostHandshakeAuthMessageLocked(state *postHandshakeAuthSta
 		if !equalBytes(certificate.requestContext, state.context) {
 			return &ProtocolError{"post-handshake Certificate context mismatch"}
 		}
-		if err = validateCertificateMessage(certificate, state.context); err != nil {
+		if err = validateCertificateMessageWithStatusRequest(certificate, state.context, state.statusRequest); err != nil {
 			return err
 		}
 		state.sawCertificate = true

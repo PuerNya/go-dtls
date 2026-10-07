@@ -96,6 +96,42 @@ func TestClientHelloRoundTrip(t *testing.T) {
 	}
 }
 
+func TestClientHelloStatusRequest(t *testing.T) {
+	h := &clientHello{
+		cipherSuites:     []uint16{TLS_AES_128_GCM_SHA256},
+		supportedGroups:  []tls.CurveID{tls.X25519},
+		signatureSchemes: []tls.SignatureScheme{tls.Ed25519},
+		keyShares:        []keyShareEntry{{group: tls.X25519, data: []byte{1}}},
+		statusRequest:    true,
+	}
+	body, err := h.marshal()
+	if err != nil {
+		t.Fatal(err)
+	}
+	parsed, err := parseClientHello(body)
+	if err != nil || !parsed.statusRequest {
+		t.Fatalf("status_request round trip: parsed=%#v err=%v", parsed, err)
+	}
+	malformed := replaceClientHelloExtension(t, body, extStatusRequest, []byte{1})
+	if _, err = parseClientHello(malformed); err == nil {
+		t.Fatal("accepted truncated status_request")
+	} else if description, ok := protocolAlert(err); !ok || description != alertDecodeError {
+		t.Fatalf("malformed status_request alert=%d ok=%v err=%v", description, ok, err)
+	}
+	unsupported, err := parseClientHello(replaceClientHelloExtension(t, body, extStatusRequest, []byte{0, 0, 0, 0, 0}))
+	if err != nil || unsupported.statusRequest {
+		t.Fatalf("unsupported status type parsed=%#v err=%v", unsupported, err)
+	}
+	initial := parsed
+	changedRequest, err := parseClientHello(replaceClientHelloExtension(t, body, extStatusRequest, []byte{1, 0, 1, 0xaa, 0, 0}))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if equalClientHelloAfterHRR(initial, changedRequest, 0) {
+		t.Fatal("accepted changed status_request contents after HRR")
+	}
+}
+
 func TestClientHelloRejectsUnadvertisedKeyShare(t *testing.T) {
 	h := &clientHello{cipherSuites: []uint16{TLS_AES_128_GCM_SHA256}, supportedGroups: []tls.CurveID{tls.CurveP256}, keyShares: []keyShareEntry{{group: tls.X25519, data: bytes.Repeat([]byte{1}, 32)}}}
 	b, err := h.marshal()
@@ -589,6 +625,7 @@ func TestSecondClientHelloRejectsChangedInvariantFields(t *testing.T) {
 		returnRoutability:             true,
 		postHandshakeAuth:             true,
 		certificateCompressionOffered: true,
+		statusRequest:                 true,
 		recordSizeLimit:               512,
 		hasRecordSizeLimit:            true,
 		unknownExtensions:             map[uint16][]byte{0xffa5: {4}},
@@ -613,6 +650,7 @@ func TestSecondClientHelloRejectsChangedInvariantFields(t *testing.T) {
 		{"return-routability", func(h *clientHello) { h.returnRoutability = false }},
 		{"post-handshake-auth", func(h *clientHello) { h.postHandshakeAuth = false }},
 		{"certificate-compression", func(h *clientHello) { h.certificateCompressionOffered = false }},
+		{"status-request", func(h *clientHello) { h.statusRequest = false }},
 		{"record-size-limit", func(h *clientHello) { h.recordSizeLimit++ }},
 		{"record-size-limit-presence", func(h *clientHello) { h.hasRecordSizeLimit = false }},
 		{"unknown-extension", func(h *clientHello) { h.unknownExtensions = map[uint16][]byte{0xffa5: {9}} }},

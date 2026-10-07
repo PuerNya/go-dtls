@@ -32,6 +32,7 @@ type wolfSSLInteropOptions struct {
 	rejectEarlyData          bool
 	disableServerEcho        bool
 	requireClientCertificate bool
+	verifyServerCertificate  bool
 	loadClientCertificate    bool
 	configure                func(*testing.T, string, *Config)
 	wrapClientConn           func(*Conn)
@@ -625,6 +626,29 @@ func TestInteropWolfSSLClient(t *testing.T) {
 	testInteropWolfSSLClient(t, "", nil, false, nil)
 }
 
+func TestInteropWolfSSLClientOCSPStapling(t *testing.T) {
+	testInteropWolfSSLClientOptions(t, wolfSSLInteropOptions{
+		args:                    []string{"-A", filepath.Join("certs", "ocsp", "root-ca-cert.pem"), "-W", "1"},
+		verifyServerCertificate: true,
+		configure: func(t *testing.T, root string, config *Config) {
+			certificate, err := tls.LoadX509KeyPair(
+				filepath.Join(root, "certs", "ocsp", "server1-chain-noroot.pem"),
+				filepath.Join(root, "certs", "ocsp", "server1-key.pem"),
+			)
+			if err != nil {
+				t.Fatal(err)
+			}
+			// A static staple cannot match wolfSSL's per-connection nonce.
+			certificate.OCSPStaple, err = os.ReadFile(filepath.Join("testdata", "ocsp", "server1-response-no-nonce.der"))
+			if err != nil {
+				t.Fatal(err)
+			}
+			config.Certificates = []tls.Certificate{certificate}
+		},
+		outputContains: []string{"OCSP response timestamp:"},
+	})
+}
+
 func TestInteropWolfSSLClientGREASECertificateRequest(t *testing.T) {
 	testInteropWolfSSLClientOptions(t, wolfSSLInteropOptions{
 		loadClientCertificate: true,
@@ -825,7 +849,11 @@ func testInteropWolfSSLClientOptions(t *testing.T, options wolfSSLInteropOptions
 		port = proxy.conn.LocalAddr().(*net.UDPAddr).Port
 	}
 
-	args := []string{"-u", "-v", "4", "-d", "-h", "127.0.0.1", "-p", strconv.Itoa(port)}
+	args := []string{"-u", "-v", "4"}
+	if !options.verifyServerCertificate {
+		args = append(args, "-d")
+	}
+	args = append(args, "-h", "127.0.0.1", "-p", strconv.Itoa(port))
 	if !options.loadClientCertificate {
 		args = append(args, "-x")
 	}

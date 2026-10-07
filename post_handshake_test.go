@@ -30,7 +30,7 @@ func TestPostHandshakeAuthContextIsUniqueWithDeterministicRandom(t *testing.T) {
 }
 
 func TestCertificateRequestRoundTrip(t *testing.T) {
-	want := &certificateRequestMessage{requestContext: []byte{1, 2}, signatureSchemes: []tls.SignatureScheme{tls.Ed25519, tls.PSSWithSHA256}}
+	want := &certificateRequestMessage{requestContext: []byte{1, 2}, signatureSchemes: []tls.SignatureScheme{tls.Ed25519, tls.PSSWithSHA256}, statusRequest: true}
 	b, err := want.marshal()
 	if err != nil {
 		t.Fatal(err)
@@ -39,7 +39,7 @@ func TestCertificateRequestRoundTrip(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if string(got.requestContext) != string(want.requestContext) || len(got.signatureSchemes) != 2 || got.signatureSchemes[0] != tls.Ed25519 {
+	if string(got.requestContext) != string(want.requestContext) || len(got.signatureSchemes) != 2 || got.signatureSchemes[0] != tls.Ed25519 || !got.statusRequest {
 		t.Fatalf("got %#v", got)
 	}
 }
