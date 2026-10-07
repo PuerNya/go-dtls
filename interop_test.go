@@ -1075,12 +1075,7 @@ func TestInteropWolfSSLClientConnectionID(t *testing.T) {
 
 func TestInteropWolfSSLClientKeyUpdate(t *testing.T) {
 	testInteropWolfSSLClientOptions(t, wolfSSLInteropOptions{
-		args: []string{"-I"},
-		connected: func(t *testing.T, conn *Conn, _ int) {
-			if err := conn.SendKeyUpdate(false); err != nil {
-				t.Fatalf("send KeyUpdate: %v", err)
-			}
-		},
+		args:      []string{"-I"},
 		exchanged: requireWolfSSLKeyUpdate,
 	})
 }
