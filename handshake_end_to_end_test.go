@@ -12,6 +12,7 @@ import (
 	"net"
 	"strings"
 	"sync"
+	"sync/atomic"
 	"testing"
 	"time"
 )
@@ -720,6 +721,41 @@ func TestEndToEndOCSPStaplingInCertificateRequest(t *testing.T) {
 		&Config{Certificates: []tls.Certificate{serverCertificate}, ClientAuth: tls.RequireAndVerifyClientCert, ClientCAs: clientRoots, EnableOCSPStapling: true, HandshakeTimeout: time.Second})
 	if got := server.ConnectionState().OCSPResponse; !bytes.Equal(got, clientCertificate.OCSPStaple) {
 		t.Fatalf("client OCSPResponse=%x, want %x", got, clientCertificate.OCSPStaple)
+	}
+}
+
+func TestEndToEndPostHandshakeAuthRefreshesOCSPResponse(t *testing.T) {
+	serverCertificate, serverRoots := testServerCertificate(t)
+	clientCertificate, clientRoots := testClientCertificate(t)
+	var certificateRequests atomic.Int32
+	_, server := completeHandshakePair(t,
+		&Config{
+			RootCAs: serverRoots, ServerName: "server.test", PostHandshakeAuth: true,
+			EnableOCSPStapling: true, HandshakeTimeout: time.Second,
+			GetClientCertificate: func(*CertificateRequestInfo) (*tls.Certificate, error) {
+				certificate := clientCertificate
+				if certificateRequests.Add(1) > 1 {
+					certificate.OCSPStaple = nil
+				} else {
+					certificate.OCSPStaple = []byte("initial-client-ocsp")
+				}
+				return &certificate, nil
+			},
+		},
+		&Config{
+			Certificates: []tls.Certificate{serverCertificate}, ClientAuth: tls.RequireAndVerifyClientCert,
+			ClientCAs: clientRoots, EnableOCSPStapling: true, HandshakeTimeout: time.Second,
+		})
+	if got := server.ConnectionState().OCSPResponse; !bytes.Equal(got, []byte("initial-client-ocsp")) {
+		t.Fatalf("initial client OCSPResponse=%x", got)
+	}
+	ctx, cancel := context.WithTimeout(context.Background(), time.Second)
+	defer cancel()
+	if err := server.RequestClientCertificate(ctx); err != nil {
+		t.Fatal(err)
+	}
+	if got := server.ConnectionState().OCSPResponse; got != nil {
+		t.Fatalf("post-handshake OCSPResponse=%x, want nil after unstapled certificate", got)
 	}
 }
 

@@ -18,6 +18,7 @@ type postHandshakeAuthState struct {
 	inbox                            *handshakeInbox
 	peerCertificates                 []*x509.Certificate
 	verifiedChains                   [][]*x509.Certificate
+	ocspResponse                     []byte
 	sawCertificate                   bool
 	verifiedSignature                bool
 	done                             chan error
@@ -345,6 +346,7 @@ func (c *Conn) processPostHandshakeAuthMessageLocked(state *postHandshakeAuthSta
 		}
 		state.sawCertificate = true
 		if len(certificate.certificates) > 0 {
+			state.ocspResponse = append([]byte(nil), certificate.certificates[0].ocspResponse...)
 			state.peerCertificates, state.verifiedChains, err = verifyClientCertificate(c.config, certificate, state.certificateSchemes)
 			if err != nil {
 				return err
@@ -418,6 +420,7 @@ func (c *Conn) processPostHandshakeAuthMessageLocked(state *postHandshakeAuthSta
 		c.mu.Lock()
 		c.state.PeerCertificates = append([]*x509.Certificate(nil), state.peerCertificates...)
 		c.state.VerifiedChains = state.verifiedChains
+		c.state.OCSPResponse = append([]byte(nil), state.ocspResponse...)
 		c.mu.Unlock()
 		return nil
 	default:
