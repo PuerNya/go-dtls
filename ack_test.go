@@ -4,10 +4,15 @@ import (
 	"bytes"
 	"encoding/binary"
 	"errors"
+	"net"
 	"reflect"
 	"testing"
 	"time"
 )
+
+func receiveACKRecord(conn net.Conn, dst []recordNumber, ciphers ...*recordCipher) ([]recordNumber, error) {
+	return receiveACKRecordWithPending(conn, dst, nil, ciphers...)
+}
 
 func TestACKRoundTrip(t *testing.T) {
 	want := []recordNumber{{epoch: 2, sequence: 7}, {epoch: 1<<63 + 9, sequence: 1<<63 + 11}}

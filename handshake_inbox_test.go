@@ -10,6 +10,30 @@ import (
 	"time"
 )
 
+func (b *completedHandshakeBatch) slice() []completedHandshake {
+	if b.values != nil {
+		return b.values
+	}
+	return b.inline[:b.count]
+}
+
+func receiveHandshakeMessage(conn net.Conn, inbox *handshakeInbox, cipher *recordCipher) ([]completedHandshake, error) {
+	return receiveHandshakeMessageWithEarly(conn, inbox, cipher, nil, nil, 0, nil)
+}
+
+func receiveHandshakeMessageWithEarly(conn net.Conn, inbox *handshakeInbox, cipher *recordCipher, outgoing *flight, ackCipher *recordCipher, mtu int, owner *Conn) ([]completedHandshake, error) {
+	batch, err := receiveHandshakeMessageWithEarlyBatch(conn, inbox, cipher, handshakeReceiveOptions{
+		outgoing:  outgoing,
+		ackCipher: ackCipher,
+		mtu:       mtu,
+		owner:     owner,
+	})
+	if err != nil {
+		return nil, err
+	}
+	return batch.slice(), nil
+}
+
 type readErrorThenEOFConn struct {
 	net.Conn
 	err error

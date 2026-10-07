@@ -295,12 +295,16 @@ func unusedUDPPort(t testing.TB) int {
 }
 
 func TestInteropWolfSSLServer(t *testing.T) {
-	testInteropWolfSSLServer(t, "", nil, false, nil)
+	testInteropWolfSSLServerOptions(t, wolfSSLInteropOptions{})
 }
 
 func TestInteropWolfSSLBuildFeatures(t *testing.T) {
 	_, server, client := wolfSSLPaths(t)
 	for _, executable := range []string{server, client} {
+		options := wolfSSLBuildOptions(executable)
+		if options == nil {
+			t.Fatalf("cannot verify build options for %s: options.h not found", executable)
+		}
 		for _, option := range []string{
 			"HAVE_AESCCM", "HAVE_ALPN", "HAVE_CURVE25519", "HAVE_ED25519",
 			"HAVE_ECH", "HAVE_HPKE", "HAVE_KEYING_MATERIAL", "HAVE_OCSP",
@@ -309,11 +313,7 @@ func TestInteropWolfSSLBuildFeatures(t *testing.T) {
 			"WOLFSSL_DTLS_MTU", "WOLFSSL_EARLY_DATA", "WOLFSSL_HAVE_MLKEM", "WOLFSSL_POST_HANDSHAKE_AUTH",
 			"NO_PSK",
 		} {
-			defined, found := wolfSSLBuildOption(executable, option)
-			if !found {
-				t.Fatalf("cannot verify build options for %s: options.h not found", executable)
-			}
-			if defined != (option != "NO_PSK") {
+			if defined := options[option]; defined != (option != "NO_PSK") {
 				t.Errorf("%s: unexpected build option %s=%v", executable, option, defined)
 			}
 		}
@@ -575,11 +575,13 @@ func TestInteropWolfSSLServerECHGrease(t *testing.T) {
 }
 
 func TestInteropWolfSSLServerCertificateCompressionOffer(t *testing.T) {
-	testInteropWolfSSLServer(t, "", nil, true, nil)
+	testInteropWolfSSLServerOptions(t, wolfSSLInteropOptions{certificateCompression: true})
 }
 
 func TestInteropWolfSSLServerExternalPSK(t *testing.T) {
-	testInteropWolfSSLServer(t, "TLS13-AES128-GCM-SHA256", []uint16{TLS_AES_128_GCM_SHA256}, false, wolfSSLExternalPSK(t))
+	testInteropWolfSSLServerOptions(t, wolfSSLInteropOptions{
+		cipherName: "TLS13-AES128-GCM-SHA256", suites: []uint16{TLS_AES_128_GCM_SHA256}, externalPSK: wolfSSLExternalPSK(t),
+	})
 }
 
 func TestInteropWolfSSLServerHybridKeyExchange(t *testing.T) {
@@ -760,13 +762,6 @@ func TestInteropWolfSSLServerRetransmitsFinishedAfterDroppedFinalACK(t *testing.
 	})
 }
 
-func testInteropWolfSSLServer(t *testing.T, cipherName string, suites []uint16, certificateCompression bool, externalPSK *ExternalPSK) {
-	t.Helper()
-	testInteropWolfSSLServerOptions(t, wolfSSLInteropOptions{
-		cipherName: cipherName, suites: suites, certificateCompression: certificateCompression, externalPSK: externalPSK,
-	})
-}
-
 func testInteropWolfSSLServerOptions(t *testing.T, options wolfSSLInteropOptions) {
 	t.Helper()
 	root, serverPath, _ := wolfSSLPaths(t)
@@ -896,7 +891,7 @@ func testInteropWolfSSLServerOptions(t *testing.T, options wolfSSLInteropOptions
 }
 
 func TestInteropWolfSSLClient(t *testing.T) {
-	testInteropWolfSSLClient(t, "", nil, false, nil)
+	testInteropWolfSSLClientOptions(t, wolfSSLInteropOptions{})
 }
 
 func TestInteropWolfSSLClientSNI(t *testing.T) {
@@ -1035,11 +1030,13 @@ func TestInteropWolfSSLClientGREASESessionTicket(t *testing.T) {
 }
 
 func TestInteropWolfSSLClientCertificateCompressionFallback(t *testing.T) {
-	testInteropWolfSSLClient(t, "", nil, true, nil)
+	testInteropWolfSSLClientOptions(t, wolfSSLInteropOptions{certificateCompression: true})
 }
 
 func TestInteropWolfSSLClientExternalPSK(t *testing.T) {
-	testInteropWolfSSLClient(t, "TLS13-AES128-GCM-SHA256", []uint16{TLS_AES_128_GCM_SHA256}, false, wolfSSLExternalPSK(t))
+	testInteropWolfSSLClientOptions(t, wolfSSLInteropOptions{
+		cipherName: "TLS13-AES128-GCM-SHA256", suites: []uint16{TLS_AES_128_GCM_SHA256}, externalPSK: wolfSSLExternalPSK(t),
+	})
 }
 
 func TestInteropWolfSSLClientHybridKeyExchange(t *testing.T) {
@@ -1177,13 +1174,6 @@ func TestInteropWolfSSLClientEarlyData(t *testing.T) {
 func TestInteropWolfSSLClientRetransmitsFinishedAfterDroppedFinalACK(t *testing.T) {
 	testInteropWolfSSLClientOptions(t, wolfSSLInteropOptions{
 		dropClientFinalACK: true,
-	})
-}
-
-func testInteropWolfSSLClient(t *testing.T, cipherName string, suites []uint16, certificateCompression bool, externalPSK *ExternalPSK) {
-	t.Helper()
-	testInteropWolfSSLClientOptions(t, wolfSSLInteropOptions{
-		cipherName: cipherName, suites: suites, certificateCompression: certificateCompression, externalPSK: externalPSK,
 	})
 }
 
@@ -1393,11 +1383,8 @@ func wolfSSLRootCAs(t testing.TB, root, relativePath string) *x509.CertPool {
 
 func requireResumptionOnSecondConnection(t *testing.T, conn *Conn, index int) {
 	t.Helper()
-	if err := conn.Handshake(); err != nil {
-		t.Fatalf("connection %d handshake: %v", index+1, err)
-	}
-	if conn.ConnectionState().DidResume != (index == 1) {
-		t.Fatalf("connection %d DidResume=%v, want %v", index+1, conn.ConnectionState().DidResume, index == 1)
+	if resumed := conn.ConnectionState().DidResume; resumed != (index == 1) {
+		t.Fatalf("connection %d DidResume=%v, want %v", index+1, resumed, index == 1)
 	}
 }
 
@@ -1411,24 +1398,25 @@ func requireWolfSSLOutput(t *testing.T, output *lockedBuffer, required []string)
 	}
 }
 
-func wolfSSLBuildOption(executable, option string) (defined, found bool) {
+func wolfSSLBuildOptions(executable string) map[string]bool {
 	directory := filepath.Dir(executable)
 	for range 6 {
 		path := filepath.Join(directory, "wolfssl", "options.h")
 		data, err := os.ReadFile(path) // #nosec G304 -- executable is an explicit local wolfSSL test binary.
 		if err == nil {
+			options := make(map[string]bool)
 			for line := range strings.SplitSeq(string(data), "\n") {
 				fields := strings.Fields(line)
-				if len(fields) >= 2 && fields[1] == option {
+				if len(fields) >= 2 {
 					switch fields[0] {
 					case "#define":
-						defined = true
+						options[fields[1]] = true
 					case "#undef":
-						defined = false
+						options[fields[1]] = false
 					}
 				}
 			}
-			return defined, true
+			return options
 		}
 		next := filepath.Dir(directory)
 		if next == directory {
@@ -1436,11 +1424,15 @@ func wolfSSLBuildOption(executable, option string) (defined, found bool) {
 		}
 		directory = next
 	}
-	return false, false
+	return nil
 }
 
 func TestWolfSSLBuildOption(t *testing.T) {
 	root := t.TempDir()
+	executable := filepath.Join(root, "examples", "client", "Release", "client.exe")
+	if options := wolfSSLBuildOptions(executable); options != nil {
+		t.Fatalf("missing header returned options: %v", options)
+	}
 	if err := os.Mkdir(filepath.Join(root, "wolfssl"), 0o700); err != nil {
 		t.Fatal(err)
 	}
@@ -1455,12 +1447,12 @@ func TestWolfSSLBuildOption(t *testing.T) {
 		{"different", "#define HAVE_ALPN_OTHER\n", false},
 	} {
 		t.Run(test.name, func(t *testing.T) {
-			if err := os.WriteFile(path, []byte(test.header), 0o600); err != nil {
+			if err := os.WriteFile(path, []byte(test.header+"#define HAVE_OCSP\n"), 0o600); err != nil {
 				t.Fatal(err)
 			}
-			defined, found := wolfSSLBuildOption(filepath.Join(root, "examples", "client", "Release", "client.exe"), "HAVE_ALPN")
-			if !found || defined != test.defined {
-				t.Fatalf("defined=%v found=%v", defined, found)
+			options := wolfSSLBuildOptions(executable)
+			if options == nil || options["HAVE_ALPN"] != test.defined || !options["HAVE_OCSP"] {
+				t.Fatalf("options=%v, want HAVE_ALPN=%v and HAVE_OCSP=true", options, test.defined)
 			}
 		})
 	}
@@ -1468,8 +1460,7 @@ func TestWolfSSLBuildOption(t *testing.T) {
 
 func requireWolfSSLBuildOption(t testing.TB, executable, option string) {
 	t.Helper()
-	defined, found := wolfSSLBuildOption(executable, option)
-	if found && !defined {
+	if options := wolfSSLBuildOptions(executable); options != nil && !options[option] {
 		t.Skipf("wolfSSL build does not enable %s", option)
 	}
 }
@@ -2221,8 +2212,8 @@ func TestParseWolfSSLBenchmarkAverage(t *testing.T) {
 
 func requireWolfSSLPSK(t testing.TB, root, executable string) {
 	t.Helper()
-	if defined, found := wolfSSLBuildOption(executable, "NO_PSK"); found {
-		if defined {
+	if options := wolfSSLBuildOptions(executable); options != nil {
+		if options["NO_PSK"] {
 			t.Skip("wolfSSL interoperability build does not enable PSK callbacks")
 		}
 		return

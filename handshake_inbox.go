@@ -42,13 +42,6 @@ func (b *completedHandshakeBatch) at(index int) completedHandshake {
 	return b.inline[index]
 }
 
-func (b *completedHandshakeBatch) slice() []completedHandshake {
-	if b.values != nil {
-		return b.values
-	}
-	return b.inline[:b.count]
-}
-
 // handshakeInbox applies RFC 9147's next_receive_seq ordering on top of
 // fragment reassembly. Future complete messages remain buffered until every
 // preceding message has arrived.

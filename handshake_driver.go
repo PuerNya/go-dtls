@@ -241,17 +241,6 @@ func (c *Conn) receiveHandshakeWithRetransmitOnEarly(conn net.Conn, inbox *hands
 		}
 	}
 }
-func receiveHandshakeMessage(conn net.Conn, inbox *handshakeInbox, cipher *recordCipher) ([]completedHandshake, error) {
-	batch, err := receiveHandshakeMessageBatch(conn, inbox, cipher)
-	if err != nil {
-		return nil, err
-	}
-	return batch.slice(), nil
-}
-
-func receiveHandshakeMessageBatch(conn net.Conn, inbox *handshakeInbox, cipher *recordCipher) (completedHandshakeBatch, error) {
-	return receiveHandshakeMessageWithEarlyBatch(conn, inbox, cipher, handshakeReceiveOptions{})
-}
 
 func (c *Conn) receiveSecondClientHello(conn net.Conn, inbox *handshakeInbox, hrr *flight) (completedHandshakeBatch, error) {
 	buffer := acquireDatagramBuffer()
@@ -300,19 +289,6 @@ func (c *Conn) receiveSecondClientHello(conn net.Conn, inbox *handshakeInbox, hr
 			}
 		}
 	}
-}
-
-func receiveHandshakeMessageWithEarly(conn net.Conn, inbox *handshakeInbox, cipher *recordCipher, outgoing *flight, ackCipher *recordCipher, mtu int, owner *Conn) ([]completedHandshake, error) {
-	batch, err := receiveHandshakeMessageWithEarlyBatch(conn, inbox, cipher, handshakeReceiveOptions{
-		outgoing:  outgoing,
-		ackCipher: ackCipher,
-		mtu:       mtu,
-		owner:     owner,
-	})
-	if err != nil {
-		return nil, err
-	}
-	return batch.slice(), nil
 }
 
 type handshakeReceiveOptions struct {
@@ -488,10 +464,6 @@ func receiveHandshakeMessageWithEarlyBatch(conn net.Conn, inbox *handshakeInbox,
 			}
 		}
 	}
-}
-
-func receiveACKRecord(conn net.Conn, dst []recordNumber, ciphers ...*recordCipher) ([]recordNumber, error) {
-	return receiveACKRecordWithPending(conn, dst, nil, ciphers...)
 }
 
 func readDatagramWithPending(conn net.Conn, buffer []byte, pending *[]byte) ([]byte, error) {
