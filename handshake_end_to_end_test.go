@@ -607,8 +607,10 @@ func TestEndToEndCertificateHandshake(t *testing.T) {
 	client := Client(left, &Config{RootCAs: roots, ServerName: "server.test", NextProtos: []string{"coap"}, HandshakeTimeout: 5 * time.Second})
 	server := Server(right, &Config{Certificates: []tls.Certificate{certificate}, NextProtos: []string{"coap"}, HandshakeTimeout: 5 * time.Second})
 	handshakePair(t, client, server)
-	if !client.ConnectionState().HandshakeComplete || client.ConnectionState().NegotiatedProtocol != "coap" {
-		t.Fatalf("client state %#v", client.ConnectionState())
+	for _, conn := range []*Conn{client, server} {
+		if state := conn.ConnectionState(); !state.HandshakeComplete || state.NegotiatedProtocol != "coap" || state.ServerName != "server.test" {
+			t.Fatalf("connection state %#v", state)
+		}
 	}
 	payload := []byte("protected application data")
 	writeErr := make(chan error, 1)

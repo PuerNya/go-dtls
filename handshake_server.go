@@ -905,6 +905,7 @@ func (c *Conn) serverFinalize(s *serverHandshakeState) error {
 		echAccepted:       s.echAccepted,
 		negotiated:        s.negotiated,
 		peerCerts:         s.clientCerts,
+		serverName:        s.ch.serverName,
 		peerRawPublicKey:  s.clientRawPublicKey,
 		chains:            s.clientChains,
 		ocspResponse:      s.ocspResponse,
