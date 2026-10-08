@@ -17,6 +17,8 @@ const (
 	extSignatureAlgorithms     uint16 = 13
 	extALPN                    uint16 = 16
 	extSCT                     uint16 = 18
+	extClientCertificateType   uint16 = 19
+	extServerCertificateType   uint16 = 20
 	extPadding                 uint16 = 21
 	extCompressCertificate     uint16 = 27
 	extRecordSizeLimit         uint16 = 28
@@ -40,7 +42,7 @@ func knownExtensionType(typ uint16) bool {
 		extSignatureAlgorithms, extALPN, extPadding, extCompressCertificate, extRecordSizeLimit, extPreSharedKey, extEarlyData,
 		extCookie, extPSKKeyExchangeModes, extPostHandshakeAuth,
 		extCertificateAuthorities, extOIDFilters, extSignatureAlgorithmsCert, extConnectionID, extTicketRequest, extReturnRoutability, extStatusRequest,
-		extECH, extECHOuterExtensions:
+		extECH, extECHOuterExtensions, extClientCertificateType, extServerCertificateType:
 		return true
 	default:
 		return false
@@ -1031,6 +1033,11 @@ func (h *clientHello) marshal() ([]byte, error) {
 	if certificateAuthorities := h.unknownExtensions[extCertificateAuthorities]; certificateAuthorities != nil {
 		extensions = append(extensions, orderedExtension{typ: extCertificateAuthorities, value: certificateAuthorities})
 	}
+	for _, typ := range [...]uint16{extClientCertificateType, extServerCertificateType} {
+		if raw := h.unknownExtensions[typ]; raw != nil {
+			extensions = append(extensions, orderedExtension{typ: typ, value: raw})
+		}
+	}
 	if alpn != nil {
 		extensions = append(extensions, orderedExtension{typ: extALPN, value: alpn})
 	}
@@ -1139,6 +1146,14 @@ func parseClientHello(b []byte) (*clientHello, error) {
 			extConnectionID, extTicketRequest, extReturnRoutability, extEarlyData, extPSKKeyExchangeModes, extPreSharedKey, extECH, extStatusRequest:
 		case extOIDFilters:
 			return nil, alertError(alertIllegalParameter, &ProtocolError{"oid_filters is not permitted in ClientHello"})
+		case extClientCertificateType, extServerCertificateType:
+			if _, err := parseCertificateTypes(extension.value); err != nil {
+				return nil, err
+			}
+			if h.unknownExtensions == nil {
+				h.unknownExtensions = make(map[uint16][]byte)
+			}
+			h.unknownExtensions[extension.typ] = append([]byte(nil), extension.value...)
 		default:
 			if extension.typ == greaseValue(h.random[0]) && len(extension.value) == 0 {
 				h.grease = true

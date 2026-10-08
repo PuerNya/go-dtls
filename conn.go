@@ -44,6 +44,15 @@ type ConnectionState struct {
 	// with the leaf first. Resumed connections restore this state from the
 	// session. It can be empty when a server did not request a client certificate.
 	PeerCertificates []*x509.Certificate
+	// PeerRawPublicKey contains the authenticated DER SubjectPublicKeyInfo
+	// when the peer used RPK. It is copied by ConnectionState and restored on
+	// resumption. PeerCertificates and VerifiedChains are nil for RPK peers.
+	PeerRawPublicKey []byte
+	// ServerCertificateType and ClientCertificateType record the credential
+	// types negotiated on this connection, defaulting to X.509. On resumption,
+	// the restored peer identity can differ from these newly negotiated types.
+	ServerCertificateType CertificateType
+	ClientCertificateType CertificateType
 	// VerifiedChains contains the chains built during certificate verification.
 	// Resumed connections restore chains after current built-in policy checks.
 	// It is nil when built-in verification was skipped or the peer did not send
@@ -158,6 +167,8 @@ func (s ConnectionState) ExportKeyingMaterial(label string, context []byte, leng
 // lock. If handshaking is set, Close only interrupts the transport; the
 // handshake clears its secrets on exit, before any record reader can start.
 type Conn struct {
+	serverCertificateType CertificateType
+	clientCertificateType CertificateType
 	// Immutable after construction.
 	conn     net.Conn
 	isClient bool
@@ -1199,6 +1210,7 @@ func (c *Conn) ConnectionState() ConnectionState {
 	state.LocalConnectionID = append([]byte(nil), state.LocalConnectionID...)
 	state.PeerConnectionID = append([]byte(nil), state.PeerConnectionID...)
 	state.OCSPResponse = append([]byte(nil), state.OCSPResponse...)
+	state.PeerRawPublicKey = append([]byte(nil), state.PeerRawPublicKey...)
 	return state
 }
 

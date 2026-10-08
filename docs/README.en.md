@@ -365,6 +365,14 @@ When either endpoint configures multiple entries in `Certificates`, the default 
 
 Custom server policy uses `GetCertificate` with `ClientHelloInfo.SupportsCertificate`; custom client policy uses `GetClientCertificate` with `CertificateRequestInfo.SupportsCertificate`. Callback slices are valid only for the call and must not be modified or retained. Each `ClientCertificateOIDFilters` entry contains an ASN.1 OID and the DER extension value without the X.509 extension wrapper. Key Usage and Extended Key Usage are recognized; unknown OIDs remain on the wire and are ignored as required by RFC 9846. Initial mTLS and PHA use the same selection rules. A resumed handshake has no CertificateRequest, so it neither reselects a client certificate nor calls the client callback.
 
+### Raw Public Key Authentication
+
+Enable RFC 7250 RPK explicitly through `ServerCertificateTypes` and `ClientCertificateTypes`; empty lists select X.509 only. Senders provide `RawPublicKeySigner`. Receivers must configure `VerifyPeerRawPublicKey` to authenticate DER SubjectPublicKeyInfo against independently provisioned trust, such as a pinned key. `InsecureSkipVerify` does not bypass this callback; CA, hostname, and `VerifyPeerCertificate` checks do not authenticate RPK peers.
+
+Server-only authentication, mutual RPK, mixed X.509/RPK directions, PHA, and ticket resumption are supported. Resumption revalidates the saved raw key. `ConnectionState.PeerRawPublicKey` returns a copy of the identity; RPK does not populate `PeerCertificates` or `VerifiedChains`. CA/OID hints and OCSP apply only to X.509. External PSK remains an alternative authentication mode, not combined RPK authentication.
+
+Certificate types are negotiated again on resumption. A cached RPK identity does not select the format of a subsequent PHA response: that format follows the current EncryptedExtensions. Removing the client's original signing key does not prevent PSK resumption, but the key is needed to authenticate with RPK again.
+
 ### Fast mTLS Resumption
 
 The client and server use their normal mTLS settings; additionally enable a client session cache and server tickets:

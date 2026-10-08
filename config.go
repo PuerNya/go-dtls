@@ -1,6 +1,7 @@
 package dtls13
 
 import (
+	"crypto"
 	"crypto/rand"
 	"crypto/tls"
 	"crypto/x509"
@@ -48,6 +49,27 @@ type Config struct {
 	// certificate signatures are rejected. An RSA server leaf must have a
 	// modulus of at least 2048 bits.
 	Certificates []tls.Certificate
+	// ServerCertificateTypes lists acceptable server credential types in
+	// preference order. Empty selects X.509 only. Clients advertise this list;
+	// clients without VerifyPeerRawPublicKey omit RPK when X.509 is allowed.
+	// Servers select a type for which they have a credential or callback.
+	ServerCertificateTypes []CertificateType
+	// ClientCertificateTypes lists acceptable client credential types in
+	// preference order. Empty selects X.509 only. Clients advertise only types
+	// for which they have credentials; servers use it for client authentication.
+	ClientCertificateTypes []CertificateType
+	// RawPublicKeySigner supplies the signing key for RFC 7250 authentication.
+	// Its public key is encoded as DER SubjectPublicKeyInfo. It is used only
+	// when the corresponding certificate type list enables RawPublicKey.
+	// The signer must be safe for concurrent use when Config is shared.
+	RawPublicKeySigner crypto.Signer
+	// VerifyPeerRawPublicKey authenticates a DER SubjectPublicKeyInfo using
+	// application-provided trust, such as a pinned public key. It is required
+	// when receiving an RPK, even with InsecureSkipVerify, and is called again
+	// before resuming an RPK-authenticated session. The input is a copy.
+	// The callback must be safe for concurrent use. X.509 verification and
+	// VerifyPeerCertificate do not run for RPK credentials.
+	VerifyPeerRawPublicKey func(rawSPKI []byte) error
 	// GetCertificate selects a server certificate after the ClientHello has
 	// been parsed. It must return a non-nil certificate or an error. When set,
 	// it takes precedence over Certificates. It is not used by clients. The
@@ -400,6 +422,12 @@ func (c *Config) normalized() (*Config, error) {
 	if x.Time == nil {
 		x.Time = time.Now
 	}
+	if err := validateCertificateTypes(x.ServerCertificateTypes); err != nil {
+		return nil, err
+	}
+	if err := validateCertificateTypes(x.ClientCertificateTypes); err != nil {
+		return nil, err
+	}
 	if x.MTU == 0 {
 		x.MTU = 1200
 	}
@@ -581,6 +609,8 @@ func (c *Config) Clone() *Config {
 func cloneConfig(c *Config) *Config {
 	x := *c
 	x.Certificates = append([]tls.Certificate(nil), c.Certificates...)
+	x.ServerCertificateTypes = append([]CertificateType(nil), c.ServerCertificateTypes...)
+	x.ClientCertificateTypes = append([]CertificateType(nil), c.ClientCertificateTypes...)
 	x.NextProtos = append([]string(nil), c.NextProtos...)
 	x.CipherSuites = append([]uint16(nil), c.CipherSuites...)
 	x.CurvePreferences = append([]tls.CurveID(nil), c.CurvePreferences...)

@@ -14,14 +14,17 @@ const (
 )
 
 type encryptedExtensions struct {
-	extensions          map[uint16][]byte
-	recordSizeLimit     uint16
-	hasRecordSizeLimit  bool
-	parsedStorage       [8]orderedExtension
-	parsedOverflow      []orderedExtension
-	parsedCount         int
-	expectedTicketCount uint8
-	hasTicketRequest    bool
+	extensions               map[uint16][]byte
+	recordSizeLimit          uint16
+	hasRecordSizeLimit       bool
+	parsedStorage            [8]orderedExtension
+	parsedOverflow           []orderedExtension
+	parsedCount              int
+	expectedTicketCount      uint8
+	hasTicketRequest         bool
+	serverCertificateType    CertificateType
+	clientCertificateType    CertificateType
+	hasClientCertificateType bool
 }
 
 func (m *encryptedExtensions) marshal() ([]byte, error) {
@@ -137,6 +140,19 @@ func validateEncryptedExtensions(hello *clientHello, message *encryptedExtension
 		return "", false, nil, alertError(alertIllegalParameter, &ProtocolError{"record_size_limit and max_fragment_length cannot both be negotiated"})
 	}
 	validate := func(typ uint16, raw []byte) error {
+		if typ == extServerCertificateType || typ == extClientCertificateType {
+			selected, err := validateSelectedCertificateType(hello, typ, raw)
+			if err != nil {
+				return err
+			}
+			if typ == extServerCertificateType {
+				message.serverCertificateType = selected
+			} else {
+				message.clientCertificateType = selected
+				message.hasClientCertificateType = true
+			}
+			return nil
+		}
 		if typ == extTicketRequest {
 			if !hello.ticketRequest.Enabled {
 				return alertError(alertUnsupportedExtension, &ProtocolError{"unsolicited ticket_request response"})

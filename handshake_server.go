@@ -93,6 +93,8 @@ type serverHandshakeState struct {
 	// serverProcessClientFlight
 	clientFinalFlightStart uint16
 	clientCerts            []*x509.Certificate
+	clientRawPublicKey     []byte
+	clientTypeNegotiated   bool
 	clientChains           [][]*x509.Certificate
 	ocspResponse           []byte
 	clientAuthAt           int64
@@ -403,13 +405,35 @@ func (c *Conn) serverNegotiateExtensionsAndKeyShare(s *serverHandshakeState) err
 	if s.serverShare, s.shared, err = generateServerKeyShare(s.share.group, s.share.data, c.config.Rand); err != nil {
 		return err
 	}
+	// TLS 1.3 applies a certificate-type selection in EncryptedExtensions to
+	// every later Certificate message. A PSK handshake cannot send the initial
+	// CertificateRequest, but can request PHA when the client offered it.
+	if c.config.ClientAuth != tls.NoClientCert && (!s.usingPSK || s.ch.postHandshakeAuth) {
+		typ, selectErr := selectCertificateType(s.ch.unknownExtensions[extClientCertificateType], c.config.ClientCertificateTypes, true, c.config.VerifyPeerRawPublicKey != nil)
+		if selectErr == nil {
+			c.clientCertificateType, s.clientTypeNegotiated = typ, true
+		} else {
+			alert, ok := protocolAlert(selectErr)
+			if !s.usingPSK || !ok || alert != alertUnsupportedCertificate {
+				return selectErr
+			}
+		}
+	}
 	if s.usingPSK {
 		return nil
 	}
 	if err = requireCertificateSignatureAlgorithms(s.ch, false); err != nil {
 		return err
 	}
-	if s.cert, err = c.serverCertificate(s.ch); err != nil {
+	if c.serverCertificateType, err = selectCertificateType(s.ch.unknownExtensions[extServerCertificateType], c.config.ServerCertificateTypes, len(c.config.Certificates) > 0 || c.config.GetCertificate != nil, c.config.RawPublicKeySigner != nil); err != nil {
+		return err
+	}
+	if c.serverCertificateType == CertificateTypeRawPublicKey {
+		s.cert, err = c.rawPublicKeyCertificate()
+	} else {
+		s.cert, err = c.serverCertificate(s.ch)
+	}
+	if err != nil {
 		return err
 	}
 	signer, ok := s.cert.PrivateKey.(crypto.Signer)
@@ -421,8 +445,10 @@ func (c *Conn) serverNegotiateExtensionsAndKeyShare(s *serverHandshakeState) err
 	if len(certificateSchemes) == 0 {
 		certificateSchemes = s.ch.signatureSchemes
 	}
-	if validateErr := validateConfiguredCertificate(s.cert, certificateSchemes, true); validateErr != nil {
-		return alertError(alertHandshakeFailure, validateErr)
+	if c.serverCertificateType == CertificateTypeX509 {
+		if validateErr := validateConfiguredCertificate(s.cert, certificateSchemes, true); validateErr != nil {
+			return alertError(alertHandshakeFailure, validateErr)
+		}
 	}
 	s.scheme, err = selectSignatureScheme(signer, s.ch.signatureSchemes)
 	return err
@@ -557,6 +583,21 @@ func (c *Conn) serverSendFlight(s *serverHandshakeState) error {
 			return err
 		}
 	}
+	for _, selection := range []struct {
+		typ     uint16
+		value   CertificateType
+		enabled bool
+	}{
+		{extServerCertificateType, c.serverCertificateType, !s.usingPSK},
+		{extClientCertificateType, c.clientCertificateType, s.clientTypeNegotiated},
+	} {
+		if selection.enabled && s.ch.unknownExtensions[selection.typ] != nil {
+			if ee.extensions == nil {
+				ee.extensions = make(map[uint16][]byte)
+			}
+			ee.extensions[selection.typ] = []byte{byte(selection.value)}
+		}
+	}
 	eeBody, err := ee.marshal()
 	if err != nil {
 		return err
@@ -593,13 +634,13 @@ func (c *Conn) serverSendFlight(s *serverHandshakeState) error {
 		certMsg := &certificateMessage{}
 		for i, der := range s.cert.Certificate {
 			entry := certificateEntry{data: der}
-			if i == 0 && c.config.serverCertificateEntryExtensions != nil {
+			if i == 0 && c.serverCertificateType == CertificateTypeX509 && c.config.serverCertificateEntryExtensions != nil {
 				entry.extensions = make(map[uint16][]byte, len(c.config.serverCertificateEntryExtensions)+1)
 				for typ, value := range c.config.serverCertificateEntryExtensions {
 					entry.extensions[typ] = append([]byte(nil), value...)
 				}
 			}
-			if i == 0 && s.ch.statusRequest && len(s.cert.OCSPStaple) > 0 {
+			if i == 0 && c.serverCertificateType == CertificateTypeX509 && s.ch.statusRequest && len(s.cert.OCSPStaple) > 0 {
 				if entry.extensions == nil {
 					entry.extensions = make(map[uint16][]byte, 1)
 				}
@@ -651,6 +692,7 @@ func (c *Conn) serverProcessClientFlight(s *serverHandshakeState) error {
 	s.inbox = newHandshakeInbox(s.clientFinalFlightStart, c.config.MaxHandshakeMessage, c.config.MaxBufferedHandshakeMessages, c.config.MaxBufferedHandshakeBytes)
 	if s.resumedSession != nil {
 		s.clientCerts = s.resumedSession.peerCertificates
+		s.clientRawPublicKey = append([]byte(nil), s.resumedSession.peerRawPublicKey...)
 		s.clientChains = s.resumedSession.verifiedChains
 		s.clientAuthAt = s.resumedSession.clientAuthAt
 	}
@@ -696,10 +738,10 @@ func (c *Conn) serverProcessClientFlight(s *serverHandshakeState) error {
 					return alertError(alertUnexpectedMessage, &ProtocolError{"client omitted Certificate message"})
 				}
 				required := !s.usingPSK && (c.config.ClientAuth == tls.RequireAnyClientCert || c.config.ClientAuth == tls.RequireAndVerifyClientCert)
-				if required && len(s.clientCerts) == 0 {
+				if required && len(s.clientCerts) == 0 && len(s.clientRawPublicKey) == 0 {
 					return alertError(alertCertificateRequired, &ProtocolError{"client certificate is required"})
 				}
-				if !s.usingPSK && len(s.clientCerts) > 0 && !verifiedClientSignature {
+				if !s.usingPSK && (len(s.clientCerts) > 0 || len(s.clientRawPublicKey) > 0) && !verifiedClientSignature {
 					return alertError(alertUnexpectedMessage, &ProtocolError{"client omitted CertificateVerify"})
 				}
 				if err = c.serverClientFinished(s, message); err != nil {
@@ -727,11 +769,18 @@ func (c *Conn) serverClientCertificate(s *serverHandshakeState, message complete
 	hasCertificates := len(certMessage.certificates) > 0
 	if hasCertificates {
 		s.ocspResponse = append([]byte(nil), certMessage.certificates[0].ocspResponse...)
-		if s.clientCerts, s.clientChains, err = verifyClientCertificate(c.config, certMessage, s.clientCertificateSchemes); err != nil {
-			return false, err
-		}
-		if err = matchCertificateOIDFilters(s.clientCerts[0], s.clientCertificateOIDFilters); err != nil {
-			return false, alertError(alertUnsupportedCertificate, err)
+		if c.clientCertificateType == CertificateTypeRawPublicKey {
+			s.clientRawPublicKey, err = verifyRawPublicKeyMessage(c.config, certMessage)
+			if err != nil {
+				return false, err
+			}
+		} else {
+			if s.clientCerts, s.clientChains, err = verifyClientCertificate(c.config, certMessage, s.clientCertificateSchemes); err != nil {
+				return false, err
+			}
+			if err = matchCertificateOIDFilters(s.clientCerts[0], s.clientCertificateOIDFilters); err != nil {
+				return false, alertError(alertUnsupportedCertificate, err)
+			}
 		}
 	}
 	_ = s.transcript.add(message.typ, message.sequence, message.body)
@@ -739,7 +788,7 @@ func (c *Conn) serverClientCertificate(s *serverHandshakeState, message complete
 }
 
 func (c *Conn) serverClientCertificateVerify(s *serverHandshakeState, message completedHandshake) error {
-	if len(s.clientCerts) == 0 {
+	if len(s.clientCerts) == 0 && len(s.clientRawPublicKey) == 0 {
 		return alertError(alertUnexpectedMessage, &ProtocolError{"client CertificateVerify without certificate"})
 	}
 	cv, err := parseCertificateVerify(message.body)
@@ -749,7 +798,7 @@ func (c *Conn) serverClientCertificateVerify(s *serverHandshakeState, message co
 	if !slices.Contains(s.clientSignatureSchemes, cv.algorithm) {
 		return alertError(alertIllegalParameter, &ProtocolError{"client selected an unoffered signature scheme"})
 	}
-	if err = verifyCertificateVerify(s.clientCerts[0].PublicKey, cv.algorithm, s.transcript.sumInto(s.transcriptDigest[:0]), cv.signature, false); err != nil {
+	if err = verifyPeerCertificateSignature(s.clientCerts, s.clientRawPublicKey, cv.algorithm, s.transcript.sumInto(s.transcriptDigest[:0]), cv.signature, false); err != nil {
 		return alertError(alertDecryptError, err)
 	}
 	_ = s.transcript.add(message.typ, message.sequence, message.body)
@@ -807,6 +856,7 @@ func (c *Conn) serverFinalize(s *serverHandshakeState) error {
 		echAccepted:       s.echAccepted,
 		negotiated:        s.negotiated,
 		peerCerts:         s.clientCerts,
+		peerRawPublicKey:  s.clientRawPublicKey,
 		chains:            s.clientChains,
 		ocspResponse:      s.ocspResponse,
 		promoteEarly:      true,
@@ -822,7 +872,7 @@ func (c *Conn) serverFinalize(s *serverHandshakeState) error {
 
 // serverIssueTickets sends the NewSessionTicket flight.
 func (c *Conn) serverIssueTickets(s *serverHandshakeState) error {
-	if !s.usingPSK && len(s.clientCerts) > 0 {
+	if !s.usingPSK && (len(s.clientCerts) > 0 || len(s.clientRawPublicKey) > 0) {
 		s.clientAuthAt = c.config.Time().Unix()
 	}
 	return c.sendNewSessionTickets(s.schedule, s.suite, s.ticketCount, s.ch.serverName, s.negotiated, s.clientAuthAt, s.clientCerts, s.clientChains, s.externalPSK)

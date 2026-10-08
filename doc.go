@@ -83,6 +83,20 @@
 // certificate_authorities hint, while [Config.ClientCertificateOIDFilters]
 // adds oid_filters to initial and post-handshake requests.
 //
+// RFC 7250 raw public key authentication is enabled explicitly through
+// [Config.ServerCertificateTypes] and [Config.ClientCertificateTypes]. Empty
+// lists select X.509 only. Configure [Config.RawPublicKeySigner] to send a
+// credential and [Config.VerifyPeerRawPublicKey] to authenticate a received
+// DER SubjectPublicKeyInfo, for example against an independently provisioned
+// public key. The callback is mandatory for RPK and is reapplied on resumption;
+// InsecureSkipVerify never bypasses it. [ConnectionState.PeerRawPublicKey]
+// exposes a copy of the authenticated key, separately from PeerCertificates.
+// Initial and post-handshake client authentication use the negotiated type.
+// Resumption restores the identity but renegotiates credential formats; PHA
+// uses the current EncryptedExtensions, not the cached authentication type.
+// CA/OID hints and OCSP responses apply only to X.509. External PSKs remain
+// an alternative authentication mode, not additional RPK authentication.
+//
 // [Config.InsecureSkipVerify] disables the built-in peer identity check and
 // should not be enabled in production unless [Config.VerifyPeerCertificate]
 // performs an equivalent check. Encryption without authentication does not

@@ -1,0 +1,18 @@
+cmake_minimum_required(VERSION 3.16)
+project(wolfssl_rpk_peer C)
+
+if(NOT WOLFSSL_ROOT OR NOT WOLFSSL_BUILD)
+    message(FATAL_ERROR "WOLFSSL_ROOT and WOLFSSL_BUILD are required")
+endif()
+find_library(WOLFSSL_LIBRARY NAMES wolfssl
+    PATHS "${WOLFSSL_BUILD}" "${WOLFSSL_BUILD}/Release" NO_DEFAULT_PATH REQUIRED)
+add_executable(wolfssl-rpk-peer peer.c)
+target_include_directories(wolfssl-rpk-peer PRIVATE "${WOLFSSL_BUILD}" "${WOLFSSL_ROOT}")
+target_compile_definitions(wolfssl-rpk-peer PRIVATE WOLFSSL_USE_OPTIONS_H HAVE_RPK)
+target_link_libraries(wolfssl-rpk-peer PRIVATE "${WOLFSSL_LIBRARY}")
+if(WIN32)
+    target_link_libraries(wolfssl-rpk-peer PRIVATE ws2_32)
+else()
+    find_package(Threads REQUIRED)
+    target_link_libraries(wolfssl-rpk-peer PRIVATE Threads::Threads m)
+endif()

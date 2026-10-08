@@ -17,6 +17,7 @@ type postHandshakeAuthState struct {
 	transcript                       *transcriptHash
 	inbox                            *handshakeInbox
 	peerCertificates                 []*x509.Certificate
+	peerRawPublicKey                 []byte
 	verifiedChains                   [][]*x509.Certificate
 	ocspResponse                     []byte
 	sawCertificate                   bool
@@ -69,8 +70,9 @@ func (c *Conn) newPostHandshakeAuthContext() ([]byte, error) {
 // server-only operation and performs the initial handshake first if necessary.
 //
 // The client must have advertised Config.PostHandshakeAuth. The server's
-// Config.ClientAuth must request or require a certificate, and ClientCAs and
-// VerifyPeerCertificate are applied according to that policy. At most one
+// Config.ClientAuth must request or require a certificate. X.509 credentials
+// use ClientCAs and VerifyPeerCertificate; RPK uses VerifyPeerRawPublicKey.
+// The credential type must have been negotiated on this connection. At most one
 // post-handshake authentication exchange may be active on a connection.
 //
 // Canceling ctx stops this call from waiting but does not retract a
@@ -88,6 +90,9 @@ func (c *Conn) RequestClientCertificate(ctx context.Context) error {
 	}
 	if c.config.ClientAuth == tls.NoClientCert {
 		return &ConfigError{"ClientAuth must request or require a client certificate"}
+	}
+	if !supportsCertificateType(c.config.ClientCertificateTypes, c.clientCertificateType) {
+		return &ConfigError{"no acceptable client certificate type was negotiated"}
 	}
 	requestContext, err := c.newPostHandshakeAuthContext()
 	if err != nil {
@@ -347,12 +352,19 @@ func (c *Conn) processPostHandshakeAuthMessageLocked(state *postHandshakeAuthSta
 		state.sawCertificate = true
 		if len(certificate.certificates) > 0 {
 			state.ocspResponse = append([]byte(nil), certificate.certificates[0].ocspResponse...)
-			state.peerCertificates, state.verifiedChains, err = verifyClientCertificate(c.config, certificate, state.certificateSchemes)
-			if err != nil {
-				return err
-			}
-			if err = matchCertificateOIDFilters(state.peerCertificates[0], state.oidFilters); err != nil {
-				return alertError(alertUnsupportedCertificate, err)
+			if c.clientCertificateType == CertificateTypeRawPublicKey {
+				state.peerRawPublicKey, err = verifyRawPublicKeyMessage(c.config, certificate)
+				if err != nil {
+					return err
+				}
+			} else {
+				state.peerCertificates, state.verifiedChains, err = verifyClientCertificate(c.config, certificate, state.certificateSchemes)
+				if err != nil {
+					return err
+				}
+				if err = matchCertificateOIDFilters(state.peerCertificates[0], state.oidFilters); err != nil {
+					return alertError(alertUnsupportedCertificate, err)
+				}
 			}
 			state.stage = postAuthExpectCertificateVerify
 		} else {
@@ -360,7 +372,7 @@ func (c *Conn) processPostHandshakeAuthMessageLocked(state *postHandshakeAuthSta
 		}
 		return state.transcript.add(message.typ, message.sequence, message.body)
 	case handshakeTypeCertificateVerify:
-		if state.stage != postAuthExpectCertificateVerify || len(state.peerCertificates) == 0 {
+		if state.stage != postAuthExpectCertificateVerify || (len(state.peerCertificates) == 0 && len(state.peerRawPublicKey) == 0) {
 			return &ProtocolError{"post-handshake CertificateVerify without certificate"}
 		}
 		verify, err := parseCertificateVerify(message.body)
@@ -375,7 +387,7 @@ func (c *Conn) processPostHandshakeAuthMessageLocked(state *postHandshakeAuthSta
 			err = alertError(alertIllegalParameter, &ProtocolError{"post-handshake client selected an unoffered signature scheme"})
 		}
 		if err == nil {
-			err = verifyCertificateVerify(state.peerCertificates[0].PublicKey, verify.algorithm, state.transcript.sum(), verify.signature, false)
+			err = verifyPeerCertificateSignature(state.peerCertificates, state.peerRawPublicKey, verify.algorithm, state.transcript.sum(), verify.signature, false)
 			if err != nil {
 				err = alertError(alertDecryptError, err)
 			}
@@ -391,7 +403,8 @@ func (c *Conn) processPostHandshakeAuthMessageLocked(state *postHandshakeAuthSta
 			return alertError(alertUnexpectedMessage, &ProtocolError{"unexpected post-handshake Finished"})
 		}
 		required := c.config.ClientAuth == tls.RequireAnyClientCert || c.config.ClientAuth == tls.RequireAndVerifyClientCert
-		if !state.sawCertificate || (required && len(state.peerCertificates) == 0) || (len(state.peerCertificates) > 0 && !state.verifiedSignature) {
+		hasIdentity := len(state.peerCertificates) > 0 || len(state.peerRawPublicKey) > 0
+		if !state.sawCertificate || (required && !hasIdentity) || (hasIdentity && !state.verifiedSignature) {
 			return &ProtocolError{"post-handshake client authentication is incomplete"}
 		}
 		verify, err := parseFinished(message.body, c.receivingTraffic.suite.hash.Size())
@@ -420,6 +433,7 @@ func (c *Conn) processPostHandshakeAuthMessageLocked(state *postHandshakeAuthSta
 		c.mu.Lock()
 		c.state.PeerCertificates = append([]*x509.Certificate(nil), state.peerCertificates...)
 		c.state.VerifiedChains = state.verifiedChains
+		c.state.PeerRawPublicKey = append([]byte(nil), state.peerRawPublicKey...)
 		c.state.OCSPResponse = append([]byte(nil), state.ocspResponse...)
 		c.mu.Unlock()
 		return nil

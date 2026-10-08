@@ -55,9 +55,9 @@ jobs:
           path: |
             ${{ runner.temp }}/wolfssl
             ${{ runner.temp }}/wolfssl-build
-          key: wolfssl-${{ runner.os }}-${{ runner.arch }}-release-static-v2-${{ steps.wolfssl.outputs.commit }}
+          key: wolfssl-${{ runner.os }}-${{ runner.arch }}-release-static-v3-${{ steps.wolfssl.outputs.commit }}
           restore-keys: |
-            wolfssl-${{ runner.os }}-${{ runner.arch }}-release-static-v2-
+            wolfssl-${{ runner.os }}-${{ runner.arch }}-release-static-v3-
       - name: Build wolfSSL
         env:
           WOLFSSL_COMMIT: ${{ steps.wolfssl.outputs.commit }}
@@ -82,6 +82,7 @@ jobs:
           git -C "$WOLFSSL_SOURCE" checkout --detach FETCH_HEAD
           cmake -S "$WOLFSSL_SOURCE" -B "$WOLFSSL_BUILD" \
             -DCMAKE_BUILD_TYPE=Release \
+            -DCMAKE_C_FLAGS=-DHAVE_RPK \
             -DBUILD_SHARED_LIBS=OFF \
             -DWOLFSSL_AESCCM=yes \
             -DWOLFSSL_ALPN=yes \
@@ -106,7 +107,7 @@ jobs:
             -DWOLFSSL_SESSION_TICKET=yes \
             -DWOLFSSL_SNI=yes \
             -DWOLFSSL_TLS13=yes
-          cmake --build "$WOLFSSL_BUILD" --parallel 2
+          cmake --build "$WOLFSSL_BUILD" --target wolfssl server client --parallel 2
           test -x "$WOLFSSL_BUILD/examples/server/server"
           test -x "$WOLFSSL_BUILD/examples/client/client"
       - name: Save wolfSSL cache
@@ -117,12 +118,21 @@ jobs:
             ${{ runner.temp }}/wolfssl
             ${{ runner.temp }}/wolfssl-build
           key: ${{ steps.cache-wolfssl.outputs.cache-primary-key }}
+      - name: Build wolfSSL RPK interoperability peer
+        shell: bash
+        run: |
+          cmake -S testdata/wolfssl-rpk -B "$RUNNER_TEMP/wolfssl-rpk" \
+            -DCMAKE_BUILD_TYPE=Release \
+            -DWOLFSSL_ROOT="$RUNNER_TEMP/wolfssl" \
+            -DWOLFSSL_BUILD="$RUNNER_TEMP/wolfssl-build"
+          cmake --build "$RUNNER_TEMP/wolfssl-rpk" --parallel 2
       - name: Run wolfSSL interoperability matrix
         env:
           WOLFSSL_COMMIT: ${{ steps.wolfssl.outputs.commit }}
           WOLFSSL_ROOT: ${{ runner.temp }}/wolfssl
           WOLFSSL_SERVER: ${{ runner.temp }}/wolfssl-build/examples/server/server
           WOLFSSL_CLIENT: ${{ runner.temp }}/wolfssl-build/examples/client/client
+          WOLFSSL_RPK_PEER: ${{ runner.temp }}/wolfssl-rpk/wolfssl-rpk-peer
         shell: bash
         run: |
           set -euo pipefail
@@ -133,6 +143,7 @@ jobs:
           test "$(git -C "$WOLFSSL_ROOT" rev-parse HEAD)" = "$WOLFSSL_COMMIT"
           test -x "$WOLFSSL_SERVER"
           test -x "$WOLFSSL_CLIENT"
+          test -x "$WOLFSSL_RPK_PEER"
           go test . -run '^TestInteropWolfSSL' -v -count="$count" -timeout=45m
       - name: Run paired PR performance gate
         if: github.event_name == 'pull_request'

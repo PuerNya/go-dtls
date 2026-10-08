@@ -370,6 +370,14 @@ identity 和 importer context 都以明文出现在 ClientHello 中，重复使�
 
 需要自定义策略时，服务端使用 `GetCertificate` 和 `ClientHelloInfo.SupportsCertificate`，客户端使用 `GetClientCertificate` 和 `CertificateRequestInfo.SupportsCertificate`。callback 收到的 slice 只在调用期间有效，不得修改或保留。`ClientCertificateOIDFilters` 的 OID 和值分别是 ASN.1 OID 与不含 X.509 extension wrapper 的 DER extension value；当前识别 Key Usage 和 Extended Key Usage，未知 OID 按 RFC 9846 保留在 wire 上并忽略。初始 mTLS 和 PHA 共用这些规则；恢复握手没有 CertificateRequest，因此不会重新选择或调用客户端 callback。
 
+### 裸公钥认证
+
+RFC 7250 RPK 通过 `ServerCertificateTypes` 和 `ClientCertificateTypes` 显式启用；空列表仅使用 X.509。发送方提供 `RawPublicKeySigner`，接收方必须配置 `VerifyPeerRawPublicKey`，依据独立配置的可信公钥等策略验证 DER SubjectPublicKeyInfo。`InsecureSkipVerify` 不会跳过该回调；CA、主机名及 `VerifyPeerCertificate` 不用于 RPK 身份验证。
+
+支持单向认证、RPK mTLS、X.509/RPK 混合方向、PHA 和 ticket 恢复。恢复前重新验证保存的裸公钥，`ConnectionState.PeerRawPublicKey` 返回身份副本；RPK 不会填充 `PeerCertificates` 或 `VerifiedChains`。CA/OID 提示和 OCSP 仅适用于 X.509。External PSK 是另一种认证模式，不与 RPK 组成联合认证。
+
+恢复握手仍重新协商证书类型。缓存的 RPK 身份不决定后续 PHA 响应格式，后者以本次 EncryptedExtensions 为准。删除客户端原始签名密钥不影响 PSK 恢复，但再次使用 RPK 认证仍需要该密钥。
+
 ### mTLS 快速恢复
 
 客户端和服务端沿用普通 mTLS 配置，只需同时启用客户端 session cache 和服务端 ticket：

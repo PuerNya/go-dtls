@@ -139,20 +139,21 @@ func (c *Conn) buildCertificateMessages(certificate *certificateMessage, compres
 // handshakeCompletion is the input to finishHandshake: everything both
 // handshakes publish once their final flight is acknowledged.
 type handshakeCompletion struct {
-	suite           *cipherSuite
-	schedule        *keySchedule
-	transcript      *transcriptHash
-	receiveCipher   *recordCipher
-	peerFlightStart uint16
-	peerFlightEnd   uint16
-	externalPSK     *externalPSKSelection
-	resumed         bool
-	echAccepted     bool
-	negotiated      string
-	peerCerts       []*x509.Certificate
-	chains          [][]*x509.Certificate
-	ocspResponse    []byte
-	serverName      string
+	suite            *cipherSuite
+	schedule         *keySchedule
+	transcript       *transcriptHash
+	receiveCipher    *recordCipher
+	peerFlightStart  uint16
+	peerFlightEnd    uint16
+	externalPSK      *externalPSKSelection
+	resumed          bool
+	echAccepted      bool
+	negotiated       string
+	peerCerts        []*x509.Certificate
+	peerRawPublicKey []byte
+	chains           [][]*x509.Certificate
+	ocspResponse     []byte
+	serverName       string
 	// promoteEarly releases 0-RTT data buffered before the handshake completed;
 	// only a server has any.
 	promoteEarly bool
@@ -195,6 +196,8 @@ func (c *Conn) finishHandshake(done handshakeCompletion) error {
 		Version: VersionDTLS13, HandshakeComplete: true, DidResume: done.resumed, ECHAccepted: done.echAccepted,
 		CipherSuite: done.suite.id, NegotiatedProtocol: done.negotiated, ServerName: done.serverName,
 		PeerCertificates: done.peerCerts, VerifiedChains: done.chains,
+		PeerRawPublicKey:      append([]byte(nil), done.peerRawPublicKey...),
+		ServerCertificateType: c.serverCertificateType, ClientCertificateType: c.clientCertificateType,
 		OCSPResponse:      append([]byte(nil), done.ocspResponse...),
 		LocalConnectionID: append([]byte(nil), c.receiveConnectionID...), PeerConnectionID: append([]byte(nil), c.sendConnectionID...),
 		ReturnRoutabilityCheck:    c.returnRoutabilityCheckNegotiated,

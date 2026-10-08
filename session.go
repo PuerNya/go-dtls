@@ -203,6 +203,7 @@ var defaultEarlyDataReplayCache EarlyDataReplayCache = NewLRUEarlyDataReplayCach
 // created and consumed by this package through ClientSessionCache and must not
 // be modified by applications or cache implementations.
 type ClientSessionState struct {
+	peerRawPublicKey []byte
 	ticket           []byte
 	psk              []byte
 	nonce            []byte
@@ -264,6 +265,7 @@ func cloneClientSessionState(state *ClientSessionState) *ClientSessionState {
 	clone.nonce = append([]byte(nil), state.nonce...)
 	clone.peerCertificates = append([]*x509.Certificate(nil), state.peerCertificates...)
 	clone.ocspResponse = append([]byte(nil), state.ocspResponse...)
+	clone.peerRawPublicKey = append([]byte(nil), state.peerRawPublicKey...)
 	clone.verifiedChains = make([][]*x509.Certificate, len(state.verifiedChains))
 	for i := range state.verifiedChains {
 		clone.verifiedChains[i] = append([]*x509.Certificate(nil), state.verifiedChains[i]...)
@@ -388,6 +390,7 @@ type externalPSKTicketState struct {
 }
 
 type sessionTicketState struct {
+	peerRawPublicKey []byte
 	createdAt        int64
 	clientAuthAt     int64
 	psk              []byte
@@ -401,6 +404,17 @@ type sessionTicketState struct {
 	maxEarlyData     uint32
 	suite            uint16
 	recordSizeLimit  uint16
+}
+
+func (s *sessionTicketState) validateRawPublicKeyState() error {
+	if s.externalPSK != nil || len(s.peerCertificates) != 0 || len(s.verifiedChains) != 0 || s.clientAuthAt == 0 {
+		return errors.New("dtls13: inconsistent RPK ticket identity")
+	}
+	key, err := x509.ParsePKIXPublicKey(s.peerRawPublicKey)
+	if err != nil {
+		return err
+	}
+	return validateRawPublicKey(key)
 }
 
 func (s *sessionTicketState) marshal() ([]byte, error) {
@@ -444,6 +458,12 @@ func (s *sessionTicketState) marshal() ([]byte, error) {
 		}
 		version = 6
 	}
+	if len(s.peerRawPublicKey) != 0 {
+		if err := s.validateRawPublicKeyState(); err != nil {
+			return nil, err
+		}
+		version = 7
+	}
 	recordSizeLimit := effectiveRecordSizeLimit(s.recordSizeLimit)
 	capacity := 2 + 8 + 4 + 4 + 2 + 1 + len(s.psk) + 2 + len(s.serverName) + 1 + len(s.protocol)
 	if version >= 2 {
@@ -475,6 +495,9 @@ func (s *sessionTicketState) marshal() ([]byte, error) {
 	}
 	if version == 6 {
 		capacity += 2 + len(s.externalPSK.wire) + 2 + len(s.externalPSK.digest)
+	}
+	if version == 7 {
+		capacity += 8 + 3 + len(s.peerRawPublicKey)
 	}
 	w := newWireBuilder(capacity)
 	w.u16(version)
@@ -513,13 +536,17 @@ func (s *sessionTicketState) marshal() ([]byte, error) {
 		w.u16(int(s.externalPSK.kdf))
 		w.b = append(w.b, s.externalPSK.digest[:]...)
 	}
+	if version == 7 {
+		w.b = binary.BigEndian.AppendUint64(w.b, uint64(s.clientAuthAt))
+		w.bytes24(s.peerRawPublicKey)
+	}
 	return w.b, w.err
 }
 
 func parseSessionTicketState(b []byte) (*sessionTicketState, error) {
 	p := wireParser{b: b}
 	version := p.u16()
-	if version < 1 || version > 6 {
+	if version < 1 || version > 7 {
 		return nil, errors.New("dtls13: unsupported session ticket version")
 	}
 	created := p.take(8)
@@ -590,6 +617,16 @@ func parseSessionTicketState(b []byte) (*sessionTicketState, error) {
 		}
 		if _, ok := hashForTLSKDF(state.externalPSK.kdf); !ok {
 			return nil, errors.New("dtls13: invalid external PSK KDF in session ticket")
+		}
+	}
+	if version == 7 {
+		authenticated := p.take(8)
+		if len(authenticated) == 8 {
+			state.clientAuthAt = int64(binary.BigEndian.Uint64(authenticated))
+		}
+		state.peerRawPublicKey = bytes.Clone(p.bytes24())
+		if err := state.validateRawPublicKeyState(); err != nil {
+			return nil, err
 		}
 	}
 	if err := p.done(); err != nil {
@@ -700,6 +737,16 @@ func validateClientSession(config *Config, state *ClientSessionState) *cipherSui
 	if state == nil || len(state.ticket) == 0 || len(state.psk) == 0 {
 		return nil
 	}
+	if state.externalPSK == nil {
+		if len(state.peerRawPublicKey) != 0 {
+			if !supportsCertificateType(config.ServerCertificateTypes, CertificateTypeRawPublicKey) ||
+				len(state.peerCertificates) != 0 || len(state.verifiedChains) != 0 || verifyRawPublicKey(config, state.peerRawPublicKey) != nil {
+				return nil
+			}
+		} else if !supportsCertificateType(config.ServerCertificateTypes, CertificateTypeX509) {
+			return nil
+		}
+	}
 	if validateCertificateSecurityPolicy(state.peerCertificates, true) != nil {
 		return nil
 	}
@@ -777,6 +824,15 @@ func usableClientSession(config *Config, conn net.Conn) (*ClientSessionState, *c
 }
 
 func validClientAuthenticationTicket(config *Config, state *sessionTicketState) bool {
+	if len(state.peerRawPublicKey) != 0 {
+		now := config.Time()
+		return state.validateRawPublicKeyState() == nil && config.ClientAuth != tls.NoClientCert && supportsCertificateType(config.ClientCertificateTypes, CertificateTypeRawPublicKey) &&
+			!now.Before(time.Unix(state.clientAuthAt, 0)) &&
+			now.Sub(time.Unix(state.clientAuthAt, 0)) <= config.SessionTicketLifetime && verifyRawPublicKey(config, state.peerRawPublicKey) == nil
+	}
+	if len(state.peerCertificates) != 0 && !supportsCertificateType(config.ClientCertificateTypes, CertificateTypeX509) {
+		return false
+	}
 	// Match TLS 1.3 resumption: restore the authenticated identity without
 	// rerunning VerifyPeerCertificate, but enforce the current built-in policy.
 	hasCertificate := len(state.peerCertificates) != 0
@@ -1139,6 +1195,9 @@ func (c *Conn) sendNewSessionTickets(schedule *keySchedule, suite *cipherSuite, 
 	lifetime := uint32(c.config.SessionTicketLifetime / time.Second)
 	messages := make([]handshakeMessage, 0, int(count))
 	createdAt := c.config.Time().Unix()
+	c.mu.Lock()
+	peerRawPublicKey := bytes.Clone(c.state.PeerRawPublicKey)
+	c.mu.Unlock()
 	for range count {
 		nonce := make([]byte, 8)
 		if _, err = io.ReadFull(c.config.Rand, nonce); err != nil {
@@ -1161,6 +1220,7 @@ func (c *Conn) sendNewSessionTickets(schedule *keySchedule, suite *cipherSuite, 
 			createdAt: createdAt, lifetime: lifetime, suite: suite.id, psk: psk,
 			serverName: serverName, protocol: protocol, ageAdd: ageAdd, maxEarlyData: c.config.MaxEarlyData, recordSizeLimit: c.localRecordSizeLimit,
 			clientAuthAt: clientAuthAt, peerCertificates: peerCertificates, verifiedChains: verifiedChains,
+			peerRawPublicKey: peerRawPublicKey,
 		}
 		if external != nil {
 			kdf, _ := tlsKDFForHash(external.key.hash)
@@ -1270,8 +1330,9 @@ func (c *Conn) processNewSessionTicket(sequence uint16, body []byte) error {
 		suite: c.resumptionSuite.id, receivedAt: c.config.Time(), lifetime: message.lifetime,
 		ageAdd: message.ageAdd, serverName: c.config.ServerName, protocol: connectionState.NegotiatedProtocol,
 		maxEarlyData: message.maxEarlyData, recordSizeLimit: connectionState.PeerRecordSizeLimit, peerCertificates: connectionState.PeerCertificates, verifiedChains: connectionState.VerifiedChains,
-		ocspResponse: connectionState.OCSPResponse,
-		externalPSK:  connectionState.externalPSKSelection(), ticketGroup: group,
+		ocspResponse:     connectionState.OCSPResponse,
+		peerRawPublicKey: connectionState.PeerRawPublicKey,
+		externalPSK:      connectionState.externalPSKSelection(), ticketGroup: group,
 	}
 	key := clientSessionCacheKey(c.config, c.conn)
 	if request != nil {

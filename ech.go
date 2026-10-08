@@ -543,6 +543,8 @@ func makeECHOuter(inner *clientHello, config *echConfig, random io.Reader) (*cli
 	outer.serverName = config.publicName
 	outer.alpn = nil
 	_ = outer.setCertificateAuthorities(nil)
+	delete(outer.unknownExtensions, extClientCertificateType)
+	delete(outer.unknownExtensions, extServerCertificateType)
 	if outer.grease {
 		if outer.unknownExtensions == nil {
 			outer.unknownExtensions = make(map[uint16][]byte, 1)

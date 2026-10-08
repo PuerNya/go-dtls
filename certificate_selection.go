@@ -425,9 +425,12 @@ func (c *Conn) newCertificateRequest(context []byte) *certificateRequestMessage 
 	request := &certificateRequestMessage{
 		requestContext:   context,
 		signatureSchemes: defaultSignatureSchemes(),
-		oidFilters:       c.config.ClientCertificateOIDFilters,
-		statusRequest:    c.config.EnableOCSPStapling,
 	}
+	if c.clientCertificateType == CertificateTypeRawPublicKey {
+		return request
+	}
+	request.oidFilters = c.config.ClientCertificateOIDFilters
+	request.statusRequest = c.config.EnableOCSPStapling
 	if c.config.ClientCAs != nil {
 		//nolint:staticcheck // CertPool has no replacement that exposes configured subjects.
 		request.certificateAuthorities = c.config.ClientCAs.Subjects()
@@ -436,6 +439,19 @@ func (c *Conn) newCertificateRequest(context []byte) *certificateRequestMessage 
 }
 
 func (c *Conn) selectClientCertificate(request *certificateRequestMessage) (*tls.Certificate, error) {
+	if !supportsCertificateType(c.config.ClientCertificateTypes, c.clientCertificateType) {
+		return nil, nil
+	}
+	if c.clientCertificateType == CertificateTypeRawPublicKey {
+		certificate, err := c.rawPublicKeyCertificate()
+		if err != nil || certificate == nil {
+			return certificate, err
+		}
+		if _, err := selectSignatureScheme(c.config.RawPublicKeySigner, request.signatureSchemes); err != nil {
+			return nil, nil
+		}
+		return certificate, nil
+	}
 	if c.config.GetClientCertificate != nil {
 		info := c.certificateRequestInfo(request)
 		certificate, err := c.config.GetClientCertificate(&info)

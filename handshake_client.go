@@ -66,13 +66,15 @@ type clientHandshakeState struct {
 	sendCipher    *recordCipher
 
 	// clientProcessServerFlight
-	peerCerts              []*x509.Certificate
-	chains                 [][]*x509.Certificate
-	negotiated             string
-	certificateRequest     *certificateRequestMessage
-	certReqCompression     *certificateCompressionAlgorithms
-	ocspResponse           []byte
-	serverFinishedSequence uint16
+	peerCerts                     []*x509.Certificate
+	peerRawPublicKey              []byte
+	chains                        [][]*x509.Certificate
+	negotiated                    string
+	certificateRequest            *certificateRequestMessage
+	certReqCompression            *certificateCompressionAlgorithms
+	ocspResponse                  []byte
+	clientCertificateTypeSelected bool
+	serverFinishedSequence        uint16
 }
 
 // clientHandshake runs the DTLS 1.3 client handshake as a sequence of steps.
@@ -124,6 +126,9 @@ func (c *Conn) clientPrepareHello(s *clientHandshakeState) error {
 		keyShares = append(keyShares, keyShareEntry{group: group, data: public})
 	}
 	hello := &clientHello{cipherSuites: append([]uint16(nil), c.config.CipherSuites...), keyShares: keyShares, supportedGroups: c.config.CurvePreferences, signatureSchemes: defaultSignatureSchemes(), serverName: c.config.ServerName, alpn: c.config.NextProtos, postHandshakeAuth: c.config.PostHandshakeAuth, recordSizeLimit: c.config.RecordSizeLimit, hasRecordSizeLimit: true, statusRequest: c.config.EnableOCSPStapling}
+	if err := c.offerCertificateTypes(hello); err != nil {
+		return err
+	}
 	if err = hello.setCertificateAuthorities(c.config.ServerCertificateAuthorities); err != nil {
 		return err
 	}
@@ -613,6 +618,7 @@ func (c *Conn) clientDeriveHandshakeKeys(s *clientHandshakeState) error {
 // helpers so the loop body stays a dispatch table.
 func (c *Conn) clientProcessServerFlight(s *clientHandshakeState) error {
 	if s.resumed {
+		s.peerRawPublicKey = append([]byte(nil), s.selectedOffer.session.peerRawPublicKey...)
 		s.peerCerts = append([]*x509.Certificate(nil), s.selectedOffer.session.peerCertificates...)
 		s.chains = make([][]*x509.Certificate, len(s.selectedOffer.session.verifiedChains))
 		for i := range s.selectedOffer.session.verifiedChains {
@@ -647,7 +653,7 @@ func (c *Conn) clientProcessServerFlight(s *clientHandshakeState) error {
 				err = c.clientServerCertificateVerify(s, message)
 				verifiedServerSignature = err == nil
 			case handshakeTypeFinished:
-				if !s.usingPSK && (len(s.peerCerts) == 0 || !verifiedServerSignature) {
+				if !s.usingPSK && ((len(s.peerCerts) == 0 && len(s.peerRawPublicKey) == 0) || !verifiedServerSignature) {
 					return &ProtocolError{"server authentication messages are incomplete"}
 				}
 				err = c.clientServerFinished(s, message)
@@ -658,6 +664,9 @@ func (c *Conn) clientProcessServerFlight(s *clientHandshakeState) error {
 				return err
 			}
 		}
+	}
+	if s.clientCertificateTypeSelected && s.certificateRequest == nil && !s.hello.postHandshakeAuth {
+		return alertError(alertIllegalParameter, &ProtocolError{"server selected client certificate type without CertificateRequest"})
 	}
 	return nil
 }
@@ -672,6 +681,11 @@ func (c *Conn) clientEncryptedExtensions(s *clientHandshakeState, message comple
 		return err
 	}
 	s.negotiated = negotiated
+	c.serverCertificateType, c.clientCertificateType = ee.serverCertificateType, ee.clientCertificateType
+	s.clientCertificateTypeSelected = ee.hasClientCertificateType
+	if !s.usingPSK && (s.ech == nil || !s.ech.rejected) && !supportsCertificateType(c.config.ServerCertificateTypes, c.serverCertificateType) {
+		return alertError(alertUnsupportedCertificate, &ProtocolError{"server did not negotiate an acceptable certificate type"})
+	}
 	if ee.hasTicketRequest {
 		requested := s.hello.ticketRequest.NewSessionCount
 		if s.resumed {
@@ -715,7 +729,7 @@ func (c *Conn) clientServerCertificate(s *clientHandshakeState, message complete
 	if err != nil {
 		return err
 	}
-	if err = validateCertificateMessageWithStatusRequest(certMsg, nil, s.hello.statusRequest); err != nil {
+	if err = validateCertificateMessageWithStatusRequest(certMsg, nil, s.hello.statusRequest && c.serverCertificateType == CertificateTypeX509); err != nil {
 		return err
 	}
 	if len(certMsg.certificates) > 0 {
@@ -725,7 +739,12 @@ func (c *Conn) clientServerCertificate(s *clientHandshakeState, message complete
 	if len(certificateSchemes) == 0 {
 		certificateSchemes = s.hello.signatureSchemes
 	}
-	if s.ech != nil && s.ech.rejected {
+	if c.serverCertificateType == CertificateTypeRawPublicKey {
+		if s.ech != nil && s.ech.rejected {
+			return alertError(alertBadCertificate, &ProtocolError{"ECH rejection requires X.509 public-name authentication"})
+		}
+		s.peerRawPublicKey, err = verifyRawPublicKeyMessage(c.config, certMsg)
+	} else if s.ech != nil && s.ech.rejected {
 		s.peerCerts, s.chains, err = verifyCertificateChainForECHRejection(c.config, certMsg, certificateSchemes, s.ech.config.publicName)
 	} else {
 		s.peerCerts, s.chains, err = verifyCertificateChain(c.config, certMsg, true, certificateSchemes)
@@ -764,7 +783,7 @@ func (c *Conn) clientCertificateRequest(s *clientHandshakeState, message complet
 }
 
 func (c *Conn) clientServerCertificateVerify(s *clientHandshakeState, message completedHandshake) error {
-	if len(s.peerCerts) == 0 {
+	if len(s.peerCerts) == 0 && len(s.peerRawPublicKey) == 0 {
 		return alertError(alertUnexpectedMessage, &ProtocolError{"CertificateVerify before Certificate"})
 	}
 	cv, err := parseCertificateVerify(message.body)
@@ -774,7 +793,7 @@ func (c *Conn) clientServerCertificateVerify(s *clientHandshakeState, message co
 	if !slices.Contains(s.hello.signatureSchemes, cv.algorithm) {
 		return &ProtocolError{"server selected an unoffered signature scheme"}
 	}
-	if err = verifyCertificateVerify(s.peerCerts[0].PublicKey, cv.algorithm, s.transcript.sumInto(s.transcriptDigest[:0]), cv.signature, true); err != nil {
+	if err = verifyPeerCertificateSignature(s.peerCerts, s.peerRawPublicKey, cv.algorithm, s.transcript.sumInto(s.transcriptDigest[:0]), cv.signature, true); err != nil {
 		return alertError(alertDecryptError, err)
 	}
 	_ = s.transcript.add(message.typ, message.sequence, message.body)
@@ -900,20 +919,21 @@ func (c *Conn) clientFinalize(s *clientHandshakeState) error {
 		return alertError(alertECHRequired, &ECHRejectionError{RetryConfigList: append([]byte(nil), s.ech.retryConfigs...)})
 	}
 	if err := c.finishHandshake(handshakeCompletion{
-		suite:           s.suite,
-		schedule:        s.schedule,
-		transcript:      s.transcript,
-		receiveCipher:   s.receiveCipher,
-		peerFlightStart: s.serverHandshakeStart,
-		peerFlightEnd:   s.serverFinishedSequence,
-		externalPSK:     s.externalPSK,
-		resumed:         s.resumed,
-		echAccepted:     s.echAccepted,
-		negotiated:      s.negotiated,
-		peerCerts:       s.peerCerts,
-		chains:          s.chains,
-		serverName:      c.config.ServerName,
-		ocspResponse:    s.ocspResponse,
+		suite:            s.suite,
+		schedule:         s.schedule,
+		transcript:       s.transcript,
+		receiveCipher:    s.receiveCipher,
+		peerFlightStart:  s.serverHandshakeStart,
+		peerFlightEnd:    s.serverFinishedSequence,
+		externalPSK:      s.externalPSK,
+		resumed:          s.resumed,
+		echAccepted:      s.echAccepted,
+		negotiated:       s.negotiated,
+		peerCerts:        s.peerCerts,
+		peerRawPublicKey: s.peerRawPublicKey,
+		chains:           s.chains,
+		serverName:       c.config.ServerName,
+		ocspResponse:     s.ocspResponse,
 	}); err != nil {
 		return err
 	}

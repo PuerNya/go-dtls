@@ -2,6 +2,7 @@ package dtls13
 
 import (
 	"bytes"
+	"crypto"
 	"crypto/ecdh"
 	"crypto/hpke"
 	"crypto/rand"
@@ -393,47 +394,58 @@ func TestECHRejectsFinalConfirmationDowngradeAfterHRR(t *testing.T) {
 }
 
 func TestECHRejectionAuthenticatesRetryAndSuppressesClientCertificate(t *testing.T) {
-	serverCertificate, roots := testServerCertificate(t)
-	clientCertificate, clientRoots := testClientCertificate(t)
-	clientList, _ := testECHConfig(t, "server.test", 12)
-	retryList, retryKey := testECHConfig(t, "server.test", 13)
-	left, right := memoryDatagramPair()
-	verifyPeerCalled := false
-	client := Client(left, &Config{
-		RootCAs: roots, ServerName: "server.test", Certificates: []tls.Certificate{clientCertificate},
-		EncryptedClientHelloConfigList: clientList, SessionTicketsDisabled: true,
-		VerifyPeerCertificate: func([][]byte, [][]*x509.Certificate) error {
-			verifyPeerCalled = true
-			return nil
-		},
-		HandshakeTimeout: 2 * time.Second, FlightInterval: 5 * time.Millisecond,
-	})
-	server := Server(right, &Config{
-		Certificates: []tls.Certificate{serverCertificate}, ClientAuth: tls.RequestClientCert, ClientCAs: clientRoots,
-		EncryptedClientHelloKeys: []EncryptedClientHelloKey{retryKey}, SessionTicketsDisabled: true,
-		HandshakeTimeout: 2 * time.Second, FlightInterval: 5 * time.Millisecond,
-	})
-	defer left.Close()
-	defer right.Close()
-	serverDone := make(chan error, 1)
-	go func() { serverDone <- server.Handshake() }()
-	clientErr := client.Handshake()
-	serverErr := <-serverDone
-	var rejection *ECHRejectionError
-	if !errors.As(clientErr, &rejection) {
-		t.Fatalf("client error = %v, want ECHRejectionError", clientErr)
-	}
-	if !bytes.Equal(rejection.RetryConfigList, retryList) {
-		t.Fatalf("retry configs = %x, want %x", rejection.RetryConfigList, retryList)
-	}
-	if serverErr != nil {
-		t.Fatalf("server rejection handshake: %v", serverErr)
-	}
-	if server.ConnectionState().ECHAccepted || len(server.ConnectionState().PeerCertificates) != 0 {
-		t.Fatalf("server exposed rejected ECH/client identity: %#v", server.ConnectionState())
-	}
-	if verifyPeerCalled {
-		t.Fatal("ordinary VerifyPeerCertificate ran for an ECH rejection")
+	for _, mode := range []string{"X509", "RPK"} {
+		t.Run(mode, func(t *testing.T) {
+			serverCertificate, roots := testServerCertificate(t)
+			clientCertificate, clientRoots := testClientCertificate(t)
+			clientList, _ := testECHConfig(t, "server.test", 12)
+			retryList, retryKey := testECHConfig(t, "server.test", 13)
+			left, right := memoryDatagramPair()
+			verifyPeerCalled := false
+			clientConfig := &Config{
+				RootCAs: roots, ServerName: "server.test", Certificates: []tls.Certificate{clientCertificate},
+				EncryptedClientHelloConfigList: clientList, SessionTicketsDisabled: true,
+				VerifyPeerCertificate: func([][]byte, [][]*x509.Certificate) error {
+					verifyPeerCalled = true
+					return nil
+				},
+				HandshakeTimeout: 2 * time.Second, FlightInterval: 5 * time.Millisecond,
+			}
+			if mode == "RPK" {
+				clientConfig.ServerCertificateTypes = []CertificateType{CertificateTypeRawPublicKey}
+				clientConfig.ClientCertificateTypes = []CertificateType{CertificateTypeRawPublicKey}
+				clientConfig.RawPublicKeySigner = clientCertificate.PrivateKey.(crypto.Signer)
+				clientConfig.VerifyPeerRawPublicKey = func([]byte) error { verifyPeerCalled = true; return nil }
+			}
+			client := Client(left, clientConfig)
+			server := Server(right, &Config{
+				Certificates: []tls.Certificate{serverCertificate}, ClientAuth: tls.RequestClientCert, ClientCAs: clientRoots,
+				EncryptedClientHelloKeys: []EncryptedClientHelloKey{retryKey}, SessionTicketsDisabled: true,
+				HandshakeTimeout: 2 * time.Second, FlightInterval: 5 * time.Millisecond,
+			})
+			defer left.Close()
+			defer right.Close()
+			serverDone := make(chan error, 1)
+			go func() { serverDone <- server.Handshake() }()
+			clientErr := client.Handshake()
+			serverErr := <-serverDone
+			var rejection *ECHRejectionError
+			if !errors.As(clientErr, &rejection) {
+				t.Fatalf("client error = %v, want ECHRejectionError", clientErr)
+			}
+			if !bytes.Equal(rejection.RetryConfigList, retryList) {
+				t.Fatalf("retry configs = %x, want %x", rejection.RetryConfigList, retryList)
+			}
+			if serverErr != nil {
+				t.Fatalf("server rejection handshake: %v", serverErr)
+			}
+			if server.ConnectionState().ECHAccepted || len(server.ConnectionState().PeerCertificates) != 0 {
+				t.Fatalf("server exposed rejected ECH/client identity: %#v", server.ConnectionState())
+			}
+			if verifyPeerCalled {
+				t.Fatal("ordinary peer verifier ran for an ECH rejection")
+			}
+		})
 	}
 }
 

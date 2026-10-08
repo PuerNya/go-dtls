@@ -384,3 +384,69 @@ func TestHandshakeFlightRejectsMessagesAfterFinished(t *testing.T) {
 		}
 	}
 }
+
+func TestClientCertificateTypeSelectionInPSKHandshake(t *testing.T) {
+	for _, test := range []struct {
+		name      string
+		extension uint16
+		pha       bool
+		wantError bool
+	}{
+		{name: "client without CertificateRequest", extension: extClientCertificateType, wantError: true},
+		{name: "client for PHA", extension: extClientCertificateType, pha: true},
+		{name: "server in PSK handshake", extension: extServerCertificateType},
+	} {
+		t.Run(test.name, func(t *testing.T) {
+			config, err := (&Config{
+				ServerCertificateTypes: []CertificateType{CertificateTypeRawPublicKey},
+				ClientCertificateTypes: []CertificateType{CertificateTypeRawPublicKey},
+			}).normalized()
+			if err != nil {
+				t.Fatal(err)
+			}
+			left, right := memoryDatagramPair()
+			defer left.Close()
+			defer right.Close()
+			deadline := time.Now().Add(time.Second)
+			_ = right.SetDeadline(deadline)
+			conn := &Conn{conn: right, config: config, isClient: true, handshakeDeadline: deadline}
+			suite, _ := cipherSuiteForID(TLS_AES_128_GCM_SHA256)
+			sender, receiver := recordCipherPair(t, suite.id, 2)
+			ackSender, _ := recordCipherPair(t, suite.id, 2)
+			secret := bytes.Repeat([]byte{0x5a}, suite.hash.Size())
+			schedule := &keySchedule{suite: suite, clientHandshakeTraffic: secret, serverHandshakeTraffic: secret}
+			transcript := newTranscriptHash(suite.hash.New())
+			peerTranscript := transcript.clone()
+			hello := &clientHello{postHandshakeAuth: test.pha, unknownExtensions: map[uint16][]byte{test.extension: {1, byte(CertificateTypeRawPublicKey)}}}
+			eeBody, err := (&encryptedExtensions{extensions: map[uint16][]byte{test.extension: {byte(CertificateTypeRawPublicKey)}}}).marshal()
+			if err != nil {
+				t.Fatal(err)
+			}
+			_ = peerTranscript.add(handshakeTypeEncryptedExtensions, 0, eeBody)
+			var digest [maxSupportedHashSize]byte
+			finished := schedule.finishedVerifyData(secret, peerTranscript.sumInto(digest[:0]))
+			flight, err := buildProtectedFlight([]handshakeMessage{
+				{typ: handshakeTypeEncryptedExtensions, sequence: 0, body: eeBody},
+				{typ: handshakeTypeFinished, sequence: 1, body: finished},
+			}, config.MTU, sender)
+			if err != nil {
+				t.Fatal(err)
+			}
+			if err = conn.writeFlight(left, flight); err != nil {
+				t.Fatal(err)
+			}
+			err = conn.clientProcessServerFlight(&clientHandshakeState{
+				hello: hello, sh: &serverHello{}, suite: suite, usingPSK: true,
+				schedule: schedule, transcript: transcript, receiveCipher: receiver, sendCipher: ackSender,
+				inbox: newHandshakeInbox(0, config.MaxHandshakeMessage, config.MaxBufferedHandshakeMessages, config.MaxBufferedHandshakeBytes),
+			})
+			if test.wantError {
+				if description, ok := protocolAlert(err); !ok || description != alertIllegalParameter {
+					t.Fatalf("certificate type without CertificateRequest or PHA: %v", err)
+				}
+			} else if err != nil {
+				t.Fatalf("valid PSK certificate type selection: %v", err)
+			}
+		})
+	}
+}
