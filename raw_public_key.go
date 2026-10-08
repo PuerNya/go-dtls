@@ -70,7 +70,7 @@ func (c *Conn) offerCertificateTypes(hello *clientHello) error {
 		var types []byte
 		for _, typ := range offer.types {
 			if offer.sending && ((typ == CertificateTypeRawPublicKey && c.config.RawPublicKeySigner == nil) ||
-				(typ == CertificateTypeX509 && len(c.config.Certificates) == 0 && c.config.GetClientCertificate == nil)) {
+				(typ == CertificateTypeX509 && len(c.config.Certificates) == 0 && len(c.config.DelegatedCredentials) == 0 && c.config.GetClientCertificate == nil)) {
 				continue
 			}
 			types = append(types, byte(typ))

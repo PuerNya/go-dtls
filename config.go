@@ -49,6 +49,19 @@ type Config struct {
 	// certificate signatures are rejected. An RSA server leaf must have a
 	// modulus of at least 2048 bits.
 	Certificates []tls.Certificate
+	// EnableDelegatedCredentials advertises RFC 9345 support in ClientHello
+	// and CertificateRequest. Receiving a DC still requires normal parent
+	// certificate authentication. ECDSA and Ed25519 delegated keys are supported;
+	// RSA delegated keys with RSASSA-PSS SubjectPublicKeyInfo are not supported.
+	EnableDelegatedCredentials bool
+	// DelegatedCredentials contains offline-issued server or client credentials,
+	// selected before Certificates when the peer offers a compatible scheme.
+	// GetCertificate and GetClientCertificate retain precedence over this list.
+	// To select a delegated credential, a callback returns the address of the
+	// Certificate field of a credential in this list. Clone shares the immutable
+	// credentials, so callback selections remain valid across clones.
+	// Configure ordinary Certificates as well when certificate fallback is needed.
+	DelegatedCredentials []*DelegatedCredential
 	// EnableCachedInformation lets servers replace matching Certificate and
 	// initial CertificateRequest messages with RFC 7924 fingerprints.
 	EnableCachedInformation bool
@@ -402,6 +415,8 @@ type ClientHelloInfo struct {
 	// signatures.
 	SignatureSchemes            []tls.SignatureScheme
 	CertificateSignatureSchemes []tls.SignatureScheme
+	// DelegatedCredentialSignatureSchemes lists the client's accepted DC keys.
+	DelegatedCredentialSignatureSchemes []tls.SignatureScheme
 	// Version is the negotiated DTLS version.
 	Version uint16
 	// Conn is the server connection processing the ClientHello. Its handshake is
@@ -617,6 +632,7 @@ func (c *Config) Clone() *Config {
 func cloneConfig(c *Config) *Config {
 	x := *c
 	x.Certificates = append([]tls.Certificate(nil), c.Certificates...)
+	x.DelegatedCredentials = append([]*DelegatedCredential(nil), c.DelegatedCredentials...)
 	x.ServerCertificateTypes = append([]CertificateType(nil), c.ServerCertificateTypes...)
 	x.ClientCertificateTypes = append([]CertificateType(nil), c.ClientCertificateTypes...)
 	x.NextProtos = append([]string(nil), c.NextProtos...)

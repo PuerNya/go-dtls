@@ -42,7 +42,7 @@ func knownExtensionType(typ uint16) bool {
 		extSignatureAlgorithms, extALPN, extPadding, extCompressCertificate, extRecordSizeLimit, extPreSharedKey, extEarlyData,
 		extCookie, extPSKKeyExchangeModes, extPostHandshakeAuth,
 		extCertificateAuthorities, extOIDFilters, extSignatureAlgorithmsCert, extConnectionID, extTicketRequest, extReturnRoutability, extStatusRequest,
-		extECH, extECHOuterExtensions, extClientCertificateType, extServerCertificateType, extCachedInfo:
+		extECH, extECHOuterExtensions, extClientCertificateType, extServerCertificateType, extCachedInfo, extDelegatedCredential:
 		return true
 	default:
 		return false
@@ -71,6 +71,7 @@ type clientHello struct {
 	keyShareStorage               [1]keyShareEntry
 	signatureSchemes              []tls.SignatureScheme
 	certificateSignatureSchemes   []tls.SignatureScheme
+	delegatedCredentialSchemes    []tls.SignatureScheme
 	supportedGroups               []tls.CurveID
 	serverName                    string
 	alpn                          []string
@@ -1030,6 +1031,13 @@ func (h *clientHello) marshal() ([]byte, error) {
 	if certificateSignatures != nil {
 		extensions = append(extensions, orderedExtension{typ: extSignatureAlgorithmsCert, value: certificateSignatures})
 	}
+	if len(h.delegatedCredentialSchemes) > 0 {
+		raw, err := marshalSignatureSchemes(h.delegatedCredentialSchemes)
+		if err != nil {
+			return nil, err
+		}
+		extensions = append(extensions, orderedExtension{typ: extDelegatedCredential, value: raw})
+	}
 	if certificateAuthorities := h.unknownExtensions[extCertificateAuthorities]; certificateAuthorities != nil {
 		extensions = append(extensions, orderedExtension{typ: extCertificateAuthorities, value: certificateAuthorities})
 	}
@@ -1146,6 +1154,11 @@ func parseClientHello(b []byte) (*clientHello, error) {
 			extConnectionID, extTicketRequest, extReturnRoutability, extEarlyData, extPSKKeyExchangeModes, extPreSharedKey, extECH, extStatusRequest:
 		case extOIDFilters:
 			return nil, alertError(alertIllegalParameter, &ProtocolError{"oid_filters is not permitted in ClientHello"})
+		case extDelegatedCredential:
+			h.delegatedCredentialSchemes, err = parseSignatureSchemes(extension.value)
+			if err != nil {
+				return nil, err
+			}
 		case extCachedInfo:
 			if _, err := parseCachedInformationOffer(extension.value); err != nil {
 				return nil, err

@@ -235,6 +235,7 @@ deadline、socket 关闭和底层 UDP 错误沿 Go `net` 错误模型返回；�
 | CID / 路径验证 | `ConnectionID`、`GetConnectionID`、`SendNewConnectionIDs`、`RequestConnectionIDs`、`UseNextConnectionID` | 支持 RFC 9146 CID 协商和更新，并默认协商 RFC 9853 RRC；Listener 只在新路径验证完成后 rebind |
 | 证书压缩 | `EnableCertificateCompression` | 显式启用 RFC 8879 zlib；支持服务端证书以及 mTLS/PHA 客户端证书，压缩后不更小时自动发送普通 Certificate |
 | 缓存信息 | `CachedInformationCache`、`EnableCachedInformation` | RFC 7924 在完整握手中用指纹替换匹配的服务端 Certificate 和初始 CertificateRequest，保留当前认证检查 |
+| 委托凭据 | `NewDelegatedCredential`、`DelegatedCredentials`、`EnableDelegatedCredentials` | RFC 9345 短期凭据、父证书验证和 mTLS/PHA/恢复身份 |
 | 动态证书选择 | `GetCertificate`、`GetClientCertificate`、`ServerCertificateAuthorities`、`ClientCertificateOIDFilters` | RFC 9846 CA/OID 提示和双端多证书选择；初始 mTLS 与 PHA 使用相同规则 |
 | Encrypted ClientHello | `EncryptedClientHelloConfigList`、`EncryptedClientHelloKeys`、`EncryptedClientHelloGrease` | RFC 9849 Inner/Outer ClientHello、HPKE、HRR、accept confirmation、retry configs、恢复和 0-RTT |
 | 握手内客户端认证 | `ClientAuth`、`ClientCAs`、`Certificates` | 使用 `crypto/tls` 的客户端证书策略 |
@@ -277,6 +278,7 @@ deadline、socket 关闭和底层 UDP 错误沿 Go `net` 错误模型返回；�
 | `RecordSizeLimit` | `0` 表示默认 `2^14+1`；可配置 `64..2^14+1`，作为本端接收的完整 `DTLSInnerPlaintext` 上限并通过 RFC 8449 主动协商；与 PMTU 独立 |
 | `EnableCertificateCompression` | 默认 `false`；启用 RFC 8879 标准 zlib，只有对端提供该算法且完整压缩消息更小时才发送 `CompressedCertificate`；解压输出受 `MaxHandshakeMessage` 限制 |
 | `CachedInformationCache`、`EnableCachedInformation` | 默认 nil/false；客户端有界缓存与服务端显式启用 RFC 7924，独立于 session ticket |
+| `EnableDelegatedCredentials`、`DelegatedCredentials` | 默认 false/nil；接收端显式启用，发送端配置离线签发的不可变凭据，证书回调保留优先级 |
 | `FlightInterval` | 1 秒初始握手重传间隔 |
 | `MaxFlightInterval` | 60 秒指数退避上限 |
 | `HandshakeTimeout` | 30 秒 |
@@ -372,6 +374,25 @@ identity 和 importer context 都以明文出现在 ClientHello 中，重复使�
 
 缓存可由多个客户端并发共享，以 ServerName 为键；为空时使用远端地址。每个条目最多保存两份 64 KiB 消息，超限消息不缓存。构造函数容量非正时使用 64 个条目，零值缓存禁用。指纹可能关联多次连接，ECH 将其保留在加密的 ClientHello 内。wolfSSL 尚未实现 `cached_info`，目前仅验证不支持该扩展时的互通回退。
 
+### 委托凭据
+
+RFC 9345 使用短期委托签名密钥认证，使父证书私钥能够离线保存。父证书必须包含非关键 DelegationUsage 扩展和 digitalSignature KeyUsage。接收端显式启用：
+
+```go
+dc, err := dtls13.NewDelegatedCredential(parent, delegatedKey, time.Now().Add(24*time.Hour), true)
+if err != nil {
+	log.Fatal(err)
+}
+serverConfig := &dtls13.Config{DelegatedCredentials: []*dtls13.DelegatedCredential{dc}}
+clientConfig := &dtls13.Config{
+	RootCAs: roots, ServerName: "server.example", EnableDelegatedCredentials: true,
+}
+```
+
+构造函数返回父证书链，但仅保留委托私钥；签发客户端凭据时最后一个参数为 `false`。支持 ECDSA P-256/P-384/P-521 和 Ed25519 委托密钥；Go 无法解析所需的 RSASSA-PSS SubjectPublicKeyInfo，因此暂不支持 RSA 委托密钥。剩余有效期不得超过七天，并且必须严格早于父证书到期时间；父证书仍执行正常信任验证。
+
+初始 mTLS、PHA 和恢复均保存 `ConnectionState.PeerDelegatedCredential`；已过期或禁用的 DC 身份不能恢复。需要回退时同时配置普通 `Certificates`。证书回调保留优先级，返回 `DelegatedCredentials` 条目的 `&dc.Certificate` 即选择该凭据；`Config.Clone` 共享这些不可变条目。
+
 ### 动态证书选择
 
 客户端或服务端在 `Certificates` 中配置多张证书时，库默认选择第一张满足对端签名算法、证书链算法和 CA 提示的证书；服务端还检查 SNI。服务端的 `ClientCAs` 会写入初始及握手后 CertificateRequest，客户端可用 `ServerCertificateAuthorities` 在 ClientHello 中单独提供服务端证书 CA 提示，`RootCAs` 不会自动发送。
@@ -452,6 +473,7 @@ serverConfig.MaxSessionTickets = 4
 | [RFC 8449](https://www.rfc-editor.org/rfc/rfc8449) | 完成 | 默认 CH/EE 协商、方向独立限制、最小 64、超限 fatal `record_overflow`、HRR、恢复、0-RTT、KeyUpdate、ACK 与 PMTU 独立性完成 |
 | [RFC 8879](https://www.rfc-editor.org/rfc/rfc8879) | 完成 | 显式 opt-in zlib；CH/CertificateRequest 分方向协商，服务端证书及 mTLS/PHA 客户端证书、CompressedCertificate transcript、安全回退和解压上限完成 |
 | [RFC 7924](https://www.rfc-editor.org/rfc/rfc7924) | 完成 | CH/EE 协商、SHA-256 指纹、服务端 Certificate/初始 CertificateRequest 缓存、精确匹配回退与当前信任验证；wolfSSL 仅支持回退互通 |
+| [RFC 9345](https://www.rfc-editor.org/rfc/rfc9345) | 完成 | CH/CR 协商、父证书 DelegationUsage、有效期和签名校验、mTLS/PHA/恢复；委托密钥支持 ECDSA 和 Ed25519 |
 | [RFC 9149](https://www.rfc-editor.org/rfc/rfc9149) | 完成 | 显式 opt-in `ticket_request(58)`、完整/恢复计数、HRR 不变量、服务端上限、可靠多个 NST、并发一次性 cache 消费和同族失效完成 |
 | [RFC 9257](https://www.rfc-editor.org/rfc/rfc9257) | 完成 | 外部 PSK 至少 128 bit、DHE-only、opaque identity、多身份、证书回退和身份隐私已实现，pairwise/角色部署约束已明确记录 |
 | [RFC 9258](https://www.rfc-editor.org/rfc/rfc9258) | 完成 | `ImportedIdentity`、DTLS `0xfefc`、SHA-256/384 target KDF、EPSK source hash、`dtls13derived psk` 和 `imp binder` 完成 |
@@ -507,6 +529,7 @@ serverConfig.MaxSessionTickets = 4
 | [RFC 8449](https://www.rfc-editor.org/rfc/rfc8449) | TLS/DTLS `record_size_limit` | 客户端默认主动提供，服务端仅响应收到的 offer；发送服从 peer limit、接收服从 local limit，未协商时保持协议最大值；PMTU 仍独立取更小约束 |
 | [RFC 8879](https://www.rfc-editor.org/rfc/rfc8879) | TLS/DTLS Certificate Compression | 显式 opt-in 标准 zlib；CH/CR 协商、服务端与客户端证书、HRR、mTLS、PHA、分片/重传、transcript 和有界解压完成；不更小时回退普通 Certificate |
 | [RFC 7924](https://www.rfc-editor.org/rfc/rfc7924) | TLS/DTLS 缓存信息 | CH/EE 协商、SHA-256 指纹、服务端 Certificate/初始 CertificateRequest 缓存、精确匹配回退与当前信任验证；wolfSSL 仅支持回退互通 |
+| [RFC 9345](https://www.rfc-editor.org/rfc/rfc9345) | Delegated Credentials | CH/CR 协商、父证书 DelegationUsage、有效期和签名校验、mTLS/PHA/恢复；委托密钥支持 ECDSA 和 Ed25519 |
 | [RFC 9149](https://www.rfc-editor.org/rfc/rfc9149) | TLS/DTLS 1.3 Ticket Requests | 客户端可分别请求完整/恢复连接的 ticket 数；服务端以有界 expected count 响应，多个 NST 可靠发送，扩展缺席时保持单 ticket |
 | [RFC 9257](https://www.rfc-editor.org/rfc/rfc9257) | TLS 1.3 external PSK 使用指导 | DHE-only、多身份、未知身份回退、明文 identity 风险、票据来源绑定及外部 PSK 0-RTT 禁用策略完成 |
 | [RFC 9258](https://www.rfc-editor.org/rfc/rfc9258) | TLS/DTLS 1.3 PSK Importer | SHA-256/384 目标派生、DTLS label、ImportedIdentity wire 和独立 binder label 完成 |
@@ -518,14 +541,14 @@ serverConfig.MaxSessionTickets = 4
 | [RFC 9853](https://www.rfc-editor.org/rfc/rfc9853) | CID 地址变化的 Return Routability Check | 完成；默认 enhanced check，旧路径失效后执行 basic check，验证成功才 rebind；候选路径执行独立放大限制，并在可用时使用 spare CID 探测 |
 | [RFC 8701](https://www.rfc-editor.org/rfc/rfc8701) | GREASE 抗僵化 | 完成扩展值策略：`EnableGREASE` 在 CH/CR/NST 发送随机空 GREASE 扩展，接收端按未知值忽略且不写入协商状态，HRR 保持同值；其他 MAY 注入点不主动发送 |
 
-尚未实现的可选扩展包括 RFC 9261 Exported Authenticators 与 RFC 9345 Delegated Credentials。
+尚未实现的可选扩展包括 RFC 9261 Exported Authenticators。
 
 ### 范围边界
 
 以下项目不降低 RFC 9147 强制语义完成度，但使用者应明确其边界：
 
 - 本模块只实现 DTLS 1.3，不提供 DTLS 1.2 回退，因此不声称完整符合 RFC 9325 对通用实现支持 DTLS 1.2 的要求。
-- 本模块不请求 CertificateEntry 扩展；收到未请求的扩展（包括 OCSP `status_request` 和 SCT）时以 `unsupported_extension` 中止握手，已识别但出现在错误消息中的扩展返回 `illegal_parameter`。
+- OCSP 和委托凭据仅在启用后请求；未请求的 DC 按 RFC 9345 返回 `unexpected_message`，其他未请求的 CertificateEntry 扩展返回 `unsupported_extension`，已识别但出现在错误消息中的扩展返回 `illegal_parameter`。
 - Heartbeat 的 record demux 已实现；完整 Heartbeat 协议由 RFC 6520 定义，不属于 RFC 9147 范围。
 - 发送端采用一条 record 一个 UDP datagram 的合法模式，未暴露可选的多 record 聚合 API。
 - 未暴露并行多个 PHA 请求；RFC 允许但不要求该能力。
@@ -569,6 +592,7 @@ go test -run '^$' -bench '^BenchmarkProtectedRecord(Seal|RoundTripInPlace)$' -be
 - RFC 9846 alert 测试覆盖 wire 格式错误、非预期握手消息（包括同批次 Finished 后的消息）、未请求的 CertificateEntry 扩展、final ACK 等待、握手后乱序、`close_notify` 和本地加密失败。
 - RFC 9853 测试覆盖 RRC message/状态机、真实 UDP NAT rebind、CID 更新、弱网组合和连接资源生命周期。
 - parser/record fuzz 覆盖四套 AEAD 的复制与原地解密差分。
+- RFC 9345 测试覆盖独立构造的签名、畸形/过期/未提供凭据、方向与证书绑定、曲线和算法一致性、回调与 Clone 选择、缓存信任、mTLS/PHA、恢复/0-RTT、ECH、丢包、分片和真实 UDP。
 - wolfSSL master `3136f17` 双向真实 UDP 互通测试覆盖 HRR、RSA-PSS 证书握手、Finished ACK、应用数据、AES-GCM、AES-128-CCM、direct external PSK、CID、KeyUpdate、PHA、普通 session resumption 和受支持方向的三个 hybrid group；另覆盖本库发出的 RFC 8701 CH/CR/NST GREASE、RFC 9149 未协商回退、immediate CID 切换、mTLS 恢复、丢最终 ACK 后的 Finished 重传，以及双向 0-RTT 和 HRR 拒绝后的 1-RTT 回退。ECH 只验证 GREASE 回退；对端当前无法完成 DTLS accepted-ECH。
 
 开发环境、必需检查、性能验证和提交规范见 [CONTRIBUTING.md](CONTRIBUTING.md)。

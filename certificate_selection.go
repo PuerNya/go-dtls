@@ -2,7 +2,6 @@ package dtls13
 
 import (
 	"bytes"
-	"crypto"
 	"crypto/tls"
 	"crypto/x509"
 	"crypto/x509/pkix"
@@ -26,12 +25,13 @@ type CertificateOIDFilter struct {
 // CertificateRequestInfo describes a CertificateRequest received by a client.
 // Its slices must not be modified or retained by callbacks.
 type CertificateRequestInfo struct {
-	AcceptableCAs               [][]byte
-	SignatureSchemes            []tls.SignatureScheme
-	CertificateSignatureSchemes []tls.SignatureScheme
-	OIDFilters                  []CertificateOIDFilter
-	Version                     uint16
-	Conn                        *Conn
+	AcceptableCAs                       [][]byte
+	SignatureSchemes                    []tls.SignatureScheme
+	CertificateSignatureSchemes         []tls.SignatureScheme
+	DelegatedCredentialSignatureSchemes []tls.SignatureScheme
+	OIDFilters                          []CertificateOIDFilter
+	Version                             uint16
+	Conn                                *Conn
 }
 
 // SupportsCertificate reports whether certificate satisfies the request,
@@ -44,19 +44,8 @@ func (i *CertificateRequestInfo) supportsCertificate(certificate *tls.Certificat
 	if i == nil {
 		return errors.New("dtls13: nil CertificateRequestInfo")
 	}
-	certificateSchemes := i.CertificateSignatureSchemes
-	if len(certificateSchemes) == 0 {
-		certificateSchemes = i.SignatureSchemes
-	}
-	parsed, err := validateConfiguredCertificateChain(certificate, certificateSchemes, false)
+	parsed, err := i.Conn.validateLocalCertificate(certificate, i.SignatureSchemes, i.CertificateSignatureSchemes, i.DelegatedCredentialSignatureSchemes, false)
 	if err != nil {
-		return err
-	}
-	signer, ok := certificate.PrivateKey.(crypto.Signer)
-	if !ok {
-		return errors.New("dtls13: client certificate private key is not a signer")
-	}
-	if _, err = selectSignatureScheme(signer, i.SignatureSchemes); err != nil {
 		return err
 	}
 	if requireAcceptableCA && !certificateSignedBy(parsed, i.AcceptableCAs) {
@@ -71,11 +60,7 @@ func (i *ClientHelloInfo) SupportsCertificate(certificate *tls.Certificate) erro
 	if i == nil {
 		return errors.New("dtls13: nil ClientHelloInfo")
 	}
-	certificateSchemes := i.CertificateSignatureSchemes
-	if len(certificateSchemes) == 0 {
-		certificateSchemes = i.SignatureSchemes
-	}
-	parsed, err := validateConfiguredCertificateChain(certificate, certificateSchemes, true)
+	parsed, err := i.Conn.validateLocalCertificate(certificate, i.SignatureSchemes, i.CertificateSignatureSchemes, i.DelegatedCredentialSignatureSchemes, true)
 	if err != nil {
 		return err
 	}
@@ -83,13 +68,6 @@ func (i *ClientHelloInfo) SupportsCertificate(certificate *tls.Certificate) erro
 		if err = parsed[0].VerifyHostname(i.ServerName); err != nil {
 			return fmt.Errorf("dtls13: certificate is not valid for %q: %w", i.ServerName, err)
 		}
-	}
-	signer, ok := certificate.PrivateKey.(crypto.Signer)
-	if !ok {
-		return errors.New("dtls13: server certificate private key is not a signer")
-	}
-	if _, err = selectSignatureScheme(signer, i.SignatureSchemes); err != nil {
-		return err
 	}
 	if !certificateSignedBy(parsed, i.AcceptableCAs) {
 		return errors.New("dtls13: certificate chain is not signed by an acceptable CA")
@@ -400,24 +378,26 @@ func (h *clientHello) certificateAuthorityNames() [][]byte {
 
 func (c *Conn) clientHelloInfo(hello *clientHello) *ClientHelloInfo {
 	return &ClientHelloInfo{
-		ServerName:                  hello.serverName,
-		SupportedProtos:             hello.alpn,
-		AcceptableCAs:               hello.certificateAuthorityNames(),
-		SignatureSchemes:            hello.signatureSchemes,
-		CertificateSignatureSchemes: hello.certificateSignatureSchemes,
-		Version:                     VersionDTLS13,
-		Conn:                        c,
+		ServerName:                          hello.serverName,
+		SupportedProtos:                     hello.alpn,
+		AcceptableCAs:                       hello.certificateAuthorityNames(),
+		SignatureSchemes:                    hello.signatureSchemes,
+		CertificateSignatureSchemes:         hello.certificateSignatureSchemes,
+		DelegatedCredentialSignatureSchemes: hello.delegatedCredentialSchemes,
+		Version:                             VersionDTLS13,
+		Conn:                                c,
 	}
 }
 
 func (c *Conn) certificateRequestInfo(request *certificateRequestMessage) CertificateRequestInfo {
 	return CertificateRequestInfo{
-		AcceptableCAs:               request.certificateAuthorities,
-		SignatureSchemes:            request.signatureSchemes,
-		CertificateSignatureSchemes: request.certificateSignatureSchemes,
-		OIDFilters:                  request.oidFilters,
-		Version:                     VersionDTLS13,
-		Conn:                        c,
+		AcceptableCAs:                       request.certificateAuthorities,
+		SignatureSchemes:                    request.signatureSchemes,
+		CertificateSignatureSchemes:         request.certificateSignatureSchemes,
+		DelegatedCredentialSignatureSchemes: request.delegatedCredentialSchemes,
+		OIDFilters:                          request.oidFilters,
+		Version:                             VersionDTLS13,
+		Conn:                                c,
 	}
 }
 
@@ -431,6 +411,9 @@ func (c *Conn) newCertificateRequest(context []byte) *certificateRequestMessage 
 	}
 	request.oidFilters = c.config.ClientCertificateOIDFilters
 	request.statusRequest = c.config.EnableOCSPStapling
+	if c.config.EnableDelegatedCredentials {
+		request.delegatedCredentialSchemes = delegatedCredentialSchemes()
+	}
 	if c.config.ClientCAs != nil {
 		//nolint:staticcheck // CertPool has no replacement that exposes configured subjects.
 		request.certificateAuthorities = c.config.ClientCAs.Subjects()
@@ -470,6 +453,9 @@ func (c *Conn) selectClientCertificate(request *certificateRequestMessage) (*tls
 		return certificate, nil
 	}
 	info := c.certificateRequestInfo(request)
+	if certificate := c.selectDelegatedCredential(request.signatureSchemes, request.certificateSignatureSchemes, request.delegatedCredentialSchemes, false, "", request.certificateAuthorities, request.oidFilters); certificate != nil {
+		return certificate, nil
+	}
 	for i := range c.config.Certificates {
 		certificate := &c.config.Certificates[i]
 		if info.SupportsCertificate(certificate) == nil {

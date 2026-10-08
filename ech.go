@@ -731,6 +731,7 @@ func cloneClientHello(source *clientHello) *clientHello {
 	clone.keyShareStorage = [1]keyShareEntry{}
 	clone.signatureSchemes = append([]tls.SignatureScheme(nil), source.signatureSchemes...)
 	clone.certificateSignatureSchemes = append([]tls.SignatureScheme(nil), source.certificateSignatureSchemes...)
+	clone.delegatedCredentialSchemes = append([]tls.SignatureScheme(nil), source.delegatedCredentialSchemes...)
 	clone.supportedGroups = append([]tls.CurveID(nil), source.supportedGroups...)
 	clone.alpn = append([]string(nil), source.alpn...)
 	clone.pskIdentity = bytes.Clone(source.pskIdentity)

@@ -651,6 +651,7 @@ func equalClientHelloAfterHRR(initial, second *clientHello, requestedGroup tls.C
 		slices.Equal(initial.cipherSuites, second.cipherSuites) &&
 		slices.Equal(initial.signatureSchemes, second.signatureSchemes) &&
 		slices.Equal(initial.certificateSignatureSchemes, second.certificateSignatureSchemes) &&
+		slices.Equal(initial.delegatedCredentialSchemes, second.delegatedCredentialSchemes) &&
 		slices.Equal(initial.supportedGroups, second.supportedGroups) &&
 		initial.serverName == second.serverName &&
 		slices.Equal(initial.alpn, second.alpn) &&

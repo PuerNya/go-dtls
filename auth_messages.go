@@ -239,10 +239,12 @@ const (
 )
 
 type certificateEntry struct {
-	data          []byte
-	extensions    map[uint16][]byte
-	ocspResponse  []byte
-	statusRequest bool
+	data                   []byte
+	extensions             map[uint16][]byte
+	ocspResponse           []byte
+	statusRequest          bool
+	delegatedCredential    []byte
+	hasDelegatedCredential bool
 	// peerVerdict is populated by parseCertificateMessage; entries built
 	// locally for sending leave it zero and use extensions instead.
 	peerVerdict certificateEntryExtensionVerdict
@@ -290,11 +292,24 @@ func validateCertificateMessage(message *certificateMessage, expectedContext []b
 }
 
 func validateCertificateMessageWithStatusRequest(message *certificateMessage, expectedContext []byte, requested bool) error {
+	return validateCertificateMessageWithRequests(message, expectedContext, requested, false)
+}
+
+func validateCertificateMessageWithRequests(message *certificateMessage, expectedContext []byte, requested, delegated bool) error {
 	if message == nil || !equalBytes(message.requestContext, expectedContext) {
 		return alertError(alertIllegalParameter, &ProtocolError{"Certificate request context mismatch"})
 	}
 	for index, certificate := range message.certificates {
 		verdict := certificate.peerVerdict
+		_, localDC := certificate.extensions[extDelegatedCredential]
+		if certificate.hasDelegatedCredential || localDC {
+			if !delegated {
+				return alertError(alertUnexpectedMessage, &ProtocolError{"unsolicited delegated credential"})
+			}
+			if index != 0 {
+				return alertError(alertIllegalParameter, &ProtocolError{"delegated credential is not on the leaf certificate"})
+			}
+		}
 		if certificate.statusRequest {
 			if !requested {
 				verdict = mergeCertificateEntryVerdict(verdict, certificateEntryExtensionsUnsolicited)
@@ -303,6 +318,9 @@ func validateCertificateMessageWithStatusRequest(message *certificateMessage, ex
 			}
 		}
 		for typ, raw := range certificate.extensions {
+			if typ == extDelegatedCredential {
+				continue
+			}
 			if typ == extStatusRequest {
 				if _, err := parseOCSPResponse(raw); err != nil {
 					return err
@@ -388,6 +406,11 @@ func parseCertificateMessage(b []byte, maxSize int) (*certificateMessage, error)
 		entry := certificateEntry{data: append([]byte(nil), data...)}
 		for i := range exts {
 			extension := exts[i]
+			if extension.typ == extDelegatedCredential {
+				entry.delegatedCredential = append([]byte{}, extension.value...)
+				entry.hasDelegatedCredential = true
+				continue
+			}
 			if extension.typ == extStatusRequest {
 				entry.ocspResponse, err = parseOCSPResponse(extension.value)
 				if err != nil {

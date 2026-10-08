@@ -49,6 +49,10 @@ func signatureParameters(scheme tls.SignatureScheme) (crypto.Hash, *rsa.PSSOptio
 }
 
 func signCertificateVerify(random io.Reader, signer crypto.Signer, scheme tls.SignatureScheme, transcriptHash []byte, server bool) ([]byte, error) {
+	return signMessage(random, signer, scheme, certificateVerifyInput(transcriptHash, server))
+}
+
+func signMessage(random io.Reader, signer crypto.Signer, scheme tls.SignatureScheme, input []byte) ([]byte, error) {
 	if random == nil {
 		random = rand.Reader
 	}
@@ -59,7 +63,6 @@ func signCertificateVerify(random io.Reader, signer crypto.Signer, scheme tls.Si
 	if !signatureSchemeCompatible(signer, scheme) {
 		return nil, errors.New("dtls13: signing key used with incompatible signature scheme")
 	}
-	input := certificateVerifyInput(transcriptHash, server)
 	message := input
 	var opts crypto.SignerOpts = hash
 	if hash != 0 {
@@ -72,12 +75,16 @@ func signCertificateVerify(random io.Reader, signer crypto.Signer, scheme tls.Si
 	}
 	sig, err := signer.Sign(random, message, opts)
 	if err != nil {
-		return nil, fmt.Errorf("dtls13: sign CertificateVerify: %w", err)
+		return nil, fmt.Errorf("dtls13: sign message: %w", err)
 	}
 	return sig, nil
 }
 
 func verifyCertificateVerify(public crypto.PublicKey, scheme tls.SignatureScheme, transcriptHash, signature []byte, server bool) error {
+	return verifySignedMessage(public, scheme, certificateVerifyInput(transcriptHash, server), signature)
+}
+
+func verifySignedMessage(public crypto.PublicKey, scheme tls.SignatureScheme, input, signature []byte) error {
 	hash, pss, err := signatureParameters(scheme)
 	if err != nil {
 		return err
@@ -85,7 +92,6 @@ func verifyCertificateVerify(public crypto.PublicKey, scheme tls.SignatureScheme
 	if !signatureSchemePublicKeyCompatible(public, scheme) {
 		return errors.New("dtls13: public key used with incompatible signature scheme")
 	}
-	input := certificateVerifyInput(transcriptHash, server)
 	digest := input
 	if hash != 0 {
 		h := hash.New()

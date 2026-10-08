@@ -48,6 +48,10 @@ type ConnectionState struct {
 	// when the peer used RPK. It is copied by ConnectionState and restored on
 	// resumption. PeerCertificates and VerifiedChains are nil for RPK peers.
 	PeerRawPublicKey []byte
+	// PeerDelegatedCredential contains the authenticated RFC 9345 credential.
+	// PeerCertificates remains the parent chain. Both are restored on resumption;
+	// ConnectionState returns a copy of the credential bytes.
+	PeerDelegatedCredential []byte
 	// ServerCertificateType and ClientCertificateType record the credential
 	// types negotiated on this connection, defaulting to X.509. On resumption,
 	// the restored peer identity can differ from these newly negotiated types.
@@ -1222,6 +1226,7 @@ func (c *Conn) ConnectionState() ConnectionState {
 	state.PeerConnectionID = append([]byte(nil), state.PeerConnectionID...)
 	state.OCSPResponse = append([]byte(nil), state.OCSPResponse...)
 	state.PeerRawPublicKey = append([]byte(nil), state.PeerRawPublicKey...)
+	state.PeerDelegatedCredential = append([]byte(nil), state.PeerDelegatedCredential...)
 	return state
 }
 

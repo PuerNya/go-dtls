@@ -27,6 +27,7 @@ jobs:
           - FuzzHandshakeFragmentParsers
           - FuzzACKParser
           - FuzzHandshakeMessageParsers
+          - FuzzDelegatedCredential
           - FuzzProtectedRecordOpenModes
     env:
       FUZZ_TIME: ${{ github.event_name == 'schedule' && '10m' || '20s' }}
@@ -50,7 +51,7 @@ jobs:
         shell: bash
         run: |
           set -euo pipefail
-          expected=$'FuzzACKParser\nFuzzHandshakeFragmentParsers\nFuzzHandshakeMessageParsers\nFuzzPlainRecordParsers\nFuzzProtectedRecordOpenModes'
+          expected=$'FuzzACKParser\nFuzzDelegatedCredential\nFuzzHandshakeFragmentParsers\nFuzzHandshakeMessageParsers\nFuzzPlainRecordParsers\nFuzzProtectedRecordOpenModes'
           actual="$(go test . -list '^Fuzz' | grep -E '^Fuzz[[:alnum:]_]+$' | sort)"
           test "$actual" = "$expected"
       - name: Fuzz

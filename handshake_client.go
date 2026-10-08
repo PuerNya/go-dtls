@@ -69,6 +69,7 @@ type clientHandshakeState struct {
 	peerCerts                     []*x509.Certificate
 	cachedInfo                    *clientCachedInformation
 	peerRawPublicKey              []byte
+	peerDelegatedCredential       []byte
 	chains                        [][]*x509.Certificate
 	negotiated                    string
 	certificateRequest            *certificateRequestMessage
@@ -128,6 +129,9 @@ func (c *Conn) clientPrepareHello(s *clientHandshakeState) error {
 	}
 	hello := &clientHello{cipherSuites: append([]uint16(nil), c.config.CipherSuites...), keyShares: keyShares, supportedGroups: c.config.CurvePreferences, signatureSchemes: defaultSignatureSchemes(), serverName: c.config.ServerName, alpn: c.config.NextProtos, postHandshakeAuth: c.config.PostHandshakeAuth, recordSizeLimit: c.config.RecordSizeLimit, hasRecordSizeLimit: true, statusRequest: c.config.EnableOCSPStapling}
 	hello.pskDHE = !c.config.SessionTicketsDisabled && c.config.ClientSessionCache != nil
+	if c.config.EnableDelegatedCredentials {
+		hello.delegatedCredentialSchemes = delegatedCredentialSchemes()
+	}
 	if err := c.offerCertificateTypes(hello); err != nil {
 		return err
 	}
@@ -623,6 +627,7 @@ func (c *Conn) clientProcessServerFlight(s *clientHandshakeState) error {
 	if s.resumed {
 		s.peerRawPublicKey = append([]byte(nil), s.selectedOffer.session.peerRawPublicKey...)
 		s.peerCerts = append([]*x509.Certificate(nil), s.selectedOffer.session.peerCertificates...)
+		s.peerDelegatedCredential = append([]byte(nil), s.selectedOffer.session.peerDelegatedCredential...)
 		s.chains = make([][]*x509.Certificate, len(s.selectedOffer.session.verifiedChains))
 		for i := range s.selectedOffer.session.verifiedChains {
 			s.chains[i] = append([]*x509.Certificate(nil), s.selectedOffer.session.verifiedChains[i]...)
@@ -741,7 +746,7 @@ func (c *Conn) clientServerCertificate(s *clientHandshakeState, message complete
 	if err != nil {
 		return err
 	}
-	if err = validateCertificateMessageWithStatusRequest(certMsg, nil, s.hello.statusRequest && c.serverCertificateType == CertificateTypeX509); err != nil {
+	if err = validateCertificateMessageWithRequests(certMsg, nil, s.hello.statusRequest && c.serverCertificateType == CertificateTypeX509, len(s.hello.delegatedCredentialSchemes) > 0 && c.serverCertificateType == CertificateTypeX509); err != nil {
 		return err
 	}
 	if len(certMsg.certificates) > 0 {
@@ -761,6 +766,10 @@ func (c *Conn) clientServerCertificate(s *clientHandshakeState, message complete
 	} else {
 		s.peerCerts, s.chains, err = verifyCertificateChain(c.config, certMsg, true, certificateSchemes)
 	}
+	if err != nil {
+		return err
+	}
+	s.peerDelegatedCredential, err = peerDelegatedCredential(certMsg, s.peerCerts, c.config, true, s.hello.signatureSchemes, s.hello.delegatedCredentialSchemes)
 	if err != nil {
 		return err
 	}
@@ -806,11 +815,8 @@ func (c *Conn) clientServerCertificateVerify(s *clientHandshakeState, message co
 	if err != nil {
 		return err
 	}
-	if !slices.Contains(s.hello.signatureSchemes, cv.algorithm) {
-		return &ProtocolError{"server selected an unoffered signature scheme"}
-	}
-	if err = verifyPeerCertificateSignature(s.peerCerts, s.peerRawPublicKey, cv.algorithm, s.transcript.sumInto(s.transcriptDigest[:0]), cv.signature, true); err != nil {
-		return alertError(alertDecryptError, err)
+	if err = verifyPeerAuthenticationSignature(s.peerCerts, s.peerRawPublicKey, s.peerDelegatedCredential, s.hello.signatureSchemes, cv, s.transcript.sumInto(s.transcriptDigest[:0]), true); err != nil {
+		return err
 	}
 	_ = s.transcript.add(message.typ, message.sequence, message.body)
 	return nil
@@ -861,6 +867,7 @@ func (c *Conn) clientSendAuthAndFinished(s *clientHandshakeState) error {
 					}
 					certMessage.certificates[0].extensions = map[uint16][]byte{extStatusRequest: response}
 				}
+				c.addDelegatedCredential(certMessage, clientCertificate)
 			}
 		}
 		var signer crypto.Signer
@@ -872,7 +879,7 @@ func (c *Conn) clientSendAuthAndFinished(s *clientHandshakeState) error {
 				return errors.New("dtls13: client private key does not implement crypto.Signer")
 			}
 			var err error
-			if scheme, err = selectSignatureScheme(signer, s.certificateRequest.signatureSchemes); err != nil {
+			if scheme, err = c.certificateSigningScheme(clientCertificate, s.certificateRequest.signatureSchemes); err != nil {
 				return err
 			}
 		}
@@ -935,21 +942,22 @@ func (c *Conn) clientFinalize(s *clientHandshakeState) error {
 		return alertError(alertECHRequired, &ECHRejectionError{RetryConfigList: append([]byte(nil), s.ech.retryConfigs...)})
 	}
 	if err := c.finishHandshake(handshakeCompletion{
-		suite:            s.suite,
-		schedule:         s.schedule,
-		transcript:       s.transcript,
-		receiveCipher:    s.receiveCipher,
-		peerFlightStart:  s.serverHandshakeStart,
-		peerFlightEnd:    s.serverFinishedSequence,
-		externalPSK:      s.externalPSK,
-		resumed:          s.resumed,
-		echAccepted:      s.echAccepted,
-		negotiated:       s.negotiated,
-		peerCerts:        s.peerCerts,
-		peerRawPublicKey: s.peerRawPublicKey,
-		chains:           s.chains,
-		serverName:       c.config.ServerName,
-		ocspResponse:     s.ocspResponse,
+		suite:                   s.suite,
+		schedule:                s.schedule,
+		transcript:              s.transcript,
+		receiveCipher:           s.receiveCipher,
+		peerFlightStart:         s.serverHandshakeStart,
+		peerFlightEnd:           s.serverFinishedSequence,
+		externalPSK:             s.externalPSK,
+		resumed:                 s.resumed,
+		echAccepted:             s.echAccepted,
+		negotiated:              s.negotiated,
+		peerCerts:               s.peerCerts,
+		peerRawPublicKey:        s.peerRawPublicKey,
+		peerDelegatedCredential: s.peerDelegatedCredential,
+		chains:                  s.chains,
+		serverName:              c.config.ServerName,
+		ocspResponse:            s.ocspResponse,
 	}); err != nil {
 		return err
 	}

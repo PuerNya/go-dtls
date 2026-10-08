@@ -230,6 +230,7 @@ if _, err := conn.WriteDatagram(payload); errors.Is(err, dtls13.ErrDatagramTooLa
 | CID / проверка пути | `ConnectionID`, `GetConnectionID`, `SendNewConnectionIDs`, `RequestConnectionIDs`, `UseNextConnectionID` | Поддерживает согласование и обновление CID по RFC 9146 и по умолчанию согласует RRC по RFC 9853; Listener меняет привязку только после проверки нового пути |
 | Сжатие сертификатов | `EnableCertificateCompression` | Явно включает zlib по RFC 8879 для сертификатов сервера и клиентских сертификатов mTLS/PHA; если сжатое сообщение не меньше, отправляется обычный Certificate |
 | Кэширование информации | `CachedInformationCache`, `EnableCachedInformation` | RFC 7924 заменяет совпадающие серверные Certificate и первоначальный CertificateRequest отпечатками при полном рукопожатии, сохраняя текущую проверку подлинности |
+| Делегированные учётные данные | `NewDelegatedCredential`, `DelegatedCredentials`, `EnableDelegatedCredentials` | RFC 9345, проверка родительского сертификата, mTLS/PHA и идентичность при возобновлении |
 | Динамический выбор сертификата | `GetCertificate`, `GetClientCertificate`, `ServerCertificateAuthorities`, `ClientCertificateOIDFilters` | Подсказки УЦ/OID по RFC 9846 и выбор из нескольких сертификатов на обеих сторонах; начальный mTLS и PHA используют одинаковые правила |
 | Encrypted ClientHello | `EncryptedClientHelloConfigList`, `EncryptedClientHelloKeys`, `EncryptedClientHelloGrease` | Inner/Outer ClientHello, HPKE, HRR, подтверждение принятия, retry-конфигурации, возобновление и 0-RTT по RFC 9849 |
 | Аутентификация клиента в рукопожатии | `ClientAuth`, `ClientCAs`, `Certificates` | Использует политики клиентских сертификатов из `crypto/tls` |
@@ -272,6 +273,7 @@ if _, err := conn.WriteDatagram(payload); errors.Is(err, dtls13.ErrDatagramTooLa
 | `RecordSizeLimit` | `0` выбирает значение по умолчанию `2^14+1`; диапазон `64..2^14+1` задает максимальный полный `DTLSInnerPlaintext`, принимаемый узлом, и объявляется по RFC 8449 независимо от PMTU |
 | `EnableCertificateCompression` | По умолчанию `false`; включает стандартный zlib по RFC 8879 и отправляет `CompressedCertificate`, только если узел предложил zlib и полное сжатое сообщение меньше; выход ограничен `MaxHandshakeMessage` |
 | `CachedInformationCache`, `EnableCachedInformation` | По умолчанию nil/false; ограниченный кэш клиента и явное включение RFC 7924 на сервере, независимо от session tickets |
+| `EnableDelegatedCredentials`, `DelegatedCredentials` | По умолчанию false/nil; явное включение приёма и неизменяемые заранее выпущенные DC; обратные вызовы имеют приоритет |
 | `FlightInterval` | Начальный интервал повторной передачи рукопожатия — одна секунда |
 | `MaxFlightInterval` | Максимальная экспоненциальная задержка — 60 секунд |
 | `HandshakeTimeout` | 30 секунд |
@@ -367,6 +369,25 @@ Identity и context importer передаются открытым тексто�
 
 Кэш безопасно разделяется между клиентами; ключом служит ServerName, а при пустом имени — адрес удалённого узла. Запись хранит не более двух сообщений по 64 KiB; более крупные сообщения не сохраняются. Неположительная ёмкость конструктора означает 64 записи; нулевое значение кэша отключено. Отпечатки позволяют связывать соединения; ECH оставляет их только в зашифрованном ClientHello. wolfSSL пока не реализует `cached_info`, поэтому с ним проверяется только совместимость при откате к полным сообщениям.
 
+### Делегированные учётные данные
+
+RFC 9345 позволяет использовать краткосрочный делегированный ключ, сохраняя закрытый ключ родительского сертификата вне сервера. Сертификат должен содержать некритическое расширение DelegationUsage и KeyUsage digitalSignature. Приём DC включается явно:
+
+```go
+dc, err := dtls13.NewDelegatedCredential(parent, delegatedKey, time.Now().Add(24*time.Hour), true)
+if err != nil {
+	log.Fatal(err)
+}
+serverConfig := &dtls13.Config{DelegatedCredentials: []*dtls13.DelegatedCredential{dc}}
+clientConfig := &dtls13.Config{
+	RootCAs: roots, ServerName: "server.example", EnableDelegatedCredentials: true,
+}
+```
+
+Конструктор сохраняет цепочку сертификатов и только делегированный закрытый ключ. Для клиентских учётных данных передайте `false`. Поддерживаются ECDSA P-256/P-384/P-521 и Ed25519; делегированные ключи RSA недоступны, поскольку Go не разбирает требуемый RSASSA-PSS SubjectPublicKeyInfo. Оставшийся срок не может превышать семь дней и должен заканчиваться строго раньше срока сертификата. Обычная проверка доверия к родительскому сертификату сохраняется.
+
+Первоначальная mTLS, PHA и возобновление сохраняют `ConnectionState.PeerDelegatedCredential`; истёкшая или отключённая DC-идентичность не возобновляется. Для отката настройте обычные `Certificates`. Обратные вызовы имеют приоритет и выбирают DC, возвращая `&dc.Certificate` для элемента `DelegatedCredentials`; `Config.Clone` разделяет эти неизменяемые элементы.
+
 ### Динамический выбор сертификата
 
 Если любая сторона настроила несколько записей в `Certificates`, стандартный выбор берет первый сертификат, совместимый с алгоритмами подписи узла, алгоритмами цепочки и подсказками УЦ; сервер также проверяет SNI. Сервер отправляет subjects из `ClientCAs` в начальном и post-handshake CertificateRequest. Клиент может отдельно задать `ServerCertificateAuthorities` для подсказки серверу в ClientHello; `RootCAs` автоматически не передается.
@@ -447,6 +468,7 @@ serverConfig.MaxSessionTickets = 4
 | [RFC 8449](https://www.rfc-editor.org/rfc/rfc8449) | Реализовано | Согласование CH/EE по умолчанию, направленные ограничения, минимум 64, фатальный `record_overflow`, HRR, возобновление, 0-RTT, KeyUpdate, ACK и независимость от PMTU |
 | [RFC 8879](https://www.rfc-editor.org/rfc/rfc8879) | Реализовано | Явно включаемый zlib; направленное согласование ClientHello/CertificateRequest, сертификаты сервера и клиента mTLS/PHA, transcript CompressedCertificate, безопасный откат и ограничения распаковки |
 | [RFC 7924](https://www.rfc-editor.org/rfc/rfc7924) | Реализовано | Согласование CH/EE, отпечатки SHA-256, кэш серверных Certificate/первоначального CertificateRequest, откат при несовпадении и текущая проверка доверия; wolfSSL поддерживает только откат |
+| [RFC 9345](https://www.rfc-editor.org/rfc/rfc9345) | Реализовано | Согласование CH/CR, DelegationUsage, срок и подпись, mTLS/PHA/возобновление; делегированные ключи ECDSA и Ed25519 |
 | [RFC 9149](https://www.rfc-editor.org/rfc/rfc9149) | Реализовано | Явно включаемый `ticket_request(58)`, счетчики полного/возобновленного соединения, инварианты HRR, предел сервера, надежные множественные NST, однократное параллельное расходование cache и аннулирование связанных tickets |
 | [RFC 9257](https://www.rfc-editor.org/rfc/rfc9257) | Реализовано | Внешние PSK не короче 128 бит, только DHE, opaque identity, несколько identity, откат к сертификату, рекомендации по приватности и требования развертывания к парам ролей |
 | [RFC 9258](https://www.rfc-editor.org/rfc/rfc9258) | Реализовано | Реализованы `ImportedIdentity`, DTLS `0xfefc`, целевые KDF SHA-256/384, исходный hash EPSK, `dtls13derived psk` и `imp binder` |
@@ -502,6 +524,7 @@ serverConfig.MaxSessionTickets = 4
 | [RFC 8449](https://www.rfc-editor.org/rfc/rfc8449) | TLS/DTLS `record_size_limit` | Клиент объявляет расширение по умолчанию; сервер отвечает только на предложение. Отправка следует ограничению узла, прием — локальному ограничению, отсутствие расширения восстанавливает максимум протокола, а PMTU остается независимой нижней границей |
 | [RFC 8879](https://www.rfc-editor.org/rfc/rfc8879) | Сжатие сертификатов TLS/DTLS | Явно включаемый стандартный zlib; реализованы согласование CH/CR, сертификаты сервера и клиента, HRR, mTLS, PHA, фрагментация/повторная передача, transcript и ограниченная распаковка; если сжатие не дает выигрыша, используется обычный Certificate |
 | [RFC 7924](https://www.rfc-editor.org/rfc/rfc7924) | Кэширование информации TLS/DTLS | Согласование CH/EE, отпечатки SHA-256, кэш серверных Certificate/первоначального CertificateRequest, откат при несовпадении и текущая проверка доверия; wolfSSL поддерживает только откат |
+| [RFC 9345](https://www.rfc-editor.org/rfc/rfc9345) | Delegated Credentials | Согласование CH/CR, DelegationUsage, срок и подпись, mTLS/PHA/возобновление; делегированные ключи ECDSA и Ed25519 |
 | [RFC 9149](https://www.rfc-editor.org/rfc/rfc9149) | Запросы tickets TLS/DTLS 1.3 | Клиент отдельно запрашивает число tickets для полного и возобновленного соединения; сервер возвращает ограниченный expected count, надежно отправляет несколько NST и сохраняет один ticket при отсутствии расширения |
 | [RFC 9257](https://www.rfc-editor.org/rfc/rfc9257) | Рекомендации TLS 1.3 по внешним PSK | Реализованы DHE-only, несколько identity, откат при неизвестной identity, описание риска открытой identity, привязка происхождения ticket и политика 0-RTT для внешнего PSK |
 | [RFC 9258](https://www.rfc-editor.org/rfc/rfc9258) | PSK Importer для TLS/DTLS 1.3 | Реализованы целевой вывод SHA-256/384, метка DTLS, wire-кодирование ImportedIdentity и отдельная метка binder |
@@ -513,14 +536,14 @@ serverConfig.MaxSessionTickets = 4
 | [RFC 9853](https://www.rfc-editor.org/rfc/rfc9853) | Return Routability Check при смене адреса CID | Реализовано; enhanced check по умолчанию, basic check после отказа старого пути, смена привязки только после проверки, отдельное ограничение усиления пути-кандидата и проверка с резервным CID при его наличии |
 | [RFC 8701](https://www.rfc-editor.org/rfc/rfc8701) | GREASE против окостенения протокола | Стратегия значений расширений реализована: `EnableGREASE` отправляет случайное пустое расширение в CH/CR/NST, получатель игнорирует его без записи в состояние согласования, HRR сохраняет значение; остальные точки MAY активно не используются |
 
-Из необязательных расширений не реализованы RFC 9261 Exported Authenticators и RFC 9345 Delegated Credentials.
+Из необязательных расширений не реализован RFC 9261 Exported Authenticators.
 
 ### Границы реализации
 
 Следующие ограничения не уменьшают полноту обязательной семантики RFC 9147, но должны учитываться пользователями:
 
 - Модуль реализует только DTLS 1.3 и не откатывается к DTLS 1.2, поэтому не заявляет полного соответствия требованию RFC 9325 о поддержке DTLS 1.2 библиотеками общего назначения.
-- Модуль не запрашивает расширения CertificateEntry. Незапрошенные расширения, включая OCSP `status_request` и SCT, прерывают рукопожатие с `unsupported_extension`; распознанные расширения в недопустимом сообщении вызывают `illegal_parameter`.
+- OCSP и DC запрашиваются только при включении. Незапрошенный DC вызывает `unexpected_message` по RFC 9345; другие незапрошенные расширения CertificateEntry — `unsupported_extension`, а известное расширение в неверном сообщении — `illegal_parameter`.
 - Демультиплексирование записей Heartbeat реализовано; полный протокол Heartbeat определен RFC 6520 и находится за пределами RFC 9147.
 - Отправитель использует допустимый режим «одна запись на UDP-дейтаграмму» и не предоставляет необязательный API агрегации нескольких записей.
 - Параллельные множественные запросы PHA не предоставляются; RFC разрешает, но не требует эту возможность.
@@ -564,6 +587,7 @@ go test -run '^$' -bench '^BenchmarkProtectedRecord(Seal|RoundTripInPlace)$' -be
 - Тесты предупреждений RFC 9846 охватывают ошибки wire-формата, неожиданные сообщения рукопожатия (включая сообщения после Finished в том же пакете обработки), незапрошенные расширения CertificateEntry, ожидание финального ACK, изменение порядка после рукопожатия, `close_notify` и локальные криптографические ошибки.
 - Тесты RFC 9853 охватывают сообщения/state machine RRC, реальный UDP NAT rebinding, обновления CID, комбинации слабой сети и жизненный цикл ресурсов соединения.
 - Fuzzing parser/record охватывает дифференциальную проверку копирующего и in-place расшифрования для всех четырех AEAD.
+- Тесты RFC 9345 проверяют независимо построенную подпись, повреждённые/истёкшие/непредложенные DC, привязку к роли и сертификату, соответствие кривой алгоритму, выбор через callback и Clone, кэш доверия, mTLS/PHA, возобновление/0-RTT, ECH, потери, фрагментацию и UDP.
 - Двунаправленные тесты через реальный UDP с wolfSSL master `3136f17` охватывают HRR, рукопожатия с сертификатами RSA-PSS, Finished ACK, прикладные данные, AES-GCM, AES-128-CCM, прямые внешние PSK, CID, KeyUpdate, PHA, обычное возобновление сессии и все три гибридные группы в поддерживаемых узлом направлениях. Дополнительно проверяются отправленные go-dtls GREASE RFC 8701 в CH/CR/NST, откат без согласования RFC 9149, немедленная смена CID, возобновление mTLS и повтор Finished после потери финального ACK, а также двунаправленный 0-RTT и откат к 1-RTT после HRR. Для ECH проверяется только откат GREASE, поскольку узел пока не завершает DTLS accepted-ECH.
 
 Требования к среде разработки, обязательным проверкам, производительности и commit описаны в [CONTRIBUTING.ru.md](CONTRIBUTING.ru.md).

@@ -18,6 +18,7 @@ type postHandshakeAuthState struct {
 	inbox                            *handshakeInbox
 	peerCertificates                 []*x509.Certificate
 	peerRawPublicKey                 []byte
+	peerDelegatedCredential          []byte
 	verifiedChains                   [][]*x509.Certificate
 	ocspResponse                     []byte
 	sawCertificate                   bool
@@ -26,6 +27,7 @@ type postHandshakeAuthState struct {
 	startSequence                    uint16
 	hasStartSequence                 bool
 	signatureSchemes                 []tls.SignatureScheme
+	delegatedCredentialSchemes       []tls.SignatureScheme
 	certificateSchemes               []tls.SignatureScheme
 	oidFilters                       []CertificateOIDFilter
 	certificateCompressionAlgorithms *certificateCompressionAlgorithms
@@ -146,10 +148,11 @@ func (c *Conn) RequestClientCertificate(ctx context.Context) error {
 	c.sendingTraffic.commitMessageSequences(1)
 	state := &postHandshakeAuthState{
 		context: requestContext, transcript: transcript,
-		inbox:            newHandshakeInbox(c.finishedMessageSequence+1, c.config.MaxHandshakeMessage, c.config.MaxBufferedHandshakeMessages, c.config.MaxBufferedHandshakeBytes),
-		done:             make(chan error, 1),
-		signatureSchemes: append([]tls.SignatureScheme(nil), request.signatureSchemes...),
-		statusRequest:    request.statusRequest,
+		inbox:                      newHandshakeInbox(c.finishedMessageSequence+1, c.config.MaxHandshakeMessage, c.config.MaxBufferedHandshakeMessages, c.config.MaxBufferedHandshakeBytes),
+		done:                       make(chan error, 1),
+		signatureSchemes:           append([]tls.SignatureScheme(nil), request.signatureSchemes...),
+		delegatedCredentialSchemes: append([]tls.SignatureScheme(nil), request.delegatedCredentialSchemes...),
+		statusRequest:              request.statusRequest,
 	}
 	state.certificateSchemes = append([]tls.SignatureScheme(nil), request.certificateSignatureSchemes...)
 	state.oidFilters = cloneOIDFilters(request.oidFilters)
@@ -211,6 +214,7 @@ func (c *Conn) processPostHandshakeCertificateRequest(sequence uint16, body []by
 			}
 			certificate.certificates[0].extensions = map[uint16][]byte{extStatusRequest: response}
 		}
+		c.addDelegatedCredential(certificate, local)
 	}
 	certificateBody, err := certificate.marshal()
 	if err != nil {
@@ -238,7 +242,7 @@ func (c *Conn) processPostHandshakeCertificateRequest(sequence uint16, body []by
 		if !ok {
 			return errors.New("dtls13: client certificate private key is not a signer")
 		}
-		scheme, selectErr := selectSignatureScheme(signer, request.signatureSchemes)
+		scheme, selectErr := c.certificateSigningScheme(local, request.signatureSchemes)
 		if selectErr != nil {
 			return selectErr
 		}
@@ -346,7 +350,7 @@ func (c *Conn) processPostHandshakeAuthMessageLocked(state *postHandshakeAuthSta
 		if !equalBytes(certificate.requestContext, state.context) {
 			return &ProtocolError{"post-handshake Certificate context mismatch"}
 		}
-		if err = validateCertificateMessageWithStatusRequest(certificate, state.context, state.statusRequest); err != nil {
+		if err = validateCertificateMessageWithRequests(certificate, state.context, state.statusRequest, len(state.delegatedCredentialSchemes) > 0 && c.clientCertificateType == CertificateTypeX509); err != nil {
 			return err
 		}
 		state.sawCertificate = true
@@ -366,6 +370,10 @@ func (c *Conn) processPostHandshakeAuthMessageLocked(state *postHandshakeAuthSta
 					return alertError(alertUnsupportedCertificate, err)
 				}
 			}
+			state.peerDelegatedCredential, err = peerDelegatedCredential(certificate, state.peerCertificates, c.config, false, state.signatureSchemes, state.delegatedCredentialSchemes)
+			if err != nil {
+				return err
+			}
 			state.stage = postAuthExpectCertificateVerify
 		} else {
 			state.stage = postAuthExpectFinished
@@ -379,19 +387,7 @@ func (c *Conn) processPostHandshakeAuthMessageLocked(state *postHandshakeAuthSta
 		if err != nil {
 			return err
 		}
-		offered := false
-		for _, scheme := range state.signatureSchemes {
-			offered = offered || scheme == verify.algorithm
-		}
-		if !offered {
-			err = alertError(alertIllegalParameter, &ProtocolError{"post-handshake client selected an unoffered signature scheme"})
-		}
-		if err == nil {
-			err = verifyPeerCertificateSignature(state.peerCertificates, state.peerRawPublicKey, verify.algorithm, state.transcript.sum(), verify.signature, false)
-			if err != nil {
-				err = alertError(alertDecryptError, err)
-			}
-		}
+		err = verifyPeerAuthenticationSignature(state.peerCertificates, state.peerRawPublicKey, state.peerDelegatedCredential, state.signatureSchemes, verify, state.transcript.sum(), false)
 		if err != nil {
 			return err
 		}
@@ -434,6 +430,7 @@ func (c *Conn) processPostHandshakeAuthMessageLocked(state *postHandshakeAuthSta
 		c.state.PeerCertificates = append([]*x509.Certificate(nil), state.peerCertificates...)
 		c.state.VerifiedChains = state.verifiedChains
 		c.state.PeerRawPublicKey = append([]byte(nil), state.peerRawPublicKey...)
+		c.state.PeerDelegatedCredential = append([]byte(nil), state.peerDelegatedCredential...)
 		c.state.OCSPResponse = append([]byte(nil), state.ocspResponse...)
 		c.mu.Unlock()
 		return nil

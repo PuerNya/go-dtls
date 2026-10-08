@@ -14,6 +14,7 @@ type certificateRequestMessage struct {
 	requestContext              []byte
 	signatureSchemes            []tls.SignatureScheme
 	certificateSignatureSchemes []tls.SignatureScheme
+	delegatedCredentialSchemes  []tls.SignatureScheme
 	certificateAuthorities      [][]byte
 	oidFilters                  []CertificateOIDFilter
 	statusRequest               bool
@@ -29,6 +30,12 @@ func (m *certificateRequestMessage) marshalWithCertificateCompression(algorithms
 		return nil, err
 	}
 	items := map[uint16][]byte{extSignatureAlgorithms: schemes}
+	if len(m.delegatedCredentialSchemes) > 0 {
+		items[extDelegatedCredential], err = marshalSignatureSchemes(m.delegatedCredentialSchemes)
+		if err != nil {
+			return nil, err
+		}
+	}
 	if len(m.certificateSignatureSchemes) > 0 {
 		items[extSignatureAlgorithmsCert], err = marshalSignatureSchemes(m.certificateSignatureSchemes)
 		if err != nil {
@@ -56,7 +63,7 @@ func (m *certificateRequestMessage) marshalWithCertificateCompression(algorithms
 			return nil, err
 		}
 	}
-	order := [...]uint16{extSignatureAlgorithms, extSignatureAlgorithmsCert, extCertificateAuthorities, extOIDFilters, extCompressCertificate, extStatusRequest, greaseExtension}
+	order := [...]uint16{extSignatureAlgorithms, extSignatureAlgorithmsCert, extDelegatedCredential, extCertificateAuthorities, extOIDFilters, extCompressCertificate, extStatusRequest, greaseExtension}
 	orderLength := len(order) - 1
 	if greaseExtension != 0 {
 		items[greaseExtension] = nil
@@ -92,6 +99,12 @@ func parseCertificateRequestWithCompression(b []byte) (*certificateRequestMessag
 	if err != nil {
 		return nil, nil, err
 	}
+	if raw, ok = orderedExtensionValue(exts, extDelegatedCredential); ok {
+		m.delegatedCredentialSchemes, err = parseSignatureSchemes(raw)
+		if err != nil {
+			return nil, nil, err
+		}
+	}
 	if raw, ok = orderedExtensionValue(exts, extSignatureAlgorithmsCert); ok {
 		m.certificateSignatureSchemes, err = parseSignatureSchemes(raw)
 		if err != nil {
@@ -124,7 +137,7 @@ func parseCertificateRequestWithCompression(b []byte) (*certificateRequestMessag
 		}
 	}
 	for _, extension := range exts {
-		if extension.typ != extSignatureAlgorithms && extension.typ != extSignatureAlgorithmsCert && extension.typ != extCertificateAuthorities && extension.typ != extOIDFilters && extension.typ != extCompressCertificate && extension.typ != extStatusRequest && knownExtensionType(extension.typ) {
+		if extension.typ != extSignatureAlgorithms && extension.typ != extSignatureAlgorithmsCert && extension.typ != extDelegatedCredential && extension.typ != extCertificateAuthorities && extension.typ != extOIDFilters && extension.typ != extCompressCertificate && extension.typ != extStatusRequest && knownExtensionType(extension.typ) {
 			return nil, nil, alertError(alertIllegalParameter, &ProtocolError{"recognized extension is not permitted in CertificateRequest"})
 		}
 	}

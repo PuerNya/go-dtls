@@ -179,6 +179,22 @@ func validateConfiguredCertificate(certificate *tls.Certificate, offered []tls.S
 }
 
 func validateConfiguredCertificateChain(certificate *tls.Certificate, offered []tls.SignatureScheme, serverAuth bool) ([]*x509.Certificate, error) {
+	parsed, err := configuredCertificateChain(certificate, offered, serverAuth)
+	if err != nil {
+		return nil, err
+	}
+	signer, ok := certificate.PrivateKey.(crypto.Signer)
+	if !ok {
+		return nil, errors.New("dtls13: configured certificate private key is not a signer")
+	}
+	certificatePublic, ok := parsed[0].PublicKey.(interface{ Equal(crypto.PublicKey) bool })
+	if !ok || !certificatePublic.Equal(signer.Public()) {
+		return nil, errors.New("dtls13: configured certificate and private key do not match")
+	}
+	return parsed, nil
+}
+
+func configuredCertificateChain(certificate *tls.Certificate, offered []tls.SignatureScheme, serverAuth bool) ([]*x509.Certificate, error) {
 	if certificate == nil || len(certificate.Certificate) == 0 {
 		return nil, errors.New("dtls13: configured certificate chain is empty")
 	}
@@ -201,14 +217,6 @@ func validateConfiguredCertificateChain(certificate *tls.Certificate, offered []
 		if extension.Id.Equal(oidExtensionKeyUsage) && parsed[0].KeyUsage&x509.KeyUsageDigitalSignature == 0 {
 			return nil, errors.New("dtls13: configured certificate does not permit digital signatures")
 		}
-	}
-	signer, ok := certificate.PrivateKey.(crypto.Signer)
-	if !ok {
-		return nil, errors.New("dtls13: configured certificate private key is not a signer")
-	}
-	certificatePublic, ok := parsed[0].PublicKey.(interface{ Equal(crypto.PublicKey) bool })
-	if !ok || !certificatePublic.Equal(signer.Public()) {
-		return nil, errors.New("dtls13: configured certificate and private key do not match")
 	}
 	if err := validateCertificateSignatureAlgorithms(parsed, offered); err != nil {
 		return nil, err

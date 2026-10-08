@@ -89,16 +89,18 @@ type serverHandshakeState struct {
 	clientCertificateOIDFilters  []CertificateOIDFilter
 	clientCertificateCompression *certificateCompressionAlgorithms
 	clientStatusRequest          bool
+	clientDelegatedSchemes       []tls.SignatureScheme
 
 	// serverProcessClientFlight
-	clientFinalFlightStart uint16
-	clientCerts            []*x509.Certificate
-	clientRawPublicKey     []byte
-	clientTypeNegotiated   bool
-	clientChains           [][]*x509.Certificate
-	ocspResponse           []byte
-	clientAuthAt           int64
-	clientRecords          []recordNumber
+	clientFinalFlightStart    uint16
+	clientCerts               []*x509.Certificate
+	clientDelegatedCredential []byte
+	clientRawPublicKey        []byte
+	clientTypeNegotiated      bool
+	clientChains              [][]*x509.Certificate
+	ocspResponse              []byte
+	clientAuthAt              int64
+	clientRecords             []recordNumber
 }
 
 // serverHandshake runs the DTLS 1.3 server handshake as a sequence of steps.
@@ -425,7 +427,7 @@ func (c *Conn) serverNegotiateExtensionsAndKeyShare(s *serverHandshakeState) err
 	if err = requireCertificateSignatureAlgorithms(s.ch, false); err != nil {
 		return err
 	}
-	if c.serverCertificateType, err = selectCertificateType(s.ch.unknownExtensions[extServerCertificateType], c.config.ServerCertificateTypes, len(c.config.Certificates) > 0 || c.config.GetCertificate != nil, c.config.RawPublicKeySigner != nil); err != nil {
+	if c.serverCertificateType, err = selectCertificateType(s.ch.unknownExtensions[extServerCertificateType], c.config.ServerCertificateTypes, len(c.config.Certificates) > 0 || len(c.config.DelegatedCredentials) > 0 || c.config.GetCertificate != nil, c.config.RawPublicKeySigner != nil); err != nil {
 		return err
 	}
 	if c.serverCertificateType == CertificateTypeRawPublicKey {
@@ -441,16 +443,12 @@ func (c *Conn) serverNegotiateExtensionsAndKeyShare(s *serverHandshakeState) err
 		return errors.New("dtls13: server private key does not implement crypto.Signer")
 	}
 	s.signer = signer
-	certificateSchemes := s.ch.certificateSignatureSchemes
-	if len(certificateSchemes) == 0 {
-		certificateSchemes = s.ch.signatureSchemes
-	}
 	if c.serverCertificateType == CertificateTypeX509 {
-		if validateErr := validateConfiguredCertificate(s.cert, certificateSchemes, true); validateErr != nil {
+		if _, validateErr := c.validateLocalCertificate(s.cert, s.ch.signatureSchemes, s.ch.certificateSignatureSchemes, s.ch.delegatedCredentialSchemes, true); validateErr != nil {
 			return alertError(alertHandshakeFailure, validateErr)
 		}
 	}
-	s.scheme, err = selectSignatureScheme(signer, s.ch.signatureSchemes)
+	s.scheme, err = c.certificateSigningScheme(s.cert, s.ch.signatureSchemes)
 	return err
 }
 
@@ -677,6 +675,7 @@ func (c *Conn) serverAuthenticationBodies(s *serverHandshakeState) (requestBody,
 	if s.requestsClientCertificate(c) {
 		request := c.newCertificateRequest(nil)
 		s.clientStatusRequest = request.statusRequest
+		s.clientDelegatedSchemes = request.delegatedCredentialSchemes
 		if c.config.EnableCertificateCompression {
 			s.clientCertificateCompression = &certificateCompressionZlibOffer
 		}
@@ -717,6 +716,7 @@ func (c *Conn) serverAuthenticationBodies(s *serverHandshakeState) (requestBody,
 		}
 		certMsg.certificates = append(certMsg.certificates, entry)
 	}
+	c.addDelegatedCredential(certMsg, s.cert)
 	certBody, err = certMsg.marshal()
 	return requestBody, certBody, err
 }
@@ -741,6 +741,7 @@ func (c *Conn) serverProcessClientFlight(s *serverHandshakeState) error {
 	s.inbox = newHandshakeInbox(s.clientFinalFlightStart, c.config.MaxHandshakeMessage, c.config.MaxBufferedHandshakeMessages, c.config.MaxBufferedHandshakeBytes)
 	if s.resumedSession != nil {
 		s.clientCerts = s.resumedSession.peerCertificates
+		s.clientDelegatedCredential = append([]byte(nil), s.resumedSession.peerDelegatedCredential...)
 		s.clientRawPublicKey = append([]byte(nil), s.resumedSession.peerRawPublicKey...)
 		s.clientChains = s.resumedSession.verifiedChains
 		s.clientAuthAt = s.resumedSession.clientAuthAt
@@ -812,7 +813,7 @@ func (c *Conn) serverClientCertificate(s *serverHandshakeState, message complete
 	if err != nil {
 		return false, err
 	}
-	if err = validateCertificateMessageWithStatusRequest(certMessage, nil, s.clientStatusRequest); err != nil {
+	if err = validateCertificateMessageWithRequests(certMessage, nil, s.clientStatusRequest, len(s.clientDelegatedSchemes) > 0 && c.clientCertificateType == CertificateTypeX509); err != nil {
 		return false, err
 	}
 	hasCertificates := len(certMessage.certificates) > 0
@@ -831,6 +832,10 @@ func (c *Conn) serverClientCertificate(s *serverHandshakeState, message complete
 				return false, alertError(alertUnsupportedCertificate, err)
 			}
 		}
+		s.clientDelegatedCredential, err = peerDelegatedCredential(certMessage, s.clientCerts, c.config, false, s.clientSignatureSchemes, s.clientDelegatedSchemes)
+		if err != nil {
+			return false, err
+		}
 	}
 	_ = s.transcript.add(message.typ, message.sequence, message.body)
 	return hasCertificates, nil
@@ -844,11 +849,8 @@ func (c *Conn) serverClientCertificateVerify(s *serverHandshakeState, message co
 	if err != nil {
 		return err
 	}
-	if !slices.Contains(s.clientSignatureSchemes, cv.algorithm) {
-		return alertError(alertIllegalParameter, &ProtocolError{"client selected an unoffered signature scheme"})
-	}
-	if err = verifyPeerCertificateSignature(s.clientCerts, s.clientRawPublicKey, cv.algorithm, s.transcript.sumInto(s.transcriptDigest[:0]), cv.signature, false); err != nil {
-		return alertError(alertDecryptError, err)
+	if err = verifyPeerAuthenticationSignature(s.clientCerts, s.clientRawPublicKey, s.clientDelegatedCredential, s.clientSignatureSchemes, cv, s.transcript.sumInto(s.transcriptDigest[:0]), false); err != nil {
+		return err
 	}
 	_ = s.transcript.add(message.typ, message.sequence, message.body)
 	return nil
@@ -894,23 +896,24 @@ func (c *Conn) serverFinalize(s *serverHandshakeState) error {
 		return err
 	}
 	if err := c.finishHandshake(handshakeCompletion{
-		suite:             s.suite,
-		schedule:          s.schedule,
-		transcript:        s.transcript,
-		receiveCipher:     s.clientCipher,
-		peerFlightStart:   s.clientFinalFlightStart,
-		peerFlightEnd:     s.clientFinishedSeq,
-		externalPSK:       s.externalPSK,
-		resumed:           s.resumed,
-		echAccepted:       s.echAccepted,
-		negotiated:        s.negotiated,
-		peerCerts:         s.clientCerts,
-		serverName:        s.ch.serverName,
-		peerRawPublicKey:  s.clientRawPublicKey,
-		chains:            s.clientChains,
-		ocspResponse:      s.ocspResponse,
-		promoteEarly:      true,
-		finishedACKCipher: s.serverCipher,
+		suite:                   s.suite,
+		schedule:                s.schedule,
+		transcript:              s.transcript,
+		receiveCipher:           s.clientCipher,
+		peerFlightStart:         s.clientFinalFlightStart,
+		peerFlightEnd:           s.clientFinishedSeq,
+		externalPSK:             s.externalPSK,
+		resumed:                 s.resumed,
+		echAccepted:             s.echAccepted,
+		negotiated:              s.negotiated,
+		peerCerts:               s.clientCerts,
+		serverName:              s.ch.serverName,
+		peerRawPublicKey:        s.clientRawPublicKey,
+		peerDelegatedCredential: s.clientDelegatedCredential,
+		chains:                  s.clientChains,
+		ocspResponse:            s.ocspResponse,
+		promoteEarly:            true,
+		finishedACKCipher:       s.serverCipher,
 	}); err != nil {
 		return err
 	}
@@ -945,6 +948,9 @@ func (c *Conn) serverCertificate(ch *clientHello) (*tls.Certificate, error) {
 		if certificate == nil {
 			return nil, errors.New("dtls13: GetCertificate returned nil")
 		}
+		return certificate, nil
+	}
+	if certificate := c.selectDelegatedCredential(ch.signatureSchemes, ch.certificateSignatureSchemes, ch.delegatedCredentialSchemes, true, ch.serverName, ch.certificateAuthorityNames(), nil); certificate != nil {
 		return certificate, nil
 	}
 	if len(c.config.Certificates) == 0 {

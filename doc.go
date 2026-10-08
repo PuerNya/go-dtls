@@ -60,6 +60,15 @@
 //
 // # Authentication
 //
+// [Config.EnableDelegatedCredentials] opts into [RFC 9345] authentication.
+// [NewDelegatedCredential] signs a short-lived credential with a parent
+// certificate that permits delegation. [Config.DelegatedCredentials] presents
+// the parent chain and delegated key without retaining the parent's private
+// key. ECDSA and Ed25519 delegated keys are supported; RSA delegated keys are
+// not. Parent-chain authentication remains required. Initial client
+// authentication, PHA and session resumption preserve the delegated identity
+// in [ConnectionState.PeerDelegatedCredential].
+//
 // Certificate and ALPN configuration follows the corresponding TLS 1.3
 // concepts in [crypto/tls.Config]. Clients normally set [Config.RootCAs] and
 // [Config.ServerName]. Servers set [Config.Certificates] or
@@ -328,6 +337,7 @@
 // [RFC 9149]: https://www.rfc-editor.org/rfc/rfc9149
 // [RFC 9257]: https://www.rfc-editor.org/rfc/rfc9257
 // [RFC 9258]: https://www.rfc-editor.org/rfc/rfc9258
+// [RFC 9345]: https://www.rfc-editor.org/rfc/rfc9345
 // [RFC 9848]: https://www.rfc-editor.org/rfc/rfc9848
 // [RFC 9849]: https://www.rfc-editor.org/rfc/rfc9849
 // [RFC 9853]: https://www.rfc-editor.org/rfc/rfc9853

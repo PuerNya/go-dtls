@@ -203,23 +203,24 @@ var defaultEarlyDataReplayCache EarlyDataReplayCache = NewLRUEarlyDataReplayCach
 // created and consumed by this package through ClientSessionCache and must not
 // be modified by applications or cache implementations.
 type ClientSessionState struct {
-	peerRawPublicKey []byte
-	ticket           []byte
-	psk              []byte
-	nonce            []byte
-	suite            uint16
-	receivedAt       time.Time
-	lifetime         uint32
-	ageAdd           uint32
-	serverName       string
-	protocol         string
-	maxEarlyData     uint32
-	recordSizeLimit  uint16
-	peerCertificates []*x509.Certificate
-	verifiedChains   [][]*x509.Certificate
-	ocspResponse     []byte
-	externalPSK      *externalPSKSelection
-	ticketGroup      [32]byte
+	peerDelegatedCredential []byte
+	peerRawPublicKey        []byte
+	ticket                  []byte
+	psk                     []byte
+	nonce                   []byte
+	suite                   uint16
+	receivedAt              time.Time
+	lifetime                uint32
+	ageAdd                  uint32
+	serverName              string
+	protocol                string
+	maxEarlyData            uint32
+	recordSizeLimit         uint16
+	peerCertificates        []*x509.Certificate
+	verifiedChains          [][]*x509.Certificate
+	ocspResponse            []byte
+	externalPSK             *externalPSKSelection
+	ticketGroup             [32]byte
 }
 
 type sessionTicketRequestState struct {
@@ -266,6 +267,7 @@ func cloneClientSessionState(state *ClientSessionState) *ClientSessionState {
 	clone.peerCertificates = append([]*x509.Certificate(nil), state.peerCertificates...)
 	clone.ocspResponse = append([]byte(nil), state.ocspResponse...)
 	clone.peerRawPublicKey = append([]byte(nil), state.peerRawPublicKey...)
+	clone.peerDelegatedCredential = append([]byte(nil), state.peerDelegatedCredential...)
 	clone.verifiedChains = make([][]*x509.Certificate, len(state.verifiedChains))
 	for i := range state.verifiedChains {
 		clone.verifiedChains[i] = append([]*x509.Certificate(nil), state.verifiedChains[i]...)
@@ -390,20 +392,21 @@ type externalPSKTicketState struct {
 }
 
 type sessionTicketState struct {
-	peerRawPublicKey []byte
-	createdAt        int64
-	clientAuthAt     int64
-	psk              []byte
-	serverName       string
-	protocol         string
-	peerCertificates []*x509.Certificate
-	verifiedChains   [][]*x509.Certificate
-	externalPSK      *externalPSKTicketState
-	lifetime         uint32
-	ageAdd           uint32
-	maxEarlyData     uint32
-	suite            uint16
-	recordSizeLimit  uint16
+	peerDelegatedCredential []byte
+	peerRawPublicKey        []byte
+	createdAt               int64
+	clientAuthAt            int64
+	psk                     []byte
+	serverName              string
+	protocol                string
+	peerCertificates        []*x509.Certificate
+	verifiedChains          [][]*x509.Certificate
+	externalPSK             *externalPSKTicketState
+	lifetime                uint32
+	ageAdd                  uint32
+	maxEarlyData            uint32
+	suite                   uint16
+	recordSizeLimit         uint16
 }
 
 func (s *sessionTicketState) validateRawPublicKeyState() error {
@@ -464,6 +467,15 @@ func (s *sessionTicketState) marshal() ([]byte, error) {
 		}
 		version = 7
 	}
+	if len(s.peerDelegatedCredential) != 0 {
+		if len(s.peerCertificates) == 0 || len(s.peerRawPublicKey) != 0 || s.externalPSK != nil {
+			return nil, errors.New("dtls13: inconsistent delegated credential ticket identity")
+		}
+		if _, err := parseDelegatedCredential(s.peerDelegatedCredential); err != nil {
+			return nil, err
+		}
+		version = 8
+	}
 	recordSizeLimit := effectiveRecordSizeLimit(s.recordSizeLimit)
 	capacity := 2 + 8 + 4 + 4 + 2 + 1 + len(s.psk) + 2 + len(s.serverName) + 1 + len(s.protocol)
 	if version >= 2 {
@@ -472,7 +484,7 @@ func (s *sessionTicketState) marshal() ([]byte, error) {
 	if version >= 4 {
 		capacity += 2
 	}
-	if version == 3 || version == 5 {
+	if version == 3 || version == 5 || version == 8 {
 		capacity += 8 + 2 + 2
 		for _, cert := range s.peerCertificates {
 			if cert == nil || len(cert.Raw) == 0 {
@@ -499,6 +511,9 @@ func (s *sessionTicketState) marshal() ([]byte, error) {
 	if version == 7 {
 		capacity += 8 + 3 + len(s.peerRawPublicKey)
 	}
+	if version == 8 {
+		capacity += 3 + len(s.peerDelegatedCredential)
+	}
 	w := newWireBuilder(capacity)
 	w.u16(version)
 	w.b = binary.BigEndian.AppendUint64(w.b, uint64(s.createdAt))
@@ -514,7 +529,7 @@ func (s *sessionTicketState) marshal() ([]byte, error) {
 	if version >= 4 {
 		w.u16(int(recordSizeLimit))
 	}
-	if version == 3 || version == 5 {
+	if version == 3 || version == 5 || version == 8 {
 		w.b = binary.BigEndian.AppendUint64(w.b, uint64(s.clientAuthAt))
 		certificates := w.startVector16()
 		for _, cert := range s.peerCertificates {
@@ -540,13 +555,16 @@ func (s *sessionTicketState) marshal() ([]byte, error) {
 		w.b = binary.BigEndian.AppendUint64(w.b, uint64(s.clientAuthAt))
 		w.bytes24(s.peerRawPublicKey)
 	}
+	if version == 8 {
+		w.bytes24(s.peerDelegatedCredential)
+	}
 	return w.b, w.err
 }
 
 func parseSessionTicketState(b []byte) (*sessionTicketState, error) {
 	p := wireParser{b: b}
 	version := p.u16()
-	if version < 1 || version > 7 {
+	if version < 1 || version > 8 {
 		return nil, errors.New("dtls13: unsupported session ticket version")
 	}
 	created := p.take(8)
@@ -570,7 +588,7 @@ func parseSessionTicketState(b []byte) (*sessionTicketState, error) {
 			return nil, errors.New("dtls13: invalid record size limit in session ticket")
 		}
 	}
-	if version == 3 || version == 5 {
+	if version == 3 || version == 5 || version == 8 {
 		authenticated := p.take(8)
 		if len(authenticated) == 8 {
 			state.clientAuthAt = int64(binary.BigEndian.Uint64(authenticated))
@@ -629,10 +647,16 @@ func parseSessionTicketState(b []byte) (*sessionTicketState, error) {
 			return nil, err
 		}
 	}
+	if version == 8 {
+		state.peerDelegatedCredential = bytes.Clone(p.bytes24())
+		if _, err := parseDelegatedCredential(state.peerDelegatedCredential); err != nil {
+			return nil, err
+		}
+	}
 	if err := p.done(); err != nil {
 		return nil, err
 	}
-	if state.lifetime == 0 || len(state.psk) == 0 || ((version == 3 || version == 5) && (state.clientAuthAt == 0 || len(state.peerCertificates) == 0)) {
+	if state.lifetime == 0 || len(state.psk) == 0 || ((version == 3 || version == 5 || version == 8) && (state.clientAuthAt == 0 || len(state.peerCertificates) == 0)) {
 		return nil, errors.New("dtls13: invalid session ticket state")
 	}
 	return state, nil
@@ -737,6 +761,9 @@ func validateClientSession(config *Config, state *ClientSessionState) *cipherSui
 	if state == nil || len(state.ticket) == 0 || len(state.psk) == 0 {
 		return nil
 	}
+	if !validResumedDelegatedCredential(config, state.peerDelegatedCredential, state.peerCertificates, true) {
+		return nil
+	}
 	if state.externalPSK == nil {
 		if len(state.peerRawPublicKey) != 0 {
 			if !supportsCertificateType(config.ServerCertificateTypes, CertificateTypeRawPublicKey) ||
@@ -824,6 +851,9 @@ func usableClientSession(config *Config, conn net.Conn) (*ClientSessionState, *c
 }
 
 func validClientAuthenticationTicket(config *Config, state *sessionTicketState) bool {
+	if !validResumedDelegatedCredential(config, state.peerDelegatedCredential, state.peerCertificates, false) {
+		return false
+	}
 	if len(state.peerRawPublicKey) != 0 {
 		now := config.Time()
 		return state.validateRawPublicKeyState() == nil && config.ClientAuth != tls.NoClientCert && supportsCertificateType(config.ClientCertificateTypes, CertificateTypeRawPublicKey) &&
@@ -1197,6 +1227,7 @@ func (c *Conn) sendNewSessionTickets(schedule *keySchedule, suite *cipherSuite, 
 	createdAt := c.config.Time().Unix()
 	c.mu.Lock()
 	peerRawPublicKey := bytes.Clone(c.state.PeerRawPublicKey)
+	peerDelegatedCredential := bytes.Clone(c.state.PeerDelegatedCredential)
 	c.mu.Unlock()
 	for range count {
 		nonce := make([]byte, 8)
@@ -1220,7 +1251,8 @@ func (c *Conn) sendNewSessionTickets(schedule *keySchedule, suite *cipherSuite, 
 			createdAt: createdAt, lifetime: lifetime, suite: suite.id, psk: psk,
 			serverName: serverName, protocol: protocol, ageAdd: ageAdd, maxEarlyData: c.config.MaxEarlyData, recordSizeLimit: c.localRecordSizeLimit,
 			clientAuthAt: clientAuthAt, peerCertificates: peerCertificates, verifiedChains: verifiedChains,
-			peerRawPublicKey: peerRawPublicKey,
+			peerRawPublicKey:        peerRawPublicKey,
+			peerDelegatedCredential: peerDelegatedCredential,
 		}
 		if external != nil {
 			kdf, _ := tlsKDFForHash(external.key.hash)
@@ -1330,9 +1362,10 @@ func (c *Conn) processNewSessionTicket(sequence uint16, body []byte) error {
 		suite: c.resumptionSuite.id, receivedAt: c.config.Time(), lifetime: message.lifetime,
 		ageAdd: message.ageAdd, serverName: c.config.ServerName, protocol: connectionState.NegotiatedProtocol,
 		maxEarlyData: message.maxEarlyData, recordSizeLimit: connectionState.PeerRecordSizeLimit, peerCertificates: connectionState.PeerCertificates, verifiedChains: connectionState.VerifiedChains,
-		ocspResponse:     connectionState.OCSPResponse,
-		peerRawPublicKey: connectionState.PeerRawPublicKey,
-		externalPSK:      connectionState.externalPSKSelection(), ticketGroup: group,
+		ocspResponse:            connectionState.OCSPResponse,
+		peerRawPublicKey:        connectionState.PeerRawPublicKey,
+		peerDelegatedCredential: connectionState.PeerDelegatedCredential,
+		externalPSK:             connectionState.externalPSKSelection(), ticketGroup: group,
 	}
 	key := clientSessionCacheKey(c.config, c.conn)
 	if request != nil {
