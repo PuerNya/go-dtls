@@ -177,6 +177,9 @@ func runTicketRequestHandshake(t *testing.T, clientConfig, serverConfig *Config,
 	if request.Enabled && requested == 0 && sentTicket.Load() {
 		t.Fatal("server sent a NewSessionTicket despite a zero ticket request")
 	}
+	if clientConfig.ClientSessionCache == nil && len(clientConfig.ExternalPSKs) == 0 && sentTicket.Load() {
+		t.Fatal("server sent a NewSessionTicket without an offered PSK mode")
+	}
 	return client, server
 }
 
@@ -235,9 +238,11 @@ func TestTicketRequestZeroLegacyAndWeakNetwork(t *testing.T) {
 		request SessionTicketRequest
 		want    int
 		weak    bool
+		noCache bool
 	}{
 		{name: "ExplicitZero", request: SessionTicketRequest{Enabled: true}, want: 0},
 		{name: "Legacy", want: 1},
+		{name: "NoPSKModes", noCache: true},
 		{name: "WeakNetwork", request: SessionTicketRequest{Enabled: true, NewSessionCount: 4, ResumptionCount: 1}, want: 4, weak: true},
 	} {
 		t.Run(test.name, func(t *testing.T) {
@@ -245,6 +250,9 @@ func TestTicketRequestZeroLegacyAndWeakNetwork(t *testing.T) {
 			clientConfig := &Config{
 				RootCAs: roots, ServerName: "server.test", ClientSessionCache: cache, SessionTicketRequest: test.request,
 				HandshakeTimeout: 3 * time.Second, FlightInterval: 2 * time.Millisecond, MaxFlightInterval: 20 * time.Millisecond,
+			}
+			if test.noCache {
+				clientConfig.ClientSessionCache = nil
 			}
 			left, right := memoryDatagramPair()
 			clientConn := net.Conn(left)

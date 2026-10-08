@@ -785,12 +785,12 @@ func TestPSKKeyExchangeModesWithoutPSKAndUnsupportedMode(t *testing.T) {
 	base := &clientHello{
 		cipherSuites: []uint16{TLS_AES_128_GCM_SHA256}, supportedGroups: []tls.CurveID{tls.X25519},
 		keyShares: []keyShareEntry{{group: tls.X25519, data: bytes.Repeat([]byte{1}, 32)}}, signatureSchemes: defaultSignatureSchemes(),
+		pskDHE: true,
 	}
 	body, err := base.marshal()
 	if err != nil {
 		t.Fatal(err)
 	}
-	body = appendClientHelloExtension(t, body, extPSKKeyExchangeModes, []byte{1, 1})
 	parsed, err := parseClientHello(body)
 	if err != nil || !parsed.pskDHE || len(parsed.pskIdentity) != 0 {
 		t.Fatalf("standalone modes parsed=%#v err=%v", parsed, err)

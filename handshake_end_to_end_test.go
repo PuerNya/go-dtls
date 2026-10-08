@@ -946,7 +946,21 @@ func TestPostHandshakeAuthenticationWhileClientKeyUpdateAwaitingACK(t *testing.T
 	serverCertificate, roots := testServerCertificate(t)
 	clientCertificate, clientRoots := testClientCertificate(t)
 	left, right := memoryDatagramPair()
-	serverWire := &dropWritesConn{Conn: right}
+	var dropACK atomic.Bool
+	serverWire := &observeRecordsConn{Conn: right, observe: func(r record) (bool, error) {
+		if r.typ == recordTypeACK {
+			numbers, err := parseACK(r.payload)
+			if err != nil {
+				return false, err
+			}
+			for _, number := range numbers {
+				if number.epoch == 3 {
+					return dropACK.Swap(false), nil
+				}
+			}
+		}
+		return false, nil
+	}}
 	client := Client(left, &Config{
 		RootCAs: roots, ServerName: "server.test", Certificates: []tls.Certificate{clientCertificate},
 		PostHandshakeAuth: true, HandshakeTimeout: 2 * time.Second, FlightInterval: 500 * time.Millisecond, MaxFlightInterval: 500 * time.Millisecond,
@@ -955,23 +969,9 @@ func TestPostHandshakeAuthenticationWhileClientKeyUpdateAwaitingACK(t *testing.T
 		Certificates: []tls.Certificate{serverCertificate}, ClientAuth: tls.RequireAndVerifyClientCert, ClientCAs: clientRoots,
 		HandshakeTimeout: 2 * time.Second, FlightInterval: 5 * time.Millisecond,
 	})
+	serverWire.owner = server
 	handshakePair(t, client, server)
-	ticketDeadline := time.Now().Add(time.Second)
-	for {
-		server.writeMu.Lock()
-		ticketComplete := server.ticketFlight == nil
-		server.writeMu.Unlock()
-		if ticketComplete {
-			break
-		}
-		if time.Now().After(ticketDeadline) {
-			t.Fatal("initial NewSessionTicket was not acknowledged")
-		}
-		time.Sleep(time.Millisecond)
-	}
-	serverWire.mu.Lock()
-	serverWire.remaining = 1
-	serverWire.mu.Unlock()
+	dropACK.Store(true)
 	if err := client.SendKeyUpdate(false); err != nil {
 		t.Fatal(err)
 	}
@@ -987,7 +987,7 @@ func TestPostHandshakeAuthenticationWhileClientKeyUpdateAwaitingACK(t *testing.T
 			break
 		}
 		if time.Now().After(deadline) {
-			t.Fatal("client KeyUpdate did not remain pending after the dropped ACK")
+			t.Fatalf("client KeyUpdate did not remain pending after the dropped ACK: received=%v pending=%v drop=%v", receivedUpdate, stillPending, dropACK.Load())
 		}
 		time.Sleep(time.Millisecond)
 	}

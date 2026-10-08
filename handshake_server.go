@@ -560,7 +560,7 @@ func (c *Conn) serverSendFlight(s *serverHandshakeState) error {
 		}
 		s.ticketCount = min(s.ticketCount, c.config.MaxSessionTickets)
 	}
-	if c.config.SessionTicketsDisabled {
+	if c.config.SessionTicketsDisabled || !s.ch.pskDHE {
 		s.ticketCount = 0
 	}
 	ee := &encryptedExtensions{recordSizeLimit: c.config.RecordSizeLimit, hasRecordSizeLimit: s.ch.hasRecordSizeLimit}

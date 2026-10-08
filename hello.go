@@ -1077,11 +1077,11 @@ func (h *clientHello) marshal() ([]byte, error) {
 	if grease, ok := h.greaseExtension(); ok {
 		extensions = append(extensions, orderedExtension{typ: grease})
 	}
+	if hasPSK || h.pskDHE {
+		extensions = append(extensions, orderedExtension{typ: extPSKKeyExchangeModes, value: marshalPSKKeyExchangeModes()})
+	}
 	if hasPSK {
-		extensions = append(extensions,
-			orderedExtension{typ: extPSKKeyExchangeModes, value: marshalPSKKeyExchangeModes()},
-			orderedExtension{typ: extPreSharedKey, value: psk},
-		)
+		extensions = append(extensions, orderedExtension{typ: extPreSharedKey, value: psk})
 	}
 	extsLength, err := orderedExtensionsWireLength(extensions)
 	if err != nil {

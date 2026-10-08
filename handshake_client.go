@@ -127,6 +127,7 @@ func (c *Conn) clientPrepareHello(s *clientHandshakeState) error {
 		keyShares = append(keyShares, keyShareEntry{group: group, data: public})
 	}
 	hello := &clientHello{cipherSuites: append([]uint16(nil), c.config.CipherSuites...), keyShares: keyShares, supportedGroups: c.config.CurvePreferences, signatureSchemes: defaultSignatureSchemes(), serverName: c.config.ServerName, alpn: c.config.NextProtos, postHandshakeAuth: c.config.PostHandshakeAuth, recordSizeLimit: c.config.RecordSizeLimit, hasRecordSizeLimit: true, statusRequest: c.config.EnableOCSPStapling}
+	hello.pskDHE = !c.config.SessionTicketsDisabled && c.config.ClientSessionCache != nil
 	if err := c.offerCertificateTypes(hello); err != nil {
 		return err
 	}
