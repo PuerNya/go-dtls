@@ -116,6 +116,10 @@ func (c *Conn) buildCertificateMessages(certificate *certificateMessage, compres
 	if err != nil {
 		return nil, sequence, err
 	}
+	return c.buildCertificateBodyMessages(certificateType, certificateBody, signer, scheme, server, transcript, sequence, digest)
+}
+
+func (c *Conn) buildCertificateBodyMessages(certificateType uint8, certificateBody []byte, signer crypto.Signer, scheme tls.SignatureScheme, server bool, transcript *transcriptHash, sequence uint16, digest []byte) ([]handshakeMessage, uint16, error) {
 	messages := []handshakeMessage{{typ: certificateType, sequence: sequence, body: certificateBody}}
 	_ = transcript.add(certificateType, sequence, certificateBody)
 	sequence++

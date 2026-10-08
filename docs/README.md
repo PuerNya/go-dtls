@@ -234,6 +234,7 @@ deadline、socket 关闭和底层 UDP 错误沿 Go `net` 错误模型返回；�
 | KeyUpdate | `SendKeyUpdate(requestPeer)` | 可靠发送并在 ACK 后切换发送 epoch；接近 AEAD 使用上限时也会自动触发 |
 | CID / 路径验证 | `ConnectionID`、`GetConnectionID`、`SendNewConnectionIDs`、`RequestConnectionIDs`、`UseNextConnectionID` | 支持 RFC 9146 CID 协商和更新，并默认协商 RFC 9853 RRC；Listener 只在新路径验证完成后 rebind |
 | 证书压缩 | `EnableCertificateCompression` | 显式启用 RFC 8879 zlib；支持服务端证书以及 mTLS/PHA 客户端证书，压缩后不更小时自动发送普通 Certificate |
+| 缓存信息 | `CachedInformationCache`、`EnableCachedInformation` | RFC 7924 在完整握手中用指纹替换匹配的服务端 Certificate 和初始 CertificateRequest，保留当前认证检查 |
 | 动态证书选择 | `GetCertificate`、`GetClientCertificate`、`ServerCertificateAuthorities`、`ClientCertificateOIDFilters` | RFC 9846 CA/OID 提示和双端多证书选择；初始 mTLS 与 PHA 使用相同规则 |
 | Encrypted ClientHello | `EncryptedClientHelloConfigList`、`EncryptedClientHelloKeys`、`EncryptedClientHelloGrease` | RFC 9849 Inner/Outer ClientHello、HPKE、HRR、accept confirmation、retry configs、恢复和 0-RTT |
 | 握手内客户端认证 | `ClientAuth`、`ClientCAs`、`Certificates` | 使用 `crypto/tls` 的客户端证书策略 |
@@ -275,6 +276,7 @@ deadline、socket 关闭和底层 UDP 错误沿 Go `net` 错误模型返回；�
 | `IgnorePathMTU` | 默认 `false`；仅让 Application Data 跳过库内 PMTU 检查，握手不受影响 |
 | `RecordSizeLimit` | `0` 表示默认 `2^14+1`；可配置 `64..2^14+1`，作为本端接收的完整 `DTLSInnerPlaintext` 上限并通过 RFC 8449 主动协商；与 PMTU 独立 |
 | `EnableCertificateCompression` | 默认 `false`；启用 RFC 8879 标准 zlib，只有对端提供该算法且完整压缩消息更小时才发送 `CompressedCertificate`；解压输出受 `MaxHandshakeMessage` 限制 |
+| `CachedInformationCache`、`EnableCachedInformation` | 默认 nil/false；客户端有界缓存与服务端显式启用 RFC 7924，独立于 session ticket |
 | `FlightInterval` | 1 秒初始握手重传间隔 |
 | `MaxFlightInterval` | 60 秒指数退避上限 |
 | `HandshakeTimeout` | 30 秒 |
@@ -364,6 +366,12 @@ identity 和 importer context 都以明文出现在 ClientHello 中，重复使�
 
 实现只使用 Go 标准库 zlib。只有完整 `CompressedCertificate` 比普通 Certificate 更小时才采用压缩，否则安全回退普通消息。握手分片、ACK、重传、HRR、恢复和 `record_size_limit` 语义不变；声明的未压缩长度与实际解压输出都受 `MaxHandshakeMessage` 限制。
 
+### 缓存信息
+
+客户端设置 `CachedInformationCache: dtls13.NewCachedInformationCache(64)`，服务端设置 `EnableCachedInformation: true`，即可启用 RFC 7924；两端默认均关闭。成功的完整握手缓存服务端 Certificate 和初始 CertificateRequest，后续完整握手将匹配的消息替换为 SHA-256 指纹。证书、OCSP staple 或请求策略变化时回退为完整消息，仍执行当前身份与签名验证。客户端证书和 PHA 消息不缓存，PSK 恢复不协商缓存消息；未命中时仍可使用证书压缩。
+
+缓存可由多个客户端并发共享，以 ServerName 为键；为空时使用远端地址。每个条目最多保存两份 64 KiB 消息，超限消息不缓存。构造函数容量非正时使用 64 个条目，零值缓存禁用。指纹可能关联多次连接，ECH 将其保留在加密的 ClientHello 内。wolfSSL 尚未实现 `cached_info`，目前仅验证不支持该扩展时的互通回退。
+
 ### 动态证书选择
 
 客户端或服务端在 `Certificates` 中配置多张证书时，库默认选择第一张满足对端签名算法、证书链算法和 CA 提示的证书；服务端还检查 SNI。服务端的 `ClientCAs` 会写入初始及握手后 CertificateRequest，客户端可用 `ServerCertificateAuthorities` 在 ClientHello 中单独提供服务端证书 CA 提示，`RootCAs` 不会自动发送。
@@ -443,6 +451,7 @@ serverConfig.MaxSessionTickets = 4
 | [RFC 9146](https://www.rfc-editor.org/rfc/rfc9146) | 完成 | CID 协商、方向性 CID、更新、Listener 路由、错误处理和地址保持完成；DTLS 1.2 专属细节不适用 |
 | [RFC 8449](https://www.rfc-editor.org/rfc/rfc8449) | 完成 | 默认 CH/EE 协商、方向独立限制、最小 64、超限 fatal `record_overflow`、HRR、恢复、0-RTT、KeyUpdate、ACK 与 PMTU 独立性完成 |
 | [RFC 8879](https://www.rfc-editor.org/rfc/rfc8879) | 完成 | 显式 opt-in zlib；CH/CertificateRequest 分方向协商，服务端证书及 mTLS/PHA 客户端证书、CompressedCertificate transcript、安全回退和解压上限完成 |
+| [RFC 7924](https://www.rfc-editor.org/rfc/rfc7924) | 完成 | CH/EE 协商、SHA-256 指纹、服务端 Certificate/初始 CertificateRequest 缓存、精确匹配回退与当前信任验证；wolfSSL 仅支持回退互通 |
 | [RFC 9149](https://www.rfc-editor.org/rfc/rfc9149) | 完成 | 显式 opt-in `ticket_request(58)`、完整/恢复计数、HRR 不变量、服务端上限、可靠多个 NST、并发一次性 cache 消费和同族失效完成 |
 | [RFC 9257](https://www.rfc-editor.org/rfc/rfc9257) | 完成 | 外部 PSK 至少 128 bit、DHE-only、opaque identity、多身份、证书回退和身份隐私已实现，pairwise/角色部署约束已明确记录 |
 | [RFC 9258](https://www.rfc-editor.org/rfc/rfc9258) | 完成 | `ImportedIdentity`、DTLS `0xfefc`、SHA-256/384 target KDF、EPSK source hash、`dtls13derived psk` 和 `imp binder` 完成 |
@@ -497,6 +506,7 @@ serverConfig.MaxSessionTickets = 4
 | [RFC 9846](https://www.rfc-editor.org/rfc/rfc9846) | TLS 1.3 的 KeyShare、PSK/HRR、NST、AEAD limit、KeyUpdate、证书选择、alert 和 vector 边界 | 已启用范围完成；支持 CH/CR `certificate_authorities`、CR `oid_filters`、双端多证书选择，mTLS 恢复保留认证状态、策略/CA/有效期及总认证寿命；`user_canceled` 和 `general_error` 语义见总体状态 |
 | [RFC 8449](https://www.rfc-editor.org/rfc/rfc8449) | TLS/DTLS `record_size_limit` | 客户端默认主动提供，服务端仅响应收到的 offer；发送服从 peer limit、接收服从 local limit，未协商时保持协议最大值；PMTU 仍独立取更小约束 |
 | [RFC 8879](https://www.rfc-editor.org/rfc/rfc8879) | TLS/DTLS Certificate Compression | 显式 opt-in 标准 zlib；CH/CR 协商、服务端与客户端证书、HRR、mTLS、PHA、分片/重传、transcript 和有界解压完成；不更小时回退普通 Certificate |
+| [RFC 7924](https://www.rfc-editor.org/rfc/rfc7924) | TLS/DTLS 缓存信息 | CH/EE 协商、SHA-256 指纹、服务端 Certificate/初始 CertificateRequest 缓存、精确匹配回退与当前信任验证；wolfSSL 仅支持回退互通 |
 | [RFC 9149](https://www.rfc-editor.org/rfc/rfc9149) | TLS/DTLS 1.3 Ticket Requests | 客户端可分别请求完整/恢复连接的 ticket 数；服务端以有界 expected count 响应，多个 NST 可靠发送，扩展缺席时保持单 ticket |
 | [RFC 9257](https://www.rfc-editor.org/rfc/rfc9257) | TLS 1.3 external PSK 使用指导 | DHE-only、多身份、未知身份回退、明文 identity 风险、票据来源绑定及外部 PSK 0-RTT 禁用策略完成 |
 | [RFC 9258](https://www.rfc-editor.org/rfc/rfc9258) | TLS/DTLS 1.3 PSK Importer | SHA-256/384 目标派生、DTLS label、ImportedIdentity wire 和独立 binder label 完成 |

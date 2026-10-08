@@ -209,6 +209,25 @@
 // uncompressed length and actual decompression output are bounded by
 // [Config.MaxHandshakeMessage].
 //
+// # Cached information
+//
+// [Config.CachedInformationCache] enables client [RFC 7924] offers. Create a
+// shared, bounded cache with [NewCachedInformationCache]; servers opt in with
+// [Config.EnableCachedInformation]. RFC 9846 places the response in
+// EncryptedExtensions. Only server Certificate and initial CertificateRequest
+// messages are cached; client certificates and PHA messages remain unchanged.
+//
+// A successful full handshake populates the cache. On subsequent full
+// handshakes, exact matches replace each message with its SHA-256 fingerprint.
+// Changed credentials, certificate extensions, or request policy cause a full
+// message fallback. The client repeats current identity and signature checks;
+// fingerprints do not grant trust or replace session tickets. PSK handshakes do
+// not negotiate cached messages. Certificate compression applies on cache misses.
+//
+// Entries are keyed by ServerName, or the remote address when it is empty.
+// Each entry retains at most two 64 KiB message bodies. Fingerprints can link
+// connections; ECH exposes them only inside the encrypted ClientHello.
+//
 // # Session resumption and 0-RTT
 //
 // Set [Config.ClientSessionCache] to retain NewSessionTicket state and enable
@@ -304,6 +323,7 @@
 // [RFC 8446]: https://www.rfc-editor.org/rfc/rfc8446
 // [RFC 8449]: https://www.rfc-editor.org/rfc/rfc8449
 // [RFC 8879]: https://www.rfc-editor.org/rfc/rfc8879
+// [RFC 7924]: https://www.rfc-editor.org/rfc/rfc7924
 // [RFC 9146]: https://www.rfc-editor.org/rfc/rfc9146
 // [RFC 9149]: https://www.rfc-editor.org/rfc/rfc9149
 // [RFC 9257]: https://www.rfc-editor.org/rfc/rfc9257

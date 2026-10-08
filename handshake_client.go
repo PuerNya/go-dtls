@@ -67,6 +67,7 @@ type clientHandshakeState struct {
 
 	// clientProcessServerFlight
 	peerCerts                     []*x509.Certificate
+	cachedInfo                    *clientCachedInformation
 	peerRawPublicKey              []byte
 	chains                        [][]*x509.Certificate
 	negotiated                    string
@@ -129,6 +130,7 @@ func (c *Conn) clientPrepareHello(s *clientHandshakeState) error {
 	if err := c.offerCertificateTypes(hello); err != nil {
 		return err
 	}
+	c.offerCachedInformation(s, hello)
 	if err = hello.setCertificateAuthorities(c.config.ServerCertificateAuthorities); err != nil {
 		return err
 	}
@@ -681,6 +683,12 @@ func (c *Conn) clientEncryptedExtensions(s *clientHandshakeState, message comple
 		return err
 	}
 	s.negotiated = negotiated
+	if ee.cachedInformation != 0 && (s.cachedInfo == nil || s.usingPSK) {
+		return alertError(alertIllegalParameter, &ProtocolError{"cached_info selected without certificate authentication"})
+	}
+	if s.cachedInfo != nil {
+		s.cachedInfo.selected = ee.cachedInformation
+	}
 	c.serverCertificateType, c.clientCertificateType = ee.serverCertificateType, ee.clientCertificateType
 	s.clientCertificateTypeSelected = ee.hasClientCertificateType
 	if !s.usingPSK && (s.ech == nil || !s.ech.rejected) && !supportsCertificateType(c.config.ServerCertificateTypes, c.serverCertificateType) {
@@ -725,7 +733,10 @@ func (c *Conn) clientServerCertificate(s *clientHandshakeState, message complete
 	if s.usingPSK {
 		return &ProtocolError{"server sent Certificate in a PSK handshake"}
 	}
-	certMsg, err := parseCertificateHandshakeMessage(message.typ, message.body, s.hello.certificateCompressionAlgorithms(), c.config.MaxHandshakeMessage)
+	if s.cachedInfo != nil && s.cachedInfo.selected&cachedCertRequest != 0 && s.certificateRequest == nil {
+		return alertError(alertIllegalParameter, &ProtocolError{"cached_info selected without CertificateRequest"})
+	}
+	certMsg, err := c.parseCachedServerCertificate(s, message)
 	if err != nil {
 		return err
 	}
@@ -769,7 +780,11 @@ func (c *Conn) clientCertificateRequest(s *clientHandshakeState, message complet
 	if s.certificateRequest != nil {
 		return alertError(alertUnexpectedMessage, &ProtocolError{"duplicate CertificateRequest"})
 	}
-	request, compression, err := parseCertificateRequestWithCompression(message.body)
+	body, err := s.cachedInfo.resolve(handshakeTypeCertificateRequest, message.body, c.config.MaxHandshakeMessage)
+	if err != nil {
+		return err
+	}
+	request, compression, err := parseCertificateRequestWithCompression(body)
 	if err != nil {
 		return err
 	}
@@ -950,6 +965,9 @@ func (c *Conn) clientFinalize(s *clientHandshakeState) error {
 	}
 	if s.session != nil && !s.resumed {
 		discardClientSessionGroup(c.config, c.conn, s.session.ticketGroup)
+	}
+	if s.cachedInfo != nil && !s.usingPSK {
+		c.config.CachedInformationCache.put(clientSessionCacheKey(c.config, c.conn), s.cachedInfo.received)
 	}
 	return nil
 }

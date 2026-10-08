@@ -598,6 +598,43 @@ func (c *Conn) serverSendFlight(s *serverHandshakeState) error {
 			ee.extensions[selection.typ] = []byte{byte(selection.value)}
 		}
 	}
+	requestBody, certBody, err := c.serverAuthenticationBodies(s)
+	if err != nil {
+		return err
+	}
+	var offers []cachedInformationOffer
+	if raw := s.ch.unknownExtensions[extCachedInfo]; c.config.EnableCachedInformation && raw != nil && !s.usingPSK {
+		if offers, err = parseCachedInformationOffer(raw); err != nil {
+			return err
+		}
+	}
+	var selectedCert, selectedRequest uint8
+	if certBody != nil {
+		certBody, selectedCert = cachedHandshakeBody(handshakeTypeCertificate, certBody, offers)
+	}
+	if requestBody != nil {
+		requestBody, selectedRequest = cachedHandshakeBody(handshakeTypeCertificateRequest, requestBody, offers)
+	}
+	if selectedCert|selectedRequest != 0 {
+		selection := []byte{0, 0}
+		for _, typ := range []uint8{selectedCert, selectedRequest} {
+			if typ != 0 {
+				selection = append(selection, typ)
+			}
+		}
+		selection[1] = byte(len(selection) - 2)
+		if ee.extensions == nil {
+			ee.extensions = make(map[uint16][]byte)
+		}
+		ee.extensions[extCachedInfo] = selection
+	}
+	certificateType := handshakeTypeCertificate
+	if certBody != nil && selectedCert == 0 {
+		certificateType, certBody, err = certificateHandshakeMessage(certBody, s.ch.certificateCompressionAlgorithms(), c.config.EnableCertificateCompression, c.config.certificateCompressionCache())
+		if err != nil {
+			return err
+		}
+	}
 	eeBody, err := ee.marshal()
 	if err != nil {
 		return err
@@ -606,54 +643,13 @@ func (c *Conn) serverSendFlight(s *serverHandshakeState) error {
 	serverMessages := []handshakeMessage{{typ: handshakeTypeEncryptedExtensions, sequence: s.serverSequence, body: eeBody}}
 	_ = s.transcript.add(handshakeTypeEncryptedExtensions, s.serverSequence, eeBody)
 	s.serverSequence++
-	if s.requestsClientCertificate(c) {
-		request := c.newCertificateRequest(nil)
-		s.clientStatusRequest = request.statusRequest
-		if c.config.EnableCertificateCompression {
-			s.clientCertificateCompression = &certificateCompressionZlibOffer
-		}
-		s.clientSignatureSchemes = append([]tls.SignatureScheme(nil), request.signatureSchemes...)
-		s.clientCertificateSchemes = request.certificateSignatureSchemes
-		s.clientCertificateOIDFilters = request.oidFilters
-		if len(s.clientCertificateSchemes) == 0 {
-			s.clientCertificateSchemes = append([]tls.SignatureScheme(nil), request.signatureSchemes...)
-		}
-		greaseExtension := uint16(0)
-		if c.config.EnableGREASE {
-			greaseExtension = greaseValue(s.sh.random[0])
-		}
-		requestBody, requestErr := request.marshalWithCertificateCompression(s.clientCertificateCompression, greaseExtension)
-		if requestErr != nil {
-			return requestErr
-		}
+	if requestBody != nil {
 		serverMessages = append(serverMessages, handshakeMessage{typ: handshakeTypeCertificateRequest, sequence: s.serverSequence, body: requestBody})
 		_ = s.transcript.add(handshakeTypeCertificateRequest, s.serverSequence, requestBody)
 		s.serverSequence++
 	}
 	if !s.usingPSK {
-		certMsg := &certificateMessage{}
-		for i, der := range s.cert.Certificate {
-			entry := certificateEntry{data: der}
-			if i == 0 && c.serverCertificateType == CertificateTypeX509 && c.config.serverCertificateEntryExtensions != nil {
-				entry.extensions = make(map[uint16][]byte, len(c.config.serverCertificateEntryExtensions)+1)
-				for typ, value := range c.config.serverCertificateEntryExtensions {
-					entry.extensions[typ] = append([]byte(nil), value...)
-				}
-			}
-			if i == 0 && c.serverCertificateType == CertificateTypeX509 && s.ch.statusRequest && len(s.cert.OCSPStaple) > 0 {
-				if entry.extensions == nil {
-					entry.extensions = make(map[uint16][]byte, 1)
-				}
-				if _, injected := entry.extensions[extStatusRequest]; !injected {
-					entry.extensions[extStatusRequest], err = marshalOCSPResponse(s.cert.OCSPStaple)
-					if err != nil {
-						return err
-					}
-				}
-			}
-			certMsg.certificates = append(certMsg.certificates, entry)
-		}
-		messages, next, buildErr := c.buildCertificateMessages(certMsg, s.ch.certificateCompressionAlgorithms(), s.signer, s.scheme, true, s.transcript, s.serverSequence, s.transcriptDigest[:0])
+		messages, next, buildErr := c.buildCertificateBodyMessages(certificateType, certBody, s.signer, s.scheme, true, s.transcript, s.serverSequence, s.transcriptDigest[:0])
 		if buildErr != nil {
 			return buildErr
 		}
@@ -670,6 +666,59 @@ func (c *Conn) serverSendFlight(s *serverHandshakeState) error {
 	s.serverFlight = combineFlights(plain, protected)
 	c.sendCipher = s.serverCipher
 	return c.writeFlight(s.serverFlightConn(c), s.serverFlight)
+}
+
+// serverAuthenticationBodies prepares the exact full messages before EE so
+// cached_info can acknowledge only fingerprints that match this handshake.
+func (c *Conn) serverAuthenticationBodies(s *serverHandshakeState) (requestBody, certBody []byte, err error) {
+	if s.usingPSK {
+		return nil, nil, nil
+	}
+	if s.requestsClientCertificate(c) {
+		request := c.newCertificateRequest(nil)
+		s.clientStatusRequest = request.statusRequest
+		if c.config.EnableCertificateCompression {
+			s.clientCertificateCompression = &certificateCompressionZlibOffer
+		}
+		s.clientSignatureSchemes = append([]tls.SignatureScheme(nil), request.signatureSchemes...)
+		s.clientCertificateSchemes = request.certificateSignatureSchemes
+		s.clientCertificateOIDFilters = request.oidFilters
+		if len(s.clientCertificateSchemes) == 0 {
+			s.clientCertificateSchemes = append([]tls.SignatureScheme(nil), request.signatureSchemes...)
+		}
+		greaseExtension := uint16(0)
+		if c.config.EnableGREASE {
+			greaseExtension = greaseValue(s.sh.random[0])
+		}
+		requestBody, err = request.marshalWithCertificateCompression(s.clientCertificateCompression, greaseExtension)
+		if err != nil {
+			return nil, nil, err
+		}
+	}
+	certMsg := &certificateMessage{}
+	for i, der := range s.cert.Certificate {
+		entry := certificateEntry{data: der}
+		if i == 0 && c.serverCertificateType == CertificateTypeX509 && c.config.serverCertificateEntryExtensions != nil {
+			entry.extensions = make(map[uint16][]byte, len(c.config.serverCertificateEntryExtensions)+1)
+			for typ, value := range c.config.serverCertificateEntryExtensions {
+				entry.extensions[typ] = append([]byte(nil), value...)
+			}
+		}
+		if i == 0 && c.serverCertificateType == CertificateTypeX509 && s.ch.statusRequest && len(s.cert.OCSPStaple) > 0 {
+			if entry.extensions == nil {
+				entry.extensions = make(map[uint16][]byte, 1)
+			}
+			if _, injected := entry.extensions[extStatusRequest]; !injected {
+				entry.extensions[extStatusRequest], err = marshalOCSPResponse(s.cert.OCSPStaple)
+				if err != nil {
+					return nil, nil, err
+				}
+			}
+		}
+		certMsg.certificates = append(certMsg.certificates, entry)
+	}
+	certBody, err = certMsg.marshal()
+	return requestBody, certBody, err
 }
 
 // requestsClientCertificate reports whether this handshake sends a

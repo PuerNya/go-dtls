@@ -229,6 +229,7 @@ Deadlines, socket closure, and underlying UDP errors follow Go's `net` error mod
 | KeyUpdate | `SendKeyUpdate(requestPeer)` | Reliably sent, with the sending epoch switched after ACK; also triggered automatically near AEAD usage limits |
 | CID / path validation | `ConnectionID`, `GetConnectionID`, `SendNewConnectionIDs`, `RequestConnectionIDs`, `UseNextConnectionID` | Supports RFC 9146 CID negotiation and updates and negotiates RFC 9853 RRC by default; Listener rebinds only after validating the new path |
 | Certificate compression | `EnableCertificateCompression` | Explicitly enables RFC 8879 zlib for server certificates and mTLS/PHA client certificates; sends a plain Certificate when compression is not smaller |
+| Cached information | `CachedInformationCache`, `EnableCachedInformation` | RFC 7924 fingerprints replace matching server Certificate and initial CertificateRequest messages in full handshakes; current authentication checks remain active |
 | Dynamic certificate selection | `GetCertificate`, `GetClientCertificate`, `ServerCertificateAuthorities`, `ClientCertificateOIDFilters` | RFC 9846 CA/OID hints and multi-certificate selection on both endpoints; initial mTLS and PHA share the same rules |
 | Encrypted ClientHello | `EncryptedClientHelloConfigList`, `EncryptedClientHelloKeys`, `EncryptedClientHelloGrease` | RFC 9849 Inner/Outer ClientHello, HPKE, HRR, acceptance confirmation, retry configurations, resumption, and 0-RTT |
 | Handshake client authentication | `ClientAuth`, `ClientCAs`, `Certificates` | Uses the client-certificate policies from `crypto/tls` |
@@ -270,6 +271,7 @@ Where TLS 1.3 semantics match, `Config` follows `crypto/tls.Config`. A configura
 | `IgnorePathMTU` | `false` by default; only Application Data skips the library PMTU check, while handshake behavior is unchanged |
 | `RecordSizeLimit` | `0` selects the `2^14+1` default; values from `64..2^14+1` set the complete `DTLSInnerPlaintext` this endpoint accepts and are advertised with RFC 8449 independently of PMTU |
 | `EnableCertificateCompression` | `false` by default; enables standard RFC 8879 zlib and sends `CompressedCertificate` only when the peer offered zlib and the complete compressed message is smaller; output is bounded by `MaxHandshakeMessage` |
+| `CachedInformationCache`, `EnableCachedInformation` | Nil/false by default; client bounded cache and server opt-in for RFC 7924, independent of session tickets |
 | `FlightInterval` | One-second initial handshake retransmission interval |
 | `MaxFlightInterval` | 60-second exponential-backoff cap |
 | `HandshakeTimeout` | 30 seconds |
@@ -359,6 +361,12 @@ With `EnableCertificateCompression: true`, a client offers zlib in ClientHello s
 
 The implementation uses only Go's standard-library zlib. It sends `CompressedCertificate` only when the complete message is smaller than a plain Certificate and otherwise falls back safely. Handshake fragmentation, ACK, retransmission, HRR, resumption, and `record_size_limit` semantics are unchanged. Both the declared uncompressed length and actual output are bounded by `MaxHandshakeMessage`.
 
+### Cached Information
+
+Set the client's `CachedInformationCache` to `dtls13.NewCachedInformationCache(64)` and the server's `EnableCachedInformation` to `true` to enable RFC 7924. Both are disabled by default. Successful full handshakes cache the server Certificate and initial CertificateRequest; later full handshakes replace matching messages with SHA-256 fingerprints. Changed certificates, OCSP staples, or request policy cause full-message fallback. Current identity and signature verification still run. Client certificates and PHA are not cached, and PSK resumptions do not negotiate cached messages. Certificate compression remains available on cache misses.
+
+The cache is safe to share across clients and uses ServerName, or the remote address when ServerName is empty, as its key. It retains at most two 64 KiB messages per entry; larger messages are not cached. Nonpositive constructor capacity selects 64 entries, and the zero-value cache is disabled. Fingerprints can link connections; ECH keeps them inside the encrypted ClientHello. wolfSSL currently provides fallback interoperability only, because it does not implement `cached_info`.
+
 ### Dynamic Certificate Selection
 
 When either endpoint configures multiple entries in `Certificates`, the default selector chooses the first certificate compatible with the peer's signature algorithms, certificate-chain algorithms, and CA hints; servers also check SNI. A server sends the subjects from `ClientCAs` in initial and post-handshake CertificateRequest messages. A client may separately set `ServerCertificateAuthorities` to guide server selection in ClientHello; `RootCAs` is not exposed automatically.
@@ -438,6 +446,7 @@ Normative keywords are interpreted according to BCP 14. `MUST`, `MUST NOT`, `REQ
 | [RFC 9146](https://www.rfc-editor.org/rfc/rfc9146) | Complete | CID negotiation, directional CIDs, updates, Listener routing, error handling, and address retention; DTLS 1.2-only details do not apply |
 | [RFC 8449](https://www.rfc-editor.org/rfc/rfc8449) | Complete | Default CH/EE negotiation, directional limits, minimum 64, fatal `record_overflow`, HRR, resumption, 0-RTT, KeyUpdate, ACK, and PMTU independence |
 | [RFC 8879](https://www.rfc-editor.org/rfc/rfc8879) | Complete | Explicit opt-in zlib; directional ClientHello/CertificateRequest negotiation, server and mTLS/PHA client certificates, CompressedCertificate transcripts, safe fallback, and decompression bounds |
+| [RFC 7924](https://www.rfc-editor.org/rfc/rfc7924) | Complete | CH/EE negotiation, SHA-256 fingerprints, server Certificate/initial CertificateRequest caching, exact-match fallback, and current trust verification; wolfSSL supports fallback only |
 | [RFC 9149](https://www.rfc-editor.org/rfc/rfc9149) | Complete | Explicit opt-in `ticket_request(58)`, full/resumed counts, HRR invariants, a server cap, reliable multiple NSTs, concurrent single-use cache consumption, and sibling invalidation |
 | [RFC 9257](https://www.rfc-editor.org/rfc/rfc9257) | Complete | At least 128-bit external PSKs, DHE-only handshakes, opaque identities, multiple identities, certificate fallback, privacy guidance, and pairwise/role deployment requirements are covered |
 | [RFC 9258](https://www.rfc-editor.org/rfc/rfc9258) | Complete | `ImportedIdentity`, DTLS `0xfefc`, SHA-256/384 target KDFs, the EPSK source hash, `dtls13derived psk`, and `imp binder` are implemented |
@@ -492,6 +501,7 @@ This table contains all 11 `Normative References` from the RFC Editor XML for RF
 | [RFC 9846](https://www.rfc-editor.org/rfc/rfc9846) | TLS 1.3 KeyShare, PSK/HRR, NST, AEAD limits, KeyUpdate, certificate selection, alerts, and vector bounds | Complete for enabled features; supports CH/CR `certificate_authorities`, CR `oid_filters`, and multi-certificate selection on both endpoints; mTLS resumption preserves authentication state, policy/CA/validity, and total authentication lifetime; see Overall Status for `user_canceled` and `general_error` |
 | [RFC 8449](https://www.rfc-editor.org/rfc/rfc8449) | TLS/DTLS `record_size_limit` | Clients advertise it by default; servers respond only to an offer. Sending follows the peer limit, receiving follows the local limit, absence restores the protocol maximum, and PMTU remains an independent lower bound |
 | [RFC 8879](https://www.rfc-editor.org/rfc/rfc8879) | TLS/DTLS Certificate Compression | Explicit opt-in standard zlib; CH/CR negotiation, server and client certificates, HRR, mTLS, PHA, fragmentation/retransmission, transcripts, and bounded decompression are complete; plain Certificate is used when smaller |
+| [RFC 7924](https://www.rfc-editor.org/rfc/rfc7924) | TLS/DTLS Cached Information | CH/EE negotiation, SHA-256 fingerprints, server Certificate/initial CertificateRequest caching, exact-match fallback, and current trust verification; wolfSSL supports fallback only |
 | [RFC 9149](https://www.rfc-editor.org/rfc/rfc9149) | TLS/DTLS 1.3 Ticket Requests | Clients can request separate ticket counts for full and resumed connections; servers return a bounded expected count, send multiple NSTs reliably, and preserve one-ticket behavior when absent |
 | [RFC 9257](https://www.rfc-editor.org/rfc/rfc9257) | TLS 1.3 external PSK guidance | DHE-only use, multiple identities, unknown-identity fallback, cleartext identity risks, ticket-origin binding, and the external-PSK 0-RTT policy are implemented |
 | [RFC 9258](https://www.rfc-editor.org/rfc/rfc9258) | TLS/DTLS 1.3 PSK Importer | SHA-256/384 target derivation, the DTLS label, ImportedIdentity wire encoding, and the distinct binder label are implemented |

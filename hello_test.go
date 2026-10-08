@@ -651,6 +651,7 @@ func TestSecondClientHelloRejectsChangedInvariantFields(t *testing.T) {
 		{"post-handshake-auth", func(h *clientHello) { h.postHandshakeAuth = false }},
 		{"certificate-compression", func(h *clientHello) { h.certificateCompressionOffered = false }},
 		{"status-request", func(h *clientHello) { h.statusRequest = false }},
+		{"cached-info", func(h *clientHello) { h.unknownExtensions = map[uint16][]byte{extCachedInfo: {0, 34, cachedCert, 32}} }},
 		{"record-size-limit", func(h *clientHello) { h.recordSizeLimit++ }},
 		{"record-size-limit-presence", func(h *clientHello) { h.hasRecordSizeLimit = false }},
 		{"unknown-extension", func(h *clientHello) { h.unknownExtensions = map[uint16][]byte{0xffa5: {9}} }},

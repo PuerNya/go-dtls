@@ -25,6 +25,7 @@ type encryptedExtensions struct {
 	serverCertificateType    CertificateType
 	clientCertificateType    CertificateType
 	hasClientCertificateType bool
+	cachedInformation        uint8
 }
 
 func (m *encryptedExtensions) marshal() ([]byte, error) {
@@ -140,6 +141,11 @@ func validateEncryptedExtensions(hello *clientHello, message *encryptedExtension
 		return "", false, nil, alertError(alertIllegalParameter, &ProtocolError{"record_size_limit and max_fragment_length cannot both be negotiated"})
 	}
 	validate := func(typ uint16, raw []byte) error {
+		if typ == extCachedInfo {
+			var err error
+			message.cachedInformation, err = validateCachedInformationSelection(hello, raw)
+			return err
+		}
 		if typ == extServerCertificateType || typ == extClientCertificateType {
 			selected, err := validateSelectedCertificateType(hello, typ, raw)
 			if err != nil {

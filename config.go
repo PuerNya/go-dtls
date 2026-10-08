@@ -49,6 +49,14 @@ type Config struct {
 	// certificate signatures are rejected. An RSA server leaf must have a
 	// modulus of at least 2048 bits.
 	Certificates []tls.Certificate
+	// EnableCachedInformation lets servers replace matching Certificate and
+	// initial CertificateRequest messages with RFC 7924 fingerprints.
+	EnableCachedInformation bool
+	// CachedInformationCache enables client RFC 7924 offers and retains server
+	// authentication messages after successful full handshakes. Nil disables
+	// caching. Cached identities are verified under the current policy on every
+	// connection. Fingerprints can link connections unless protected by ECH.
+	CachedInformationCache *CachedInformationCache
 	// ServerCertificateTypes lists acceptable server credential types in
 	// preference order. Empty selects X.509 only. Clients advertise this list;
 	// clients without VerifyPeerRawPublicKey omit RPK when X.509 is allowed.

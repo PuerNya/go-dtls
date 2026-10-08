@@ -44,6 +44,7 @@ func TestCertificateEntryExtensionClassification(t *testing.T) {
 		{name: "requested status_request on non-leaf entry", extensions: []map[uint16][]byte{{}, {extStatusRequest: ocsp}}, requested: true, wantErr: true, wantAlert: alertIllegalParameter},
 		{name: "unknown extension", extensions: []map[uint16][]byte{{0xffa5: {1}}, {}}, wantErr: true, wantAlert: alertUnsupportedExtension},
 		{name: "recognized extension", extensions: []map[uint16][]byte{{extServerName: {}}, {}}, wantErr: true, wantAlert: alertIllegalParameter},
+		{name: "cached_info in CertificateEntry", extensions: []map[uint16][]byte{{extCachedInfo: {}}, {}}, wantErr: true, wantAlert: alertIllegalParameter},
 		{name: "recognized after status_request", extensions: []map[uint16][]byte{{extStatusRequest: ocsp, extKeyShare: {}}, {}}, wantErr: true, wantAlert: alertIllegalParameter},
 		{name: "recognized wins over unknown", extensions: []map[uint16][]byte{{0xffa5: {1}, extKeyShare: {}}, {}}, wantErr: true, wantAlert: alertIllegalParameter},
 	} {

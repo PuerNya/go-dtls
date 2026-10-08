@@ -1634,8 +1634,9 @@ func TestMutualTLSSessionTicketRollPreservesAuthenticationTime(t *testing.T) {
 	serverCertificate, roots := testServerCertificate(t)
 	clientCertificate, clientRoots := testClientCertificate(t)
 	cache := NewLRUClientSessionCache(2)
-	now := time.Now()
-	clock := func() time.Time { return now }
+	var now atomic.Int64
+	now.Store(time.Now().UnixNano())
+	clock := func() time.Time { return time.Unix(0, now.Load()) }
 	var ticketKey [32]byte
 	copy(ticketKey[:], bytes.Repeat([]byte{0x6f}, 32))
 	clientConfig := &Config{
@@ -1656,7 +1657,7 @@ func TestMutualTLSSessionTicketRollPreservesAuthenticationTime(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	now = now.Add(time.Minute)
+	now.Add(int64(time.Minute))
 	resumingConfig := clientConfig.Clone()
 	resumingConfig.Certificates = nil
 	second := issueEarlyDataTicket(t, resumingConfig, serverConfig)
