@@ -56,6 +56,9 @@ func signCertificateVerify(random io.Reader, signer crypto.Signer, scheme tls.Si
 	if err != nil {
 		return nil, err
 	}
+	if !signatureSchemeCompatible(signer, scheme) {
+		return nil, errors.New("dtls13: signing key used with incompatible signature scheme")
+	}
 	input := certificateVerifyInput(transcriptHash, server)
 	message := input
 	var opts crypto.SignerOpts = hash
@@ -78,6 +81,9 @@ func verifyCertificateVerify(public crypto.PublicKey, scheme tls.SignatureScheme
 	hash, pss, err := signatureParameters(scheme)
 	if err != nil {
 		return err
+	}
+	if !signatureSchemePublicKeyCompatible(public, scheme) {
+		return errors.New("dtls13: public key used with incompatible signature scheme")
 	}
 	input := certificateVerifyInput(transcriptHash, server)
 	digest := input

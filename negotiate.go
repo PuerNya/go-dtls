@@ -54,7 +54,11 @@ func selectKeyShare(preferences []tls.CurveID, shares []keyShareEntry) (keyShare
 	return keyShareEntry{}, alertError(alertHandshakeFailure, errors.New("dtls13: no mutually supported key share"))
 }
 func signatureSchemeCompatible(signer crypto.Signer, scheme tls.SignatureScheme) bool {
-	switch key := signer.Public().(type) {
+	return signatureSchemePublicKeyCompatible(signer.Public(), scheme)
+}
+
+func signatureSchemePublicKeyCompatible(public crypto.PublicKey, scheme tls.SignatureScheme) bool {
+	switch key := public.(type) {
 	case *rsa.PublicKey:
 		return scheme == tls.PSSWithSHA256 || scheme == tls.PSSWithSHA384 || scheme == tls.PSSWithSHA512
 	case *ecdsa.PublicKey:
