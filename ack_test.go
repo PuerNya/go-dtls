@@ -11,7 +11,7 @@ import (
 )
 
 func receiveACKRecord(conn net.Conn, dst []recordNumber, ciphers ...*recordCipher) ([]recordNumber, error) {
-	return receiveACKRecordWithPending(conn, dst, nil, ciphers...)
+	return receiveACKRecordWithPending(conn, dst, nil, nil, ciphers...)
 }
 
 func TestACKRoundTrip(t *testing.T) {
@@ -26,6 +26,69 @@ func TestACKRoundTrip(t *testing.T) {
 	}
 	if !reflect.DeepEqual(got, want) {
 		t.Fatalf("got %#v, want %#v", got, want)
+	}
+}
+
+func TestFinalACKPreservesApplicationEpochRecords(t *testing.T) {
+	for _, mode := range []string{"separate", "coalesced", "duplicate", "byte-limit", "record-limit"} {
+		t.Run(mode, func(t *testing.T) {
+			sender, receiver := recordCipherPair(t, TLS_AES_128_GCM_SHA256, 3)
+			left, right := memoryDatagramPair()
+			defer left.Close()
+			defer right.Close()
+			config, err := (&Config{FlightInterval: time.Second}).normalized()
+			if err != nil {
+				t.Fatal(err)
+			}
+			c := &Conn{conn: right, config: config, handshakeDeadline: time.Now().Add(time.Second)}
+			number := recordNumber{epoch: 2, sequence: 7}
+			out := &flight{records: []flightRecord{{number: number, sent: true}}}
+			var want [][]byte
+			for _, typ := range []uint8{recordTypeHandshake, recordTypeApplicationData} {
+				wire, err := sender.seal(typ, []byte("before ACK"))
+				if err != nil {
+					t.Fatal(err)
+				}
+				want = append(want, wire)
+			}
+			if mode == "byte-limit" {
+				config.MaxBufferedHandshakeBytes = len(want[0]) - 1
+			}
+			if mode == "record-limit" {
+				config.MaxBufferedHandshakeMessages = 1
+			}
+			acks, _, err := buildACKRecords([]recordNumber{number}, 1200, 0, sender)
+			if err != nil {
+				t.Fatal(err)
+			}
+			if mode == "coalesced" {
+				_, err = left.Write(bytes.Join(append(want, acks...), nil))
+			} else {
+				for _, wire := range append(want, acks...) {
+					if _, err = left.Write(wire); err != nil {
+						t.Fatal(err)
+					}
+					if mode == "duplicate" {
+						if _, err = left.Write(wire); err != nil {
+							t.Fatal(err)
+						}
+					}
+				}
+			}
+			if err != nil {
+				t.Fatal(err)
+			}
+			_, err = c.receiveACKWithRetransmit(out, receiver)
+			if mode == "byte-limit" || mode == "record-limit" {
+				if err == nil {
+					t.Fatal("unbounded pre-ACK buffering")
+				}
+				return
+			}
+			if err != nil || !reflect.DeepEqual(c.pendingPostHandshakeRecords, want) {
+				t.Fatalf("lost or mutated pre-ACK records: %v", err)
+			}
+		})
 	}
 }
 

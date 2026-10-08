@@ -418,7 +418,7 @@ func TestRecordReaderReceivesApplicationDataCoalescedWithFinalACK(t *testing.T) 
 		_, writeErr := client.conn.Write(append(acks[0], application...))
 		written <- writeErr
 	}()
-	numbers, err := receiveACKRecordWithPending(server.conn, nil, &server.pendingDatagram, server.receiveEpochs.ciphers[3])
+	numbers, err := receiveACKRecordWithPending(server.conn, nil, &server.pendingDatagram, nil, server.receiveEpochs.ciphers[3])
 	if err != nil || len(numbers) != 1 || numbers[0] != wantACK {
 		t.Fatalf("ACK numbers=%v err=%v", numbers, err)
 	}

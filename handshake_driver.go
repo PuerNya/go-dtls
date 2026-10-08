@@ -476,7 +476,7 @@ func readDatagramWithPending(conn net.Conn, buffer []byte, pending *[]byte) ([]b
 	return buffer[:n], err
 }
 
-func receiveACKRecordWithPending(conn net.Conn, dst []recordNumber, pending *[]byte, ciphers ...*recordCipher) ([]recordNumber, error) {
+func receiveACKRecordWithPending(conn net.Conn, dst []recordNumber, pending *[]byte, deferRecord func([]byte) error, ciphers ...*recordCipher) ([]recordNumber, error) {
 	buffer := acquireDatagramBuffer()
 	defer releaseDatagramBuffer(buffer)
 
@@ -503,7 +503,7 @@ func receiveACKRecordWithPending(conn net.Conn, dst []recordNumber, pending *[]b
 				var content []byte
 				var typ uint8
 				var openErr error
-				if i == lastCipher {
+				if i == lastCipher && deferRecord == nil {
 					content, typ, consumed, openErr = cipher.openInPlace(datagram)
 				} else {
 					content, typ, consumed, openErr = cipher.open(datagram)
@@ -539,6 +539,12 @@ func receiveACKRecordWithPending(conn net.Conn, dst []recordNumber, pending *[]b
 					if !alert.isUserCanceled() {
 						return nil, AlertError(alert.description)
 					}
+				default:
+					if cipher.epoch >= 3 && deferRecord != nil {
+						if err := deferRecord(datagram[:consumed]); err != nil {
+							return nil, err
+						}
+					}
 				}
 				break
 			}
@@ -561,6 +567,15 @@ func (c *Conn) receiveACKWithRetransmit(outgoing *flight, ciphers ...*recordCiph
 	}
 	var acknowledged []recordNumber
 	var ackScratch [1]recordNumber
+	buffered := 0
+	deferRecord := func(wire []byte) error {
+		if len(wire) > c.config.MaxBufferedHandshakeBytes-buffered || len(c.pendingPostHandshakeRecords) >= c.config.MaxBufferedHandshakeMessages {
+			return &ProtocolError{"too many records before final ACK"}
+		}
+		c.pendingPostHandshakeRecords = append(c.pendingPostHandshakeRecords, bytes.Clone(wire))
+		buffered += len(wire)
+		return nil
+	}
 	timeoutCount := 0
 	for {
 		next := c.config.Time().Add(interval)
@@ -570,7 +585,7 @@ func (c *Conn) receiveACKWithRetransmit(outgoing *flight, ciphers ...*recordCiph
 		if err := c.conn.SetReadDeadline(next); err != nil {
 			return nil, err
 		}
-		numbers, err := receiveACKRecordWithPending(c.conn, ackScratch[:0], &c.pendingDatagram, ciphers...)
+		numbers, err := receiveACKRecordWithPending(c.conn, ackScratch[:0], &c.pendingDatagram, deferRecord, ciphers...)
 		if err == nil {
 			acknowledged = append(acknowledged, numbers...)
 			outgoing.ack(numbers)

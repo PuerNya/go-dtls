@@ -184,6 +184,9 @@ type Conn struct {
 	// Owned by the handshake, then by the single record reader. At most one
 	// datagram tail is retained across a handshake message or epoch boundary.
 	pendingDatagram []byte
+	// Authenticated using the temporary final-ACK cipher, then replayed through
+	// the freshly installed application cipher by the single record reader.
+	pendingPostHandshakeRecords [][]byte
 
 	// Set during the handshake, before the reader goroutine starts, and
 	// read-only thereafter; no lock is needed.
@@ -748,7 +751,15 @@ func (c *Conn) readRecords() {
 	buffer := acquireDatagramBuffer()
 	defer releaseDatagramBuffer(buffer)
 	for {
-		datagram, err := readDatagramWithPending(c.conn, buffer[:], &c.pendingDatagram)
+		var datagram []byte
+		var err error
+		if len(c.pendingPostHandshakeRecords) != 0 {
+			datagram = c.pendingPostHandshakeRecords[0]
+			c.pendingPostHandshakeRecords[0] = nil
+			c.pendingPostHandshakeRecords = c.pendingPostHandshakeRecords[1:]
+		} else {
+			datagram, err = readDatagramWithPending(c.conn, buffer[:], &c.pendingDatagram)
+		}
 		if err != nil {
 			c.finishRecordReader(err)
 			return
