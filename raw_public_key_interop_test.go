@@ -23,7 +23,7 @@ func TestInteropWolfSSLRawPublicKey(t *testing.T) {
 	}
 	root, _, _ := wolfSSLPaths(t)
 	for _, role := range []string{"client", "server"} {
-		for _, mode := range []string{"mutual", "server-only", "raw-client", "raw-server", "sha384", "ccm", "chacha", "hrr", "fragmented", "wrong-pin", "keyupdate", "pha", "resume", "resume-pha", "early", "ech"} {
+		for _, mode := range []string{"mutual", "server-only", "raw-client", "raw-server", "sha384", "ccm", "chacha", "hrr", "fragmented", "wrong-pin", "keyupdate", "pha", "resume", "resume-pha", "early", "early-io", "ech"} {
 			t.Run(role+"/"+mode, func(t *testing.T) {
 				if mode == "ech" {
 					if role == "server" && os.Getenv("GO_DTLS_PROBE_WOLFSSL_RPK_ECH_SERVER") != "1" {
@@ -69,7 +69,8 @@ func testWolfSSLRPK(t *testing.T, root, peer, role, mode string) {
 	credential := filepath.Join("certs", "rpk", peerName+"-cert-rpk.der")
 	trust := filepath.Join("certs", "rpk", localName+"-cert-rpk.der")
 	peerRaw := true
-	resume := mode == "resume" || mode == "resume-pha" || mode == "early"
+	earlyIO := mode == "early-io"
+	resume := mode == "resume" || mode == "resume-pha" || mode == "early" || earlyIO
 	echFile := "-"
 	switch mode {
 	case "server-only":
@@ -128,10 +129,11 @@ func testWolfSSLRPK(t *testing.T, root, peer, role, mode string) {
 		config.SessionTicketKey = [32]byte{9}
 		config.ClientSessionCache = NewLRUClientSessionCache(2)
 	}
-	if mode == "early" {
+	if mode == "early" || earlyIO {
 		config.MaxEarlyData = 256
 		config.AllowEarlyDataWithoutCookie = true
 		config.CurvePreferences = []tls.CurveID{tls.CurveP256}
+		config.EnableEarlyDataIO = earlyIO
 	}
 	port := 0
 	var listener *Listener
@@ -206,7 +208,11 @@ func testWolfSSLRPK(t *testing.T, root, peer, role, mode string) {
 			var wire net.Conn
 			wire, err = net.Dial("udp4", net.JoinHostPort("127.0.0.1", strconv.Itoa(port)))
 			if err == nil {
-				conn = Client(wire, config)
+				if (mode == "early" || earlyIO) && round == 1 {
+					conn = ClientEarly(wire, config)
+				} else {
+					conn = Client(wire, config)
+				}
 			}
 		}
 		if err != nil {
@@ -214,8 +220,14 @@ func testWolfSSLRPK(t *testing.T, root, peer, role, mode string) {
 		}
 		t.Cleanup(func() { _ = conn.Close() })
 		_ = conn.SetDeadline(time.Now().Add(5 * time.Second))
-		if mode == "early" && round == 1 && !goServer {
-			_, err = conn.WriteEarlyData([]byte("early"))
+		if earlyIO && round == 1 {
+			exchangeEarlyBeforeFinished(t, conn, goServer)
+			err = conn.HandshakeContext(ctx)
+		} else if mode == "early" && round == 1 && !goServer {
+			_, err = conn.WriteDatagram([]byte("early"))
+			if err == nil {
+				err = conn.HandshakeContext(ctx)
+			}
 		} else {
 			err = conn.HandshakeContext(ctx)
 		}
@@ -227,6 +239,9 @@ func testWolfSSLRPK(t *testing.T, root, peer, role, mode string) {
 		}
 		if err != nil {
 			t.Fatalf("handshake %d: %v\n%s", round, err, output.String())
+		}
+		if mode == "early" && round == 1 && !goServer && conn.ConnectionState().EarlyData != EarlyDataAccepted {
+			t.Fatalf("early data status = %v\n%s", conn.ConnectionState().EarlyData, output.String())
 		}
 		requireResumptionOnSecondConnection(t, conn, round)
 		requireWolfSSLConnection(t, conn, wolfSSLInteropOptions{suites: config.CipherSuites})

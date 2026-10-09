@@ -79,6 +79,18 @@ Delegated-credential cases check actual DC state, resumption, fragmentation,
 SHA-384, fallback, invalid signatures and expiry. Negative probes are named
 separately and are not successful handshakes.
 
+The `client/early-io` cases for NSS and OpenSSL hold client Finished and require
+an epoch-1 request plus an epoch-3 response before releasing it. NSS uses a
+nonblocking initial send so its socket API cannot finish the handshake before
+writing the request. Ordinary early-data cases also check `DatagramInfo.EarlyData`.
+The wolfSSL RPK matrix covers `early-io` in both roles against upstream
+`c6e4286c0269a111799ff059badd94a272e37574`, built with MSVC on Windows and the
+native toolchain on Linux. Its client handles `APP_DATA_READY` while connecting.
+BoringSSL's lack of native DTLS 0-RTT and the server limitations below still apply.
+The wolfSSL server HRR case verifies rejection of the 0-RTT offer without sending
+an epoch-1 payload: this revision has echoed such a payload even after the Go
+client reports that HRR rejected early data.
+
 | Peer | Additional tested behavior | Boundary at the pinned revision |
 | --- | --- | --- |
 | NSS | Server DC presentation; client verification of Go server DC; client 0-RTT including a DC-authenticated session | Rejects DC in CertificateRequest (`tls13con.c`, `KnownExtensions`), contrary to RFC 9345 §4.1.2. Ordinary mTLS disables that Go offer. Native DTLS PHA is unsupported. |

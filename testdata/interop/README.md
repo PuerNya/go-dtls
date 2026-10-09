@@ -76,6 +76,16 @@ key-share HRR、分片、mTLS、OCSP、SNI、ALPN、GREASE、KeyUpdate，
 以及证书压缩和缓存信息的回退行为。委托凭据场景检查实际 DC 状态、恢复、
 分片、SHA-384、回退、无效签名和过期。负向探测单独命名，不算成功握手。
 
+NSS 和 OpenSSL 的 `client/early-io` 场景扣留客户端 Finished，要求释放前
+已收到 epoch-1 请求并发出 epoch-3 响应。NSS 首次发送使用非阻塞模式，避免
+socket API 在写入请求前完成握手。普通 early-data 场景也检查
+`DatagramInfo.EarlyData`。wolfSSL RPK 矩阵在两个角色覆盖 `early-io`，使用
+未修改的上游 `c6e4286c0269a111799ff059badd94a272e37574`，分别经 Windows
+MSVC 和 Linux 原生工具链构建；客户端正确处理连接期间的 `APP_DATA_READY`。
+BoringSSL 不支持原生 DTLS 0-RTT，以及下述服务端限制仍然适用。
+wolfSSL 服务端的 HRR 用例只验证拒绝 0-RTT 提议，不发送 epoch-1 数据：
+实测该版本在 Go 客户端报告 HRR 已拒绝早期数据后，仍会回显该数据。
+
 | 对端 | 额外验证的行为 | 固定版本下的能力边界 |
 | --- | --- | --- |
 | NSS | 服务端发送 DC；客户端验证 Go 服务端的 DC；客户端 0-RTT，包括经 DC 认证的会话 | 拒绝 CertificateRequest 中的 DC（`tls13con.c`、`KnownExtensions`），违反 RFC 9345 §4.1.2。普通 mTLS 场景关闭 Go 端的这项扩展声明。原生 DTLS 不支持 PHA。 |

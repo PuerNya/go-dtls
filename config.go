@@ -309,6 +309,13 @@ type Config struct {
 	// bytes per resumed connection. Zero disables early data. It does not by
 	// itself make early data replay-safe; see EarlyDataReplayCache.
 	MaxEarlyData uint32
+	// EnableEarlyDataIO lets server ReadDatagram deliver accepted 0-RTT data
+	// before the handshake completes, and permits application writes after the
+	// server Finished when no client certificate is requested. It does not
+	// enable 0-RTT acceptance by itself; MaxEarlyData and the cookie/replay
+	// policies still apply. Applications must tolerate replay and a later
+	// handshake failure. Clients opt in through ClientEarly or DialEarly.
+	EnableEarlyDataIO bool
 	// SessionTicketsDisabled disables server NewSessionTicket messages and
 	// client ticket use. It also disables session resumption and 0-RTT.
 	SessionTicketsDisabled bool

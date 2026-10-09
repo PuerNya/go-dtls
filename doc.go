@@ -264,8 +264,27 @@
 // [Config.SessionTicketKey] or disable tickets when existing sessions must be
 // revoked for an application-specific policy change.
 //
-// [Conn.WriteEarlyData] attempts one client 0-RTT datagram using a cached
-// session. The server must configure [Config.MaxEarlyData] and an
+// [ClientEarly] lazily wraps a transport without consuming a cached ticket.
+// [DialEarly] starts the handshake and returns when early writing is possible,
+// or after completion if no eligible ticket exists. On either connection,
+// [Conn.WriteDatagram] can send multiple independent 0-RTT datagrams within the
+// ticket allowance, then switches to application keys.
+//
+// [Config.EnableEarlyDataIO] lets a server deliver accepted requests before
+// client Finished and send epoch-3 responses after server Finished. Responses
+// wait when client-certificate authentication or the amplification budget
+// requires it. [DatagramInfo.EarlyData] identifies epoch-1 input even if delivered
+// after completion. Early clients can receive authenticated responses while
+// waiting for their final ACK. Ordinary connections wait for the full handshake.
+//
+// [Conn.HandshakeComplete] passively reports success; select on
+// [Conn.Context]().Done() as well to observe failure or closure. Neither accessor
+// starts a handshake. [Conn.HandshakeContext] still starts or waits for the
+// handshake; the first operation that starts it controls its context.
+// [ConnectionState.EarlyData] reports acceptance of the offer, not delivery of
+// individual datagrams. Sent data is never automatically replayed on rejection.
+//
+// The server must configure [Config.MaxEarlyData] and an
 // appropriate replay policy. [Config.EarlyDataReplayCache] controls replay
 // admission; a nil cache selects a bounded process-wide cache. On an untrusted
 // UDP listener, leave
@@ -276,8 +295,7 @@
 // a ticket identity within one cache domain, but it cannot give 0-RTT the same
 // replay guarantees as 1-RTT data. Early data can be replayed across failures,
 // cache domains, or server deployments. It must contain only operations that
-// are safe to repeat. Callers must handle [ErrEarlyDataUnavailable] and
-// [ErrEarlyDataRejected] and decide whether to retry after the handshake.
+// are safe to repeat. Callers decide whether to retry after the handshake.
 //
 // # Connection IDs and network paths
 //

@@ -118,22 +118,3 @@ func ExampleConn_WriteDatagram() {
 
 	_ = send
 }
-
-func ExampleConn_WriteEarlyData() {
-	sendReplaySafe := func(conn *dtls13.Conn, payload []byte) error {
-		_, err := conn.WriteEarlyData(payload)
-		switch {
-		case err == nil:
-			return nil
-		case errors.Is(err, dtls13.ErrEarlyDataUnavailable),
-			errors.Is(err, dtls13.ErrEarlyDataRejected):
-			// Retry only because this application operation is safe to repeat.
-			_, err = conn.WriteDatagram(payload)
-			return err
-		default:
-			return err
-		}
-	}
-
-	_ = sendReplaySafe
-}

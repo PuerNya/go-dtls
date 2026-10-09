@@ -55,9 +55,9 @@ jobs:
           path: |
             ${{ runner.temp }}/wolfssl
             ${{ runner.temp }}/wolfssl-build
-          key: wolfssl-${{ runner.os }}-${{ runner.arch }}-release-static-v3-${{ steps.wolfssl.outputs.commit }}
+          key: wolfssl-${{ runner.os }}-${{ runner.arch }}-release-static-v4-${{ steps.wolfssl.outputs.commit }}
           restore-keys: |
-            wolfssl-${{ runner.os }}-${{ runner.arch }}-release-static-v3-
+            wolfssl-${{ runner.os }}-${{ runner.arch }}-release-static-v4-
       - name: Build wolfSSL
         env:
           WOLFSSL_COMMIT: ${{ steps.wolfssl.outputs.commit }}
@@ -83,6 +83,7 @@ jobs:
           cmake -S "$WOLFSSL_SOURCE" -B "$WOLFSSL_BUILD" \
             -DCMAKE_BUILD_TYPE=Release \
             -DCMAKE_C_FLAGS=-DHAVE_RPK \
+            -DHAVE_RPK=ON \
             -DBUILD_SHARED_LIBS=OFF \
             -DWOLFSSL_AESCCM=yes \
             -DWOLFSSL_ALPN=yes \

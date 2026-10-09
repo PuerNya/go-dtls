@@ -326,7 +326,12 @@ func (r *receivingTraffic) processKeyUpdate(sequence uint16, body []byte) (keyUp
 	r.secrets[r.current] = nextSecret
 	if r.current > 1 {
 		minimum := r.current - 1
-		r.epochs.discardBefore(minimum)
+		// Finished retransmissions and their ACKs can overlap a KeyUpdate.
+		var retained uint64
+		if r.current < 6 { // Epoch 6 reuses epoch 2's wire bits.
+			retained = 2
+		}
+		r.epochs.discardBefore(minimum, retained)
 		for epoch, secret := range r.secrets {
 			if epoch < minimum {
 				clear(secret)

@@ -1320,7 +1320,7 @@ func TestRepeatedBidirectionalKeyUpdatesRemainBounded(t *testing.T) {
 			conn.receiveEpochs.mu.RLock()
 			retained := len(conn.receiveEpochs.ciphers)
 			conn.receiveEpochs.mu.RUnlock()
-			if retained > 2 {
+			if retained > 3 {
 				t.Fatalf("update %d retained %d receive epochs", i, retained)
 			}
 		}
@@ -1692,14 +1692,15 @@ func TestEndToEndMutualTLSEarlyData(t *testing.T) {
 	resumingClientConfig := clientConfig.Clone()
 	resumingClientConfig.Certificates = nil
 	left, right := memoryDatagramPair()
-	client := Client(left, resumingClientConfig)
+	client := ClientEarly(left, resumingClientConfig)
 	server := Server(right, serverConfig)
 	t.Cleanup(func() { _ = client.Close(); _ = server.Close() })
 	serverErr := make(chan error, 1)
 	go func() { serverErr <- server.Handshake() }()
 	payload := []byte("idempotent mutual TLS early data")
-	if n, err := client.WriteEarlyData(payload); err != nil || n != len(payload) {
-		t.Fatalf("WriteEarlyData = %d, %v", n, err)
+	writeEarlyTestDatagram(t, client, payload)
+	if err := client.Handshake(); err != nil {
+		t.Fatal(err)
 	}
 	if err := <-serverErr; err != nil {
 		t.Fatal(err)
@@ -1707,9 +1708,12 @@ func TestEndToEndMutualTLSEarlyData(t *testing.T) {
 	if !server.ConnectionState().DidResume || len(server.ConnectionState().VerifiedChains) == 0 {
 		t.Fatal("0-RTT resumption lost mutual TLS authentication state")
 	}
+	if client.ConnectionState().EarlyData != EarlyDataAccepted || server.ConnectionState().EarlyData != EarlyDataAccepted {
+		t.Fatal("mutual TLS 0-RTT data was not accepted")
+	}
 	buffer := make([]byte, 64)
-	n, _, err := server.ReadDatagram(buffer)
-	if err != nil || !bytes.Equal(buffer[:n], payload) {
+	n, info, err := server.ReadDatagram(buffer)
+	if err != nil || !info.EarlyData || !bytes.Equal(buffer[:n], payload) {
 		t.Fatalf("ReadDatagram = %q, %v", buffer[:n], err)
 	}
 }
@@ -1733,18 +1737,22 @@ func TestSessionResumptionAllowsDifferentCipherSuiteWithSameHash(t *testing.T) {
 	clientConfig.CipherSuites = []uint16{TLS_CHACHA20_POLY1305_SHA256}
 	serverConfig.CipherSuites = []uint16{TLS_CHACHA20_POLY1305_SHA256}
 	left, right := memoryDatagramPair()
-	client := Client(left, clientConfig)
+	client := ClientEarly(left, clientConfig)
 	server := Server(right, serverConfig)
 	t.Cleanup(func() { _ = client.Close(); _ = server.Close() })
 	serverErr := make(chan error, 1)
 	go func() { serverErr <- server.Handshake() }()
-	if n, err := client.WriteEarlyData([]byte("bound to the original cipher suite")); n != 0 || !errors.Is(err, ErrEarlyDataRejected) {
-		t.Fatalf("cross-suite WriteEarlyData = %d, %v; want 0, ErrEarlyDataRejected", n, err)
+	writeEarlyTestDatagram(t, client, []byte("bound to the original cipher suite"))
+	if err := client.Handshake(); err != nil {
+		t.Fatal(err)
 	}
 	if err := <-serverErr; err != nil {
 		t.Fatal(err)
 	}
 	clientState, serverState := client.ConnectionState(), server.ConnectionState()
+	if clientState.EarlyData != EarlyDataNotAttempted {
+		t.Fatalf("cross-suite early status = %v", clientState.EarlyData)
+	}
 	if !clientState.DidResume || !serverState.DidResume {
 		t.Fatalf("cross-suite resumption state client=%v server=%v", clientState.DidResume, serverState.DidResume)
 	}
@@ -1777,31 +1785,31 @@ func TestEndToEndEarlyData(t *testing.T) {
 	}
 
 	secondLeft, secondRight := memoryDatagramPair()
-	client := Client(secondLeft, clientConfig)
+	client := ClientEarly(secondLeft, clientConfig)
 	server := Server(secondRight, serverConfig)
 	t.Cleanup(func() { _ = client.Close(); _ = server.Close() })
 	serverErr := make(chan error, 1)
 	go func() { serverErr <- server.Handshake() }()
 	payload := bytes.Repeat([]byte("e"), 700)
-	n, err := client.WriteEarlyData(payload)
-	if err != nil {
+	writeEarlyTestDatagram(t, client, payload)
+	if err := client.Handshake(); err != nil {
 		t.Fatal(err)
 	}
-	if n != len(payload) {
-		t.Fatalf("WriteEarlyData wrote %d, want %d", n, len(payload))
-	}
-	if err = <-serverErr; err != nil {
+	if err := <-serverErr; err != nil {
 		t.Fatal(err)
 	}
 	if !client.ConnectionState().DidResume || !server.ConnectionState().DidResume {
 		t.Fatal("0-RTT connection did not resume")
 	}
+	if client.ConnectionState().EarlyData != EarlyDataAccepted || server.ConnectionState().EarlyData != EarlyDataAccepted {
+		t.Fatal("0-RTT data was not accepted")
+	}
 	buffer := make([]byte, len(payload))
-	n, _, err = server.ReadDatagram(buffer)
+	n, info, err := server.ReadDatagram(buffer)
 	if err != nil {
 		t.Fatal(err)
 	}
-	if !bytes.Equal(buffer[:n], payload) {
+	if !info.EarlyData || !bytes.Equal(buffer[:n], payload) {
 		t.Fatalf("early data %q, want %q", buffer[:n], payload)
 	}
 }
@@ -1821,6 +1829,13 @@ func issueEarlyDataTicket(t *testing.T, clientConfig, serverConfig *Config) *Cli
 	}
 	t.Fatal("initial handshake did not produce a session ticket")
 	return nil
+}
+
+func writeEarlyTestDatagram(t *testing.T, client *Conn, payload []byte) {
+	t.Helper()
+	if n, err := client.WriteDatagram(payload); err != nil || n != len(payload) {
+		t.Fatalf("WriteDatagram = %d, %v", n, err)
+	}
 }
 
 func TestSmallerCurrentRecordSizeLimitRejectsOnlyEarlyData(t *testing.T) {
@@ -1856,18 +1871,22 @@ func TestSmallerCurrentRecordSizeLimitRejectsOnlyEarlyData(t *testing.T) {
 	left, right := memoryDatagramPair()
 	defer left.Close()
 	defer right.Close()
-	client := Client(left, clientConfig)
+	client := ClientEarly(left, clientConfig)
 	server := Server(right, serverConfig)
 	serverDone := make(chan error, 1)
 	go func() { serverDone <- server.Handshake() }()
-	if n, err := client.WriteEarlyData(bytes.Repeat([]byte{1}, 200)); n != 0 || !errors.Is(err, ErrEarlyDataRejected) {
-		t.Fatalf("WriteEarlyData = %d, %v", n, err)
+	writeEarlyTestDatagram(t, client, bytes.Repeat([]byte{1}, 200))
+	if err := client.Handshake(); err != nil {
+		t.Fatal(err)
 	}
 	if err := <-serverDone; err != nil {
 		t.Fatal(err)
 	}
 	if !client.ConnectionState().DidResume || !server.ConnectionState().DidResume {
 		t.Fatal("record size change disabled 1-RTT resumption")
+	}
+	if client.ConnectionState().EarlyData != EarlyDataRejected {
+		t.Fatalf("early status = %v", client.ConnectionState().EarlyData)
 	}
 	if server.ConnectionState().LocalRecordSizeLimit != 128 || client.ConnectionState().PeerRecordSizeLimit != 128 {
 		t.Fatalf("resumed limits: client=%+v server=%+v", client.ConnectionState(), server.ConnectionState())
@@ -1894,19 +1913,23 @@ func TestEarlyDataRejectedAfterHelloRetryRequest(t *testing.T) {
 	_ = issueEarlyDataTicket(t, clientConfig, serverConfig)
 
 	left, right := memoryDatagramPair()
-	client := Client(left, clientConfig)
+	client := ClientEarly(left, clientConfig)
 	server := Server(right, serverConfig)
 	t.Cleanup(func() { _ = client.Close(); _ = server.Close() })
 	serverErr := make(chan error, 1)
 	go func() { serverErr <- server.Handshake() }()
-	if n, err := client.WriteEarlyData([]byte("must be rejected after HRR")); n != 0 || !errors.Is(err, ErrEarlyDataRejected) {
-		t.Fatalf("WriteEarlyData = %d, %v", n, err)
+	writeEarlyTestDatagram(t, client, []byte("must be rejected after HRR"))
+	if err := client.Handshake(); err != nil {
+		t.Fatal(err)
 	}
 	if err := <-serverErr; err != nil {
 		t.Fatal(err)
 	}
 	if !client.ConnectionState().DidResume || !server.ConnectionState().DidResume {
 		t.Fatal("HRR fallback did not retain PSK resumption")
+	}
+	if client.ConnectionState().EarlyData != EarlyDataRejected {
+		t.Fatalf("early status = %v", client.ConnectionState().EarlyData)
 	}
 	if len(server.earlyReadDatagrams) != 0 || server.earlyAccepted {
 		t.Fatal("server accepted early data after HRR")
@@ -1931,32 +1954,35 @@ func TestEarlyDataReplayIsRejected(t *testing.T) {
 	}
 	ticket := issueEarlyDataTicket(t, baseClient, serverConfig)
 
-	run := func(payload string) (int, *Conn, error) {
+	run := func(payload string) (*Conn, *Conn) {
 		cache := NewLRUClientSessionCache(1)
 		cache.Put("server.test", ticket)
 		clientConfig := baseClient.Clone()
 		clientConfig.ClientSessionCache = cache
 		left, right := memoryDatagramPair()
-		client := Client(left, clientConfig)
+		client := ClientEarly(left, clientConfig)
 		server := Server(right, serverConfig)
 		t.Cleanup(func() { _ = client.Close(); _ = server.Close() })
 		serverErr := make(chan error, 1)
 		go func() { serverErr <- server.Handshake() }()
-		n, err := client.WriteEarlyData([]byte(payload))
+		writeEarlyTestDatagram(t, client, []byte(payload))
+		if err := client.Handshake(); err != nil {
+			t.Fatal(err)
+		}
 		if serverHandshakeErr := <-serverErr; serverHandshakeErr != nil {
 			t.Fatal(serverHandshakeErr)
 		}
 		if !server.ConnectionState().DidResume {
 			t.Fatal("replayed connection did not retain 1-RTT resumption")
 		}
-		return n, server, err
+		return client, server
 	}
 
-	if n, server, err := run("accepted once"); err != nil || n != len("accepted once") || !server.earlyAccepted {
-		t.Fatalf("first early use = %d, %v, accepted=%v", n, err, server.earlyAccepted)
+	if client, server := run("accepted once"); client.ConnectionState().EarlyData != EarlyDataAccepted || !server.earlyAccepted {
+		t.Fatalf("first early use: client=%v accepted=%v", client.ConnectionState().EarlyData, server.earlyAccepted)
 	}
-	if n, server, err := run("replayed"); n != 0 || !errors.Is(err, ErrEarlyDataRejected) || server.earlyAccepted {
-		t.Fatalf("replay = %d, %v, accepted=%v", n, err, server.earlyAccepted)
+	if client, server := run("replayed"); client.ConnectionState().EarlyData != EarlyDataRejected || server.earlyAccepted {
+		t.Fatalf("replay: client=%v accepted=%v", client.ConnectionState().EarlyData, server.earlyAccepted)
 	}
 }
 
@@ -1978,23 +2004,28 @@ func TestEarlyDataTicketLimit(t *testing.T) {
 	_ = issueEarlyDataTicket(t, clientConfig, serverConfig)
 
 	left, right := memoryDatagramPair()
-	client := Client(left, clientConfig)
+	client := ClientEarly(left, clientConfig)
 	server := Server(right, serverConfig)
 	t.Cleanup(func() { _ = client.Close(); _ = server.Close() })
 	serverErr := make(chan error, 1)
 	go func() { serverErr <- server.Handshake() }()
-	if n, err := client.WriteEarlyData([]byte("ninebytes")); n != 0 || !errors.Is(err, ErrEarlyDataUnavailable) {
-		t.Fatalf("oversized WriteEarlyData = %d, %v", n, err)
+	writeEarlyTestDatagram(t, client, []byte("ninebytes"))
+	if err := client.Handshake(); err != nil {
+		t.Fatal(err)
 	}
 	if err := <-serverErr; err != nil {
 		t.Fatal(err)
 	}
-	if len(server.earlyReadDatagrams) != 0 || bufferedApplicationDatagrams(server) != 0 {
-		t.Fatal("oversized early data reached the server application buffer")
+	if client.ConnectionState().EarlyData != EarlyDataAccepted || len(server.earlyReadDatagrams) != 0 {
+		t.Fatal("quota fallback failed")
+	}
+	var buffer [16]byte
+	if n, info, err := server.ReadDatagram(buffer[:]); err != nil || n != 9 || info.EarlyData || string(buffer[:n]) != "ninebytes" {
+		t.Fatalf("quota fallback = %q %+v %v", buffer[:n], info, err)
 	}
 }
 
-func TestWriteEarlyDataRejectsOversizedDatagram(t *testing.T) {
+func TestEarlyWriteRejectsOversizedDatagram(t *testing.T) {
 	cache := NewLRUClientSessionCache(1)
 	cache.Put("server.test", &ClientSessionState{
 		ticket: []byte("ticket"), psk: bytes.Repeat([]byte{1}, 32),
@@ -2004,16 +2035,13 @@ func TestWriteEarlyDataRejectsOversizedDatagram(t *testing.T) {
 	left, right := memoryDatagramPair()
 	defer left.Close()
 	defer right.Close()
-	client := Client(left, &Config{
+	client := ClientEarly(left, &Config{
 		ServerName: "server.test", ClientSessionCache: cache, MTU: 256,
 		HandshakeTimeout: time.Second,
 	})
-	n, err := client.WriteEarlyData(bytes.Repeat([]byte{1}, 256))
+	n, err := client.WriteDatagram(bytes.Repeat([]byte{1}, 256))
 	if n != 0 || !errors.Is(err, ErrDatagramTooLarge) {
-		t.Fatalf("WriteEarlyData oversized=%d, %v", n, err)
-	}
-	if client.earlySent {
-		t.Fatal("oversized early data was sent")
+		t.Fatalf("WriteDatagram oversized=%d, %v", n, err)
 	}
 }
 

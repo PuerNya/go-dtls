@@ -80,7 +80,8 @@ int main(int argc, char **argv) {
     check(argc == 11, "role port mode cert.pem key.pem cert.der key.der dc.bin delegated.pem delegated.der");
     int server = strcmp(argv[1], "server") == 0;
     const char *mode = argv[3];
-    int early = strcmp(mode, "early") == 0;
+    int earlyIO = strcmp(mode, "early-io") == 0;
+    int early = strcmp(mode, "early") == 0 || earlyIO;
     check(!early || !server, "OpenSSL listener cannot enter SSL_read_early_data");
     if (strcmp(mode, "ocsp") == 0) {
         char path[4096]; snprintf(path, sizeof(path), "%s.ocsp", argv[4]);
@@ -215,6 +216,10 @@ int main(int argc, char **argv) {
         for (unsigned i = 0; i < sizeof(exporter); i++) printf("%02x", exporter[i]);
         puts(""); fflush(stdout);
         unsigned char buf[64]; int n;
+        if (earlyIO && round != 0) {
+            n = read_datagram(ssl, buf, sizeof(buf));
+            check(n == 11 && memcmp(buf, "early reply", 11) == 0, "early response");
+        }
         if (strcmp(mode, "keyupdate") == 0) check(SSL_key_update(ssl, SSL_KEY_UPDATE_REQUESTED) == 1, "KeyUpdate");
         if (!server) check(SSL_write(ssl, "interop", 7) == 7, "write datagram");
         n = read_datagram(ssl, buf, sizeof(buf)); check(n == 7 && memcmp(buf, "interop", 7) == 0, "read datagram");

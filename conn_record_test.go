@@ -88,8 +88,10 @@ func establishedConnPair(t *testing.T) (*Conn, *Conn) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	client.handshakeOnce.Do(func() {})
-	server.handshakeOnce.Do(func() {})
+	for _, conn := range []*Conn{client, server} {
+		conn.initLifecycle()
+		conn.handshakeOnce.Do(func() { close(conn.handshakeDone) })
+	}
 	suite, _ := cipherSuiteForID(TLS_AES_128_GCM_SHA256)
 	clientSecret := bytes.Repeat([]byte{1}, suite.hash.Size())
 	serverSecret := bytes.Repeat([]byte{2}, suite.hash.Size())
@@ -944,6 +946,22 @@ func TestCloseNotifyOnlyClosesPeerReadSide(t *testing.T) {
 	}
 	if err = <-writeResult; err != nil {
 		t.Fatal(err)
+	}
+}
+
+func TestReadDatagramDrainsQueueAfterTransportFailure(t *testing.T) {
+	_, server := establishedConnPair(t)
+	if err := server.queueApplicationData([]byte("received"), server.RemoteAddr()); err != nil {
+		t.Fatal(err)
+	}
+	server.finishRecordReader(io.EOF)
+	buffer := make([]byte, 16)
+	n, _, err := server.ReadDatagram(buffer)
+	if err != nil || string(buffer[:n]) != "received" {
+		t.Fatalf("queued datagram = %q, %v", buffer[:n], err)
+	}
+	if _, _, err = server.ReadDatagram(buffer); !errors.Is(err, io.EOF) {
+		t.Fatalf("ReadDatagram after queue drained = %v", err)
 	}
 }
 

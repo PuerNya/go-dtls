@@ -101,11 +101,11 @@ func (s *epochSet) shouldRequestKeyUpdateForAuthFailures(first byte) bool {
 	return err == nil && cipher.shouldRequestKeyUpdateForAuthFailures()
 }
 
-func (s *epochSet) discardBefore(epoch uint64) {
+func (s *epochSet) discardBefore(epoch, retained uint64) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	for candidate := range s.ciphers {
-		if candidate < epoch {
+		if candidate < epoch && candidate != retained {
 			delete(s.ciphers, candidate)
 		}
 	}

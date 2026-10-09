@@ -223,13 +223,14 @@ func TestCachedInformationResumptionAndPHA(t *testing.T) {
 	sc.MaxEarlyData, sc.AllowEarlyDataWithoutCookie = 1024, true
 	issueEarlyDataTicket(t, cc, sc)
 	left, right := memoryDatagramPair()
-	client, server := Client(left, cc), Server(right, sc)
+	client, server := ClientEarly(left, cc), Server(right, sc)
 	t.Cleanup(func() { _ = client.Close(); _ = server.Close() })
 	check := observeCachedInformation(t, server, 0, nil)
 	done := make(chan error, 1)
 	go func() { done <- server.Handshake() }()
-	if n, err := client.WriteEarlyData([]byte("early")); err != nil || n != 5 {
-		t.Fatalf("cached offer with early data: %d %v", n, err)
+	writeEarlyTestDatagram(t, client, []byte("early"))
+	if err := client.Handshake(); err != nil {
+		t.Fatal(err)
 	}
 	if err := <-done; err != nil {
 		t.Fatal(err)
@@ -237,7 +238,7 @@ func TestCachedInformationResumptionAndPHA(t *testing.T) {
 	check()
 	_ = server.SetReadDeadline(time.Now().Add(time.Second))
 	var data [16]byte
-	if n, _, err := server.ReadDatagram(data[:]); err != nil || string(data[:n]) != "early" {
+	if n, info, err := server.ReadDatagram(data[:]); err != nil || !info.EarlyData || string(data[:n]) != "early" {
 		t.Fatalf("early data: %d %v", n, err)
 	}
 	if !client.ConnectionState().DidResume {

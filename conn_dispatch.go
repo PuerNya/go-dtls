@@ -67,7 +67,7 @@ func (c *Conn) dispatchAlert(content []byte, number recordNumber) error {
 // when the ACK completes a KeyUpdate that a peer's update_requested was
 // waiting on, begins the requested update. The retransmission timer is started
 // only after writeMu is released.
-func (c *Conn) dispatchACK(content []byte, epoch uint64) error {
+func (c *Conn) dispatchACK(content []byte, epoch uint64, onACK func([]recordNumber)) error {
 	var scratch [1]recordNumber
 	numbers, err := parseACKInto(content, scratch[:0])
 	if err != nil {
@@ -76,6 +76,9 @@ func (c *Conn) dispatchACK(content []byte, epoch uint64) error {
 	}
 	if err = validateACKEpoch(numbers, epoch); err != nil {
 		return err
+	}
+	if onACK != nil {
+		onACK(numbers)
 	}
 	startKeyUpdate, err := c.applyACK(numbers)
 	if err != nil {

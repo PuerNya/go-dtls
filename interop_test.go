@@ -718,7 +718,7 @@ func TestInteropWolfSSLServerEarlyData(t *testing.T) {
 	testInteropWolfSSLServerEarlyData(t, false)
 }
 
-func TestInteropWolfSSLServerRejectsEarlyDataAfterHRR(t *testing.T) {
+func TestInteropWolfSSLServerRejectsEarlyDataOfferAfterHRR(t *testing.T) {
 	testInteropWolfSSLServerEarlyData(t, true)
 }
 
@@ -825,25 +825,24 @@ func testInteropWolfSSLServerOptions(t *testing.T, options wolfSSLInteropOptions
 		if clientConfig.ServerName == "" && !options.verifyServerCertificate {
 			clientConfig.ServerName = "127.0.0.1"
 		}
-		conn := Client(raw, clientConfig)
+		var conn *Conn
+		if index > 0 && len(options.clientEarlyData) > 0 {
+			conn = ClientEarly(raw, clientConfig)
+		} else {
+			conn = Client(raw, clientConfig)
+		}
 		t.Cleanup(func() { _ = conn.Close() })
 		if options.wrapClientConn != nil {
 			options.wrapClientConn(conn)
 		}
-		if index > 0 && len(options.clientEarlyData) > 0 {
-			n, earlyErr := conn.WriteEarlyData(options.clientEarlyData)
-			if options.rejectEarlyData {
-				if !errors.Is(earlyErr, ErrEarlyDataRejected) || n != 0 {
-					_ = conn.Close()
-					t.Fatalf("expected HRR to reject early data: n=%d err=%v", n, earlyErr)
-				}
-			} else if earlyErr != nil || n != len(options.clientEarlyData) {
+		if index > 0 && len(options.clientEarlyData) > 0 && !options.rejectEarlyData {
+			n, earlyErr := conn.WriteDatagram(options.clientEarlyData)
+			if earlyErr != nil || n != len(options.clientEarlyData) {
 				_ = conn.Close()
 				t.Fatalf("write early data: n=%d err=%v", n, earlyErr)
 			}
-		} else {
-			err = conn.Handshake()
 		}
+		err = conn.Handshake()
 		if options.wantHandshakeAlert != 0 {
 			if !errors.Is(err, AlertError(options.wantHandshakeAlert)) {
 				t.Fatalf("handshake error=%v, want peer alert %d\n%s", err, options.wantHandshakeAlert, output.String())
@@ -852,6 +851,15 @@ func testInteropWolfSSLServerOptions(t *testing.T, options wolfSSLInteropOptions
 		}
 		if err != nil {
 			t.Fatalf("Go client to wolfSSL server: %v\n%s", err, output.String())
+		}
+		if index > 0 && len(options.clientEarlyData) > 0 {
+			want := EarlyDataAccepted
+			if options.rejectEarlyData {
+				want = EarlyDataRejected
+			}
+			if got := conn.ConnectionState().EarlyData; got != want {
+				t.Fatalf("early data status = %v, want %v\n%s", got, want, output.String())
+			}
 		}
 		requireWolfSSLConnection(t, conn, options)
 		_ = conn.SetDeadline(time.Now().Add(5 * time.Second))
@@ -1148,12 +1156,14 @@ func TestInteropWolfSSLClientEarlyData(t *testing.T) {
 			early, application := false, false
 			for range want {
 				request := make([]byte, 64)
-				n, _, err := conn.ReadDatagram(request)
+				n, info, err := conn.ReadDatagram(request)
 				if err != nil {
 					t.Fatalf("read wolfSSL application data: %v", err)
 				}
 				message := string(request[:n])
-				early = early || strings.Contains(message, "A drop of info")
+				if strings.Contains(message, "A drop of info") {
+					early = info.EarlyData
+				}
 				application = application || strings.Contains(message, "wolfssl")
 			}
 			if !application || (index == 1 && !early) {
@@ -1926,11 +1936,14 @@ func benchmarkGoClient(b *testing.B, address string, config *Config, feature wol
 			var raw net.Conn
 			raw, err = dialer.Dial("udp4", address)
 			if err == nil {
-				conn = Client(raw, clientConfig)
+				conn = ClientEarly(raw, clientConfig)
 				var n int
-				n, err = conn.WriteEarlyData([]byte("benchmark early data"))
+				n, err = conn.WriteDatagram([]byte("benchmark early data"))
 				if err == nil && n == 0 {
-					err = errors.New("WriteEarlyData wrote no data")
+					err = errors.New("early WriteDatagram wrote no data")
+				}
+				if err == nil {
+					err = conn.Handshake()
 				}
 			}
 		} else {

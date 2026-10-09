@@ -28,6 +28,8 @@ type ConnectionState struct {
 	// DidResume is true when the connection used a PSK from a session ticket
 	// instead of performing a full certificate handshake.
 	DidResume bool
+	// EarlyData is available during the handshake as well as after completion.
+	EarlyData EarlyDataStatus
 	// ECHAccepted is true when RFC 9849 Encrypted ClientHello was offered and
 	// accepted. GREASE ECH does not set this field.
 	ECHAccepted bool
@@ -127,7 +129,7 @@ func (s ConnectionState) externalPSKSelection() *externalPSKSelection {
 // returns an error before handshake completion, after the connection's secrets
 // have been cleared, or for an invalid label or length.
 func (s ConnectionState) ExportKeyingMaterial(label string, context []byte, length int) ([]byte, error) {
-	if s.exporter == nil {
+	if !s.HandshakeComplete || s.exporter == nil {
 		return nil, errors.New("dtls13: exporter is unavailable before handshake completion")
 	}
 	return s.exporter.export(label, context, length)
@@ -176,14 +178,23 @@ type Conn struct {
 	// Immutable after construction.
 	conn     net.Conn
 	isClient bool
+	earlyIO  bool
 
 	// Replaced with its normalized copy by the handshake, then read-only.
 	config *Config
 
-	// Guarded by handshakeOnce: written exactly once by HandshakeContext.
+	// handshakeOnce starts one handshake; handshakeDone publishes its result.
 	handshakeOnce     sync.Once
 	handshakeErr      error
 	handshakeDeadline time.Time
+	handshakeContext  context.Context
+	lifecycleOnce     sync.Once
+	lifetime          context.Context
+	cancelLifetime    context.CancelCauseFunc
+	handshakeComplete chan struct{}
+	handshakeDone     chan struct{}
+	writeReady        chan struct{}
+	applicationReady  chan struct{}
 
 	// Owned by the handshake, then by the single record reader. At most one
 	// datagram tail is retained across a handshake message or epoch boundary.
@@ -244,6 +255,9 @@ type Conn struct {
 	// Guarded by writeMu.
 	writeMu                          sync.Mutex
 	sendCipher                       *recordCipher
+	earlyWriteCipher                 *recordCipher
+	earlyWriteRemaining              uint32
+	earlyWriteGuard                  *amplificationGuard
 	sendingTraffic                   *sendingTraffic
 	receivingTraffic                 *receivingTraffic
 	finishedACKCipher                *recordCipher
@@ -278,14 +292,10 @@ type Conn struct {
 
 	// Guarded by earlyMu.
 	earlyMu            sync.Mutex
-	earlyPending       []byte
-	earlySignaled      bool
 	earlyReadDatagrams [][]byte
 	earlyReadBytes     int
 	earlyAccepted      bool
 	earlyDataLimit     uint32
-	earlySent          bool
-	earlyRejected      bool
 
 	// Lock-free atomics.
 	pathMTU                  atomic.Int64
@@ -293,11 +303,13 @@ type Conn struct {
 	retransmitNanos          atomic.Int64
 	lastRTTSampleUnixNano    atomic.Int64
 	postHandshakeAuthCounter atomic.Uint64
+	earlyStatus              atomic.Uint32
 }
 
 type applicationDatagram struct {
 	payload []byte
 	from    net.Addr
+	early   bool
 }
 
 const maxDatagramSize = 65535
@@ -317,6 +329,9 @@ func releaseDatagramBuffer(buffer *[maxDatagramSize]byte) {
 // DatagramInfo describes one authenticated Application Data record consumed by
 // [Conn.ReadDatagram].
 type DatagramInfo struct {
+	// EarlyData identifies data received under 0-RTT keys, even when delivered
+	// after the handshake. Such data can be replayed across connections.
+	EarlyData bool
 	// Source is the network address from which the authenticated record was
 	// received. It is informational: Connection IDs do not by themselves
 	// validate a changed network path or alter the address used for replies.
@@ -407,6 +422,8 @@ func (c *Conn) pathMTUFloor() int {
 // [Config.IgnorePathMTU] makes application writes ignore this estimate;
 // handshake traffic continues to use it.
 func (c *Conn) PathMTU() int {
+	c.readerMu.Lock()
+	defer c.readerMu.Unlock()
 	if c.config == nil {
 		return 0
 	}
@@ -420,10 +437,14 @@ func (c *Conn) PathMTU() int {
 func (c *Conn) RecordOverhead() int {
 	c.writeMu.Lock()
 	defer c.writeMu.Unlock()
-	if c.sendCipher == nil {
+	cipher := c.sendCipher
+	if c.earlyWriteCipher != nil {
+		cipher = c.earlyWriteCipher
+	}
+	if cipher == nil {
 		return plainRecordHeaderLen
 	}
-	return c.sendCipher.headerLen16() + c.sendCipher.aead.Overhead() + 1
+	return cipher.headerLen16() + cipher.aead.Overhead() + 1
 }
 
 // isMessageTooLong reports whether err is the platform failure for a datagram
@@ -467,7 +488,9 @@ func Client(conn net.Conn, config *Config) *Conn {
 // connection must be a connected datagram transport that preserves one write
 // as one datagram. Server defers the handshake until the first operation that
 // needs traffic keys. Close closes conn.
-func Server(conn net.Conn, config *Config) *Conn { return &Conn{conn: conn, config: config} }
+func Server(conn net.Conn, config *Config) *Conn {
+	return &Conn{conn: conn, config: config, earlyIO: config != nil && config.EnableEarlyDataIO}
+}
 
 // Dial connects to address on a UDP network and performs a client handshake.
 // Network must be "udp", "udp4", or "udp6". If Config.ServerName is empty,
@@ -482,6 +505,24 @@ func Dial(network, address string, config *Config) (*Conn, error) {
 // dialer Timeout also bounds the DTLS handshake; Config.HandshakeTimeout still
 // applies when it is shorter.
 func DialWithDialer(dialer *net.Dialer, network, address string, config *Config) (*Conn, error) {
+	ctx := context.Background()
+	if dialer != nil && dialer.Timeout > 0 {
+		var cancel context.CancelFunc
+		ctx, cancel = context.WithTimeout(ctx, dialer.Timeout)
+		defer cancel()
+	}
+	c, err := dialClient(ctx, dialer, network, address, config)
+	if err != nil {
+		return nil, err
+	}
+	if err = c.HandshakeContext(ctx); err != nil {
+		_ = c.Close()
+		return nil, err
+	}
+	return c, nil
+}
+
+func dialClient(ctx context.Context, dialer *net.Dialer, network, address string, config *Config) (*Conn, error) {
 	if network != "udp" && network != "udp4" && network != "udp6" {
 		return nil, &ConfigError{"Dial network must be udp, udp4, or udp6"}
 	}
@@ -501,22 +542,11 @@ func DialWithDialer(dialer *net.Dialer, network, address string, config *Config)
 		}
 		clientConfig.ServerName = host
 	}
-	raw, err := dialer.Dial(network, address)
+	raw, err := dialer.DialContext(ctx, network, address)
 	if err != nil {
 		return nil, err
 	}
-	c := Client(raw, clientConfig)
-	ctx := context.Background()
-	if dialer.Timeout > 0 {
-		var cancel context.CancelFunc
-		ctx, cancel = context.WithTimeout(ctx, dialer.Timeout)
-		defer cancel()
-	}
-	if err = c.HandshakeContext(ctx); err != nil {
-		_ = raw.Close()
-		return nil, err
-	}
-	return c, nil
+	return Client(raw, clientConfig), nil
 }
 
 // Handshake performs the DTLS handshake if it has not already run. Subsequent
@@ -530,37 +560,8 @@ func (c *Conn) Handshake() error { return c.HandshakeContext(context.Background(
 // The first call controls the handshake and all later calls return its result;
 // a canceled or failed handshake is not retried. The context must be non-nil.
 func (c *Conn) HandshakeContext(ctx context.Context) error {
-	c.handshakeOnce.Do(func() {
-		c.readerMu.Lock()
-		if c.readerClosed {
-			c.readerMu.Unlock()
-			c.handshakeErr = net.ErrClosed
-			return
-		}
-		c.handshaking = true
-		c.readerMu.Unlock()
-		defer func() {
-			c.readerMu.Lock()
-			c.handshaking = false
-			closed := c.readerClosed
-			c.readerMu.Unlock()
-			if closed {
-				c.handshakeErr = net.ErrClosed
-				c.clearTrafficSecrets(net.ErrClosed)
-			}
-		}()
-		if c.conn == nil {
-			c.handshakeErr = &ConfigError{"nil underlying connection"}
-			return
-		}
-		cfg, err := c.config.normalized()
-		if err != nil {
-			c.handshakeErr = err
-			return
-		}
-		c.config = cfg
-		c.handshakeErr = c.runHandshake(ctx)
-	})
+	c.startHandshake(ctx)
+	<-c.handshakeDone
 	if c.handshakeErr == nil {
 		c.startRecordReader()
 	}
@@ -581,7 +582,7 @@ func (c *Conn) notifyRead() {
 func (c *Conn) startRecordReader() {
 	c.initInput()
 	c.readerMu.Lock()
-	if c.readerRunning || c.readerClosed {
+	if c.readerRunning || c.readerClosed || c.handshaking {
 		c.readerMu.Unlock()
 		return
 	}
@@ -598,6 +599,10 @@ func (c *Conn) finishRecordReader(err error) {
 	if err == nil || closed {
 		return
 	}
+	if networkErr, ok := errors.AsType[net.Error](err); !ok || !networkErr.Timeout() {
+		c.initLifecycle()
+		c.cancelLifetime(err)
+	}
 	c.inputMu.Lock()
 	if c.readErr == nil {
 		c.readErr = err
@@ -607,6 +612,10 @@ func (c *Conn) finishRecordReader(err error) {
 }
 
 func (c *Conn) queueApplicationData(content []byte, from net.Addr) error {
+	return c.queueApplicationDatagram(content, from, false)
+}
+
+func (c *Conn) queueApplicationDatagram(content []byte, from net.Addr, early bool) error {
 	c.inputMu.Lock()
 	if len(c.applicationDatagrams) >= c.config.MaxBufferedApplicationDatagrams {
 		c.inputMu.Unlock()
@@ -617,7 +626,7 @@ func (c *Conn) queueApplicationData(content []byte, from net.Addr) error {
 		return &ProtocolError{"buffered application data limit exceeded"}
 	}
 	c.applicationDatagrams = append(c.applicationDatagrams, applicationDatagram{
-		payload: append([]byte(nil), content...), from: from,
+		payload: append([]byte(nil), content...), from: from, early: early,
 	})
 	c.bufferedApplicationBytes += len(content)
 	c.inputMu.Unlock()
@@ -709,14 +718,11 @@ func (c *Conn) trimRecordOrderingHistoryLocked() {
 	}
 }
 
-// queueEarlyApplicationData buffers authenticated epoch-1 application data
-// until the handshake reaches epoch 3. Authenticated bytes beyond the
+// queueEarlyApplicationData delivers accepted epoch-1 data in early mode,
+// or buffers it until handshake completion. Authenticated bytes beyond the
 // advertised allowance terminate the connection with unexpected_message;
 // they are never exposed to the application.
 func (c *Conn) queueEarlyApplicationData(content []byte) error {
-	if len(content) == 0 {
-		return nil
-	}
 	c.earlyMu.Lock()
 	defer c.earlyMu.Unlock()
 	if !c.earlyAccepted || c.earlyDataLimit == 0 {
@@ -725,15 +731,18 @@ func (c *Conn) queueEarlyApplicationData(content []byte) error {
 	if len(c.earlyReadDatagrams) >= c.config.MaxBufferedApplicationDatagrams {
 		return alertError(alertUnexpectedMessage, &ProtocolError{"too many early application datagrams"})
 	}
-	if uint64(c.earlyReadBytes) >= uint64(c.earlyDataLimit) {
-		return alertError(alertUnexpectedMessage, &ProtocolError{"early data exceeds the advertised limit"})
-	}
 	remaining := int(uint64(c.earlyDataLimit) - uint64(c.earlyReadBytes))
 	if len(content) > remaining {
 		return alertError(alertUnexpectedMessage, &ProtocolError{"early data exceeds the advertised limit"})
 	}
-	c.earlyReadDatagrams = append(c.earlyReadDatagrams, append([]byte(nil), content...))
 	c.earlyReadBytes += len(content)
+	if c.earlyIO {
+		return c.queueApplicationDatagram(content, c.conn.RemoteAddr(), true)
+	}
+	if c.earlyReadBytes > c.config.MaxBufferedApplicationData {
+		return &ProtocolError{"buffered early application data limit exceeded"}
+	}
+	c.earlyReadDatagrams = append(c.earlyReadDatagrams, append([]byte(nil), content...))
 	return nil
 }
 
@@ -744,7 +753,7 @@ func (c *Conn) promoteEarlyApplicationData() error {
 	c.earlyReadBytes = 0
 	c.earlyMu.Unlock()
 	for _, datagram := range datagrams {
-		if err := c.queueApplicationData(datagram, c.conn.RemoteAddr()); err != nil {
+		if err := c.queueApplicationDatagram(datagram, c.conn.RemoteAddr(), true); err != nil {
 			return err
 		}
 	}
@@ -785,10 +794,17 @@ func (c *Conn) failConnection(err error) {
 	if err == nil {
 		return
 	}
+	c.initLifecycle()
+	c.cancelLifetime(err)
 	if description, ok := outboundAlert(err); ok {
 		c.sendFatalAlert(description)
 	}
-	c.clearTrafficSecrets(err)
+	c.readerMu.Lock()
+	handshaking := c.handshaking
+	c.readerMu.Unlock()
+	if !handshaking {
+		c.clearTrafficSecrets(err)
+	}
 	c.inputMu.Lock()
 	if c.readErr == nil {
 		c.readErr = err
@@ -804,6 +820,9 @@ func (c *Conn) clearTrafficSecrets(failure error) {
 	c.writeMu.Lock()
 	c.clearReturnRoutabilityLocked()
 	c.sendCipher = nil
+	c.earlyWriteCipher = nil
+	c.earlyWriteRemaining = 0
+	c.earlyWriteGuard = nil
 	if c.sendingTraffic != nil {
 		c.sendingTraffic.clearSecrets()
 	}
@@ -840,7 +859,6 @@ func (c *Conn) clearTrafficSecrets(failure error) {
 	c.bufferedApplicationBytes = 0
 	c.inputMu.Unlock()
 	c.earlyMu.Lock()
-	c.earlyPending = nil
 	c.earlyReadDatagrams = nil
 	c.earlyReadBytes = 0
 	c.earlyMu.Unlock()
@@ -868,7 +886,7 @@ func (c *Conn) sendFatalAlert(description uint8) {
 		return
 	}
 	wire, err := c.sendCipher.seal(recordTypeAlert, body)
-	if err == nil {
+	if err == nil && (c.earlyWriteGuard == nil || c.earlyWriteGuard.allowSend(len(wire))) {
 		_, _ = c.conn.Write(wire)
 	}
 }
@@ -890,6 +908,10 @@ func (c *Conn) dispatchDatagram(datagram []byte) error {
 }
 
 func (c *Conn) dispatchDatagramFrom(datagram []byte, from net.Addr) error {
+	return c.dispatchDatagramWithACK(datagram, from, nil)
+}
+
+func (c *Conn) dispatchDatagramWithACK(datagram []byte, from net.Addr, onACK func([]recordNumber)) error {
 	c.dispatchMu.Lock()
 	defer c.dispatchMu.Unlock()
 	for len(datagram) > 0 {
@@ -929,11 +951,14 @@ func (c *Conn) dispatchDatagramFrom(datagram []byte, from net.Addr) error {
 		var err error
 		switch typ {
 		case recordTypeApplicationData:
+			if epoch < 3 {
+				return alertError(alertUnexpectedMessage, &ProtocolError{"application data used handshake keys"})
+			}
 			err = c.dispatchApplicationData(content, number, from)
 		case recordTypeAlert:
 			err = c.dispatchAlert(content, number)
 		case recordTypeACK:
-			err = c.dispatchACK(content, epoch)
+			err = c.dispatchACK(content, epoch, onACK)
 		case recordTypeReturnRoutability:
 			err = c.handleReturnRoutability(content, from)
 		case recordTypeHandshake:
@@ -979,8 +1004,10 @@ func (c *Conn) requestKeyUpdateAfterAuthFailures() error {
 }
 
 // ReadDatagram reads and consumes one authenticated DTLS Application Data
-// record. It performs the handshake first if necessary. The returned n is the
-// number of plaintext bytes copied into p.
+// record. It starts the handshake if necessary. Ordinary connections wait for
+// completion; early connections can deliver accepted 0-RTT on the server and
+// authenticated application responses on the client before completion.
+// The returned n is the number of plaintext bytes copied into p.
 //
 // If p is too small, the unread remainder is discarded,
 // DatagramInfo.FullLength reports the original length, and
@@ -989,7 +1016,9 @@ func (c *Conn) requestKeyUpdateAfterAuthFailures() error {
 // A peer close_notify is returned as io.EOF after all earlier deliverable
 // records have been consumed.
 func (c *Conn) ReadDatagram(p []byte) (int, DatagramInfo, error) {
-	if err := c.Handshake(); err != nil {
+	if c.earlyIO {
+		c.startHandshake(context.Background())
+	} else if err := c.Handshake(); err != nil {
 		return 0, DatagramInfo{}, err
 	}
 	c.readMu.Lock()
@@ -1002,7 +1031,7 @@ func (c *Conn) ReadDatagram(p []byte) (int, DatagramInfo, error) {
 			c.bufferedApplicationBytes -= len(datagram.payload)
 			n := copy(p, datagram.payload)
 			c.inputMu.Unlock()
-			return n, DatagramInfo{Source: datagram.from, FullLength: len(datagram.payload), Truncated: n < len(datagram.payload)}, nil
+			return n, DatagramInfo{Source: datagram.from, FullLength: len(datagram.payload), Truncated: n < len(datagram.payload), EarlyData: datagram.early}, nil
 		}
 		if c.readErr != nil {
 			err := c.readErr
@@ -1015,15 +1044,29 @@ func (c *Conn) ReadDatagram(p []byte) (int, DatagramInfo, error) {
 			return 0, DatagramInfo{}, io.EOF
 		}
 		c.inputMu.Unlock()
+		if err := context.Cause(c.Context()); err != nil {
+			return 0, DatagramInfo{}, err
+		}
 		c.startRecordReader()
-		<-c.readNotify
+		select {
+		case <-c.readNotify:
+		case <-c.lifetime.Done():
+		}
 	}
 }
 
 // WriteDatagram sends p as exactly one DTLS Application Data record to the
-// association's authenticated peer. It performs the handshake first if
-// necessary. Application data is not internally fragmented, retransmitted, or
-// reordered. A nil or empty p sends a valid empty application datagram.
+// association's peer. Ordinary connections complete the handshake first.
+// [ClientEarly] and [DialEarly] can send multiple 0-RTT records within the ticket
+// allowance, then use application keys. Servers with [Config.EnableEarlyDataIO]
+// can respond after sending Finished unless client authentication is pending.
+// Application data is not internally fragmented, retransmitted, or reordered.
+// A nil or empty p sends a valid empty application datagram.
+//
+// Sent 0-RTT records are replayable and are never automatically resent after
+// rejection. Inspect [ConnectionState.EarlyData] and observe [Conn.Context] for
+// a later handshake failure. Writes that do not fit the remaining ticket
+// allowance wait for application keys; individual datagrams are never split.
 //
 // By default, if p exceeds the current path MTU or the DTLS record-content
 // limit, WriteDatagram returns an error matching [ErrDatagramTooLarge] and n
@@ -1032,7 +1075,12 @@ func (c *Conn) ReadDatagram(p []byte) (int, DatagramInfo, error) {
 // still reject the complete record with ErrDatagramTooLarge. Otherwise n is
 // len(p) if the complete record was handed to the underlying transport.
 func (c *Conn) WriteDatagram(p []byte) (int, error) {
-	if err := c.Handshake(); err != nil {
+	if c.earlyIO {
+		c.startHandshake(context.Background())
+		if err := c.waitReady(c.writeReady); err != nil {
+			return 0, err
+		}
+	} else if err := c.Handshake(); err != nil {
 		return 0, err
 	}
 	addr := c.RemoteAddr()
@@ -1040,6 +1088,29 @@ func (c *Conn) WriteDatagram(p []byte) (int, error) {
 		return 0, &net.OpError{Op: "write", Net: "dtls", Err: errors.New("missing destination address")}
 	}
 	c.writeMu.Lock()
+	if c.earlyIO {
+		if c.earlyWriteCipher != nil {
+			maximum := c.maxApplicationDatagramForCipher(c.earlyWriteCipher)
+			if len(p) > maximum {
+				c.writeMu.Unlock()
+				return 0, datagramTooLargeError(addr)
+			}
+			if uint64(len(p)) <= uint64(c.earlyWriteRemaining) {
+				n, err := c.writeEarlyDatagramLocked(p)
+				c.writeMu.Unlock()
+				return n, err
+			}
+		}
+		c.writeMu.Unlock()
+		if err := c.waitReady(c.applicationReady); err != nil {
+			return 0, err
+		}
+		c.writeMu.Lock()
+	}
+	if err := context.Cause(c.Context()); err != nil {
+		c.writeMu.Unlock()
+		return 0, err
+	}
 	if c.sendCipher == nil {
 		c.writeMu.Unlock()
 		return 0, &ProtocolError{"application write keys are not installed"}
@@ -1055,7 +1126,15 @@ func (c *Conn) WriteDatagram(p []byte) (int, error) {
 			c.writeMu.Unlock()
 			return 0, err
 		}
-		if err = c.writeRecord(wire); err != nil {
+		if c.earlyWriteGuard != nil && !c.earlyWriteGuard.allowSend(len(wire)) {
+			c.writeMu.Unlock()
+			if err = c.waitReady(c.handshakeDone); err != nil {
+				return 0, err
+			}
+			return c.WriteDatagram(p)
+		}
+		err = c.writeRecord(wire)
+		if err != nil {
 			if !c.config.IgnorePathMTU && isMessageTooLong(err) {
 				if _, reduced := c.reducePathMTU(); reduced {
 					continue
@@ -1064,7 +1143,12 @@ func (c *Conn) WriteDatagram(p []byte) (int, error) {
 			c.writeMu.Unlock()
 			return 0, err
 		}
-		startUpdate, err := c.maybeStartAutomaticKeyUpdateLocked()
+		var startUpdate bool
+		select {
+		case <-c.handshakeDone:
+			startUpdate, err = c.maybeStartAutomaticKeyUpdateLocked()
+		default:
+		}
 		c.writeMu.Unlock()
 		if err != nil {
 			return len(p), err
@@ -1110,50 +1194,6 @@ func (c *Conn) maybeStartAutomaticKeyUpdateLocked() (bool, error) {
 	return true, nil
 }
 
-// WriteEarlyData attempts to send p as one client 0-RTT Application Data
-// record and completes the handshake. It can be called at most once and only
-// on a client created with a usable cached session whose ticket permits early
-// data. A nil or empty p is a no-op.
-//
-// The method returns ErrEarlyDataUnavailable when no eligible early-data
-// session exists, and ErrEarlyDataRejected when the record was sent but the
-// server completed the handshake without accepting it. In both cases the
-// caller may use the established connection for 1-RTT data. Retrying p is an
-// application decision because 0-RTT data is replayable. Oversized data
-// returns [ErrDatagramTooLarge] without a partial record.
-// [Config.IgnorePathMTU] skips the library's PMTU check but not the DTLS
-// record-content or ticket limits; the transport may still reject the complete
-// record as too large.
-func (c *Conn) WriteEarlyData(p []byte) (int, error) {
-	if !c.isClient {
-		return 0, ErrEarlyDataUnavailable
-	}
-	if len(p) == 0 {
-		return 0, nil
-	}
-	c.earlyMu.Lock()
-	if c.earlySignaled {
-		c.earlyMu.Unlock()
-		return 0, ErrEarlyDataUnavailable
-	}
-	c.earlyPending = append(c.earlyPending, p...)
-	c.earlyMu.Unlock()
-	if err := c.Handshake(); err != nil {
-		return 0, err
-	}
-	c.earlyMu.Lock()
-	sent, rejected := c.earlySent, c.earlyRejected
-	c.earlySignaled = true
-	c.earlyMu.Unlock()
-	if !sent {
-		return 0, ErrEarlyDataUnavailable
-	}
-	if rejected {
-		return 0, ErrEarlyDataRejected
-	}
-	return len(p), nil
-}
-
 // Close sends close_notify when application sending keys are available,
 // clears retained traffic, resumption, and exporter secrets, stops background
 // protocol work, and closes the underlying transport. It does not wait for the
@@ -1161,14 +1201,19 @@ func (c *Conn) WriteEarlyData(p []byte) (int, error) {
 // immediately without sending an alert or waiting for callbacks; the handshake
 // clears its secrets when it exits and returns net.ErrClosed.
 func (c *Conn) Close() error {
+	c.initLifecycle()
 	c.readerMu.Lock()
 	if c.readerClosed {
 		c.readerMu.Unlock()
 		return net.ErrClosed
 	}
 	c.readerClosed = true
+	c.cancelLifetime(net.ErrClosed)
 	handshaking := c.handshaking
 	c.readerMu.Unlock()
+	if c.conn == nil {
+		return nil
+	}
 	if handshaking {
 		return c.conn.Close()
 	}
@@ -1216,12 +1261,15 @@ func (c *Conn) SetReadDeadline(t time.Time) error { return c.conn.SetReadDeadlin
 func (c *Conn) SetWriteDeadline(t time.Time) error { return c.conn.SetWriteDeadline(t) }
 
 // ConnectionState returns a snapshot of the current negotiated state. Before
-// handshake completion its fields have zero values. Post-handshake client
+// handshake completion EarlyData reports the offer state; an early client may
+// also expose authenticated server parameters while awaiting its final ACK.
+// Exporters remain unavailable until completion. Post-handshake client
 // authentication and Connection ID changes are reflected in later snapshots.
 func (c *Conn) ConnectionState() ConnectionState {
 	c.mu.RLock()
 	defer c.mu.RUnlock()
 	state := c.state
+	state.EarlyData = EarlyDataStatus(c.earlyStatus.Load())
 	state.LocalConnectionID = append([]byte(nil), state.LocalConnectionID...)
 	state.PeerConnectionID = append([]byte(nil), state.PeerConnectionID...)
 	state.OCSPResponse = append([]byte(nil), state.OCSPResponse...)
@@ -1309,6 +1357,11 @@ func (c *Conn) installApplicationKeys(suite *cipherSuite, clientSecret, serverSe
 	return c.installApplicationKeysAt(suite, clientSecret, serverSecret, 0)
 }
 func (c *Conn) installApplicationKeysAt(suite *cipherSuite, clientSecret, serverSecret []byte, messageSequence uint16) error {
+	c.writeMu.Lock()
+	defer c.writeMu.Unlock()
+	if c.sendingTraffic != nil {
+		return nil
+	}
 	var sendSecret, receiveSecret []byte
 	if c.isClient {
 		sendSecret, receiveSecret = clientSecret, serverSecret

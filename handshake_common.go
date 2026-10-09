@@ -98,9 +98,8 @@ func (c *Conn) recordRecordSizeLimit(local, peer uint16) {
 // markEarlyDataRejected records that any early data already sent will not be
 // accepted by the peer.
 func (c *Conn) markEarlyDataRejected() {
-	c.earlyMu.Lock()
-	c.earlyRejected = c.earlySent
-	c.earlyMu.Unlock()
+	c.stopEarlyWrites()
+	c.earlyStatus.Store(uint32(EarlyDataRejected))
 }
 
 // buildCertificateMessages encodes this endpoint's Certificate (compressed when
@@ -177,7 +176,9 @@ func (c *Conn) finishHandshake(done handshakeCompletion) error {
 	if err := done.schedule.deriveResumption(done.transcript.sumInto(digest[:0])); err != nil {
 		return err
 	}
+	c.writeMu.Lock()
 	c.postHandshakeTranscript = done.transcript.clone()
+	c.writeMu.Unlock()
 	if err := c.receiveEpochs.install(done.receiveCipher); err != nil {
 		return err
 	}
@@ -187,7 +188,9 @@ func (c *Conn) finishHandshake(done handshakeCompletion) error {
 		}
 	}
 	if done.finishedACKCipher != nil {
+		c.writeMu.Lock()
 		c.finishedACKCipher = done.finishedACKCipher
+		c.writeMu.Unlock()
 		c.finishedFlightStart = done.peerFlightStart
 		c.finishedMessageSequence = done.peerFlightEnd
 	}
@@ -198,7 +201,7 @@ func (c *Conn) finishHandshake(done handshakeCompletion) error {
 	exporter.externalPSK = done.externalPSK
 	c.mu.Lock()
 	c.state = ConnectionState{
-		Version: VersionDTLS13, HandshakeComplete: true, DidResume: done.resumed, ECHAccepted: done.echAccepted,
+		Version: VersionDTLS13, HandshakeComplete: !c.isClient || !c.earlyIO, DidResume: done.resumed, ECHAccepted: done.echAccepted,
 		CipherSuite: done.suite.id, NegotiatedProtocol: done.negotiated, ServerName: done.serverName,
 		PeerCertificates: done.peerCerts, VerifiedChains: done.chains,
 		PeerRawPublicKey:        append([]byte(nil), done.peerRawPublicKey...),

@@ -47,7 +47,8 @@ static SECStatus client_auth(void *arg, PRFileDesc *fd, CERTDistNames *names, CE
 int main(int argc, char **argv) {
     check(argc == 11, "role port mode cert.pem key.pem cert.der key.der dc.bin delegated.pem delegated.der");
     int server = strcmp(argv[1], "server") == 0; const char *mode = argv[3];
-    int early = strcmp(mode, "early") == 0 || strcmp(mode, "dc-early") == 0;
+    int earlyIO = strcmp(mode, "early-io") == 0;
+    int early = strcmp(mode, "early") == 0 || strcmp(mode, "dc-early") == 0 || earlyIO;
     check(NSS_NoDB_Init(NULL) == SECSuccess, "initialize NSS");
     PK11SlotInfo *slot = PK11_GetInternalKeySlot(); check(slot != NULL, "key slot");
     SECItem der = read_item(argv[6]);
@@ -110,7 +111,14 @@ int main(int argc, char **argv) {
         }
         check(SSL_ResetHandshake(fd, server) == SECSuccess, "reset handshake");
         if (early && round != 0) {
-            check(PR_Send(fd, "early", 5, 0, timeout) == 5, "write early data");
+            /* A blocking first send can finish the handshake before writing. */
+            PRSocketOptionData option = { .option = PR_SockOpt_Nonblocking, .value.non_blocking = PR_TRUE };
+            check(PR_SetSocketOption(fd, &option) == PR_SUCCESS, "nonblocking early write");
+            PRInt32 sent = PR_Send(fd, "early", 5, 0, timeout);
+            if (sent < 0 && PR_GetError() == PR_WOULD_BLOCK_ERROR) sent = PR_Send(fd, "early", 5, 0, timeout);
+            check(sent == 5, "write early data");
+            option.value.non_blocking = PR_FALSE;
+            check(PR_SetSocketOption(fd, &option) == PR_SUCCESS, "blocking handshake");
         }
         check(SSL_ForceHandshakeWithTimeout(fd, timeout) == SECSuccess, "handshake");
         SSLChannelInfo info = {0}; check(SSL_GetChannelInfo(fd, &info, sizeof(info)) == SECSuccess && info.protocolVersion == SSL_LIBRARY_VERSION_TLS_1_3, "negotiated version");
@@ -121,6 +129,11 @@ int main(int argc, char **argv) {
             check(responses != NULL && responses->len == 1 && SECITEM_ItemsAreEqual(&responses->items[0], &response), "received OCSP");
         }
         if (strcmp(mode, "keyupdate") == 0) check(SSL_KeyUpdate(fd, PR_TRUE) == SECSuccess, "KeyUpdate");
+        if (earlyIO && round != 0) {
+            unsigned char reply[64];
+            int n = PR_Recv(fd, reply, sizeof(reply), 0, timeout);
+            check(n == 11 && memcmp(reply, "early reply", 11) == 0, "early response");
+        }
         unsigned char exporter[32]; check(SSL_ExportKeyingMaterial(fd, "interop", 7, PR_FALSE, NULL, 0, exporter, sizeof(exporter)) == SECSuccess, "exporter");
         printf("VERSION=fefc CIPHER=%04x PEER_DC=%d EXPORTER=", info.cipherSuite, info.peerDelegCred);
         for (unsigned i = 0; i < sizeof(exporter); i++) printf("%02x", exporter[i]);

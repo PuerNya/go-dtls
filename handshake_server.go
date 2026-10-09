@@ -285,6 +285,9 @@ func (c *Conn) serverCookieExchange(s *serverHandshakeState) error {
 // replacement group when no offered key share is acceptable, and sends the
 // HelloRetryRequest in plaintext through the amplification guard.
 func (c *Conn) serverSendHelloRetryRequest(s *serverHandshakeState) error {
+	if s.ch.earlyData {
+		c.earlyStatus.Store(uint32(EarlyDataRejected))
+	}
 	if err := ensureCookieProtector(c.config); err != nil {
 		return err
 	}
@@ -662,7 +665,9 @@ func (c *Conn) serverSendFlight(s *serverHandshakeState) error {
 		return err
 	}
 	s.serverFlight = combineFlights(plain, protected)
+	c.writeMu.Lock()
 	c.sendCipher = s.serverCipher
+	c.writeMu.Unlock()
 	return c.writeFlight(s.serverFlightConn(c), s.serverFlight)
 }
 
@@ -730,7 +735,29 @@ func (s *serverHandshakeState) requestsClientCertificate(c *Conn) bool {
 // serverDeriveApplicationSecrets derives the application traffic secrets from
 // the transcript through the server Finished.
 func (c *Conn) serverDeriveApplicationSecrets(s *serverHandshakeState) error {
-	return s.schedule.deriveApplication(s.transcript.sumInto(s.transcriptDigest[:0]))
+	if err := s.schedule.deriveApplication(s.transcript.sumInto(s.transcriptDigest[:0])); err != nil {
+		return err
+	}
+	if s.ch.earlyData {
+		status := EarlyDataRejected
+		if c.earlyAccepted {
+			status = EarlyDataAccepted
+		}
+		c.earlyStatus.Store(uint32(status))
+	}
+	if c.earlyIO && !s.requestsClientCertificate(c) {
+		if err := c.installApplicationKeysAt(s.suite, s.schedule.clientApplicationTraffic, s.schedule.serverApplicationTraffic, s.serverSequence+1); err != nil {
+			return err
+		}
+		c.writeMu.Lock()
+		if !s.hrrUsed {
+			c.earlyWriteGuard = &s.amplification
+		}
+		c.writeMu.Unlock()
+		c.signalApplicationReady()
+		c.signalWriteReady()
+	}
+	return nil
 }
 
 // serverProcessClientFlight receives the client's final flight. The expected
@@ -892,6 +919,9 @@ func (c *Conn) serverSendFinalACK(s *serverHandshakeState) error {
 // bounds, publishes the connection state, and notifies a wrapping transport
 // that the handshake validated the peer.
 func (c *Conn) serverFinalize(s *serverHandshakeState) error {
+	c.writeMu.Lock()
+	c.earlyWriteGuard = nil
+	c.writeMu.Unlock()
 	if err := c.installApplicationKeysAt(s.suite, s.schedule.clientApplicationTraffic, s.schedule.serverApplicationTraffic, s.serverSequence+1); err != nil {
 		return err
 	}

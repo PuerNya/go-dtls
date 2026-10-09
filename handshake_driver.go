@@ -69,6 +69,7 @@ func (s *serverHandshakeStage) accept(typ uint8, resumed bool) error {
 }
 
 func (c *Conn) runHandshake(ctx context.Context) (result error) {
+	c.handshakeContext = ctx
 	c.localRecordSizeLimit = defaultRecordSizeLimit
 	c.peerRecordSizeLimit = defaultRecordSizeLimit
 	deadline := c.config.Time().Add(c.config.HandshakeTimeout)
@@ -81,8 +82,14 @@ func (c *Conn) runHandshake(ctx context.Context) (result error) {
 	c.handshakeDeadline = deadline
 	defer func() { _ = c.conn.SetDeadline(time.Time{}) }()
 	defer func() {
+		if ctx.Err() != nil {
+			result = errors.Join(result, ctx.Err())
+		}
 		if description, ok := outboundAlert(result); ok {
-			if c.sendCipher != nil {
+			c.writeMu.Lock()
+			protected := c.sendCipher != nil
+			c.writeMu.Unlock()
+			if protected {
 				c.sendFatalAlert(description)
 			} else {
 				if _, ok := errors.AsType[*localAlertError](result); ok {
@@ -90,13 +97,15 @@ func (c *Conn) runHandshake(ctx context.Context) (result error) {
 				}
 			}
 		}
-		if result != nil && !errors.Is(result, io.EOF) {
-			c.clearTrafficSecrets(result)
-		}
 	}()
 	done := make(chan struct{})
-	defer close(done)
+	watcherDone := make(chan struct{})
+	defer func() {
+		close(done)
+		<-watcherDone
+	}()
 	go func() {
+		defer close(watcherDone)
 		select {
 		case <-ctx.Done():
 			_ = c.conn.SetDeadline(time.Now())
@@ -195,6 +204,9 @@ func (c *Conn) receiveHandshakeWithRetransmitOnEarly(conn net.Conn, inbox *hands
 	}
 	timeoutCount := 0
 	for {
+		if c.handshakeContext != nil && c.handshakeContext.Err() != nil {
+			return completedHandshakeBatch{}, c.handshakeContext.Err()
+		}
 		next := c.config.Time().Add(interval)
 		if next.After(c.handshakeDeadline) {
 			next = c.handshakeDeadline
@@ -213,6 +225,9 @@ func (c *Conn) receiveHandshakeWithRetransmitOnEarly(conn net.Conn, inbox *hands
 		if err == nil {
 			_ = conn.SetReadDeadline(c.handshakeDeadline)
 			return messages, nil
+		}
+		if c.handshakeContext != nil && c.handshakeContext.Err() != nil {
+			return completedHandshakeBatch{}, err
 		}
 		networkErr, ok := errors.AsType[net.Error](err)
 		if !ok || !networkErr.Timeout() || !c.config.Time().Before(c.handshakeDeadline) {
@@ -556,6 +571,29 @@ func receiveACKRecordWithPending(conn net.Conn, dst []recordNumber, pending *[]b
 	}
 }
 
+// The client has authenticated the server and sent Finished, but still owns
+// the reader until its final flight is acknowledged. Use the normal dispatcher
+// so tickets, KeyUpdates and application records share one set of replay windows.
+func (c *Conn) receiveAuthenticatedACK() ([]recordNumber, error) {
+	buffer := acquireDatagramBuffer()
+	defer releaseDatagramBuffer(buffer)
+	datagram, err := readDatagramWithPending(c.conn, buffer[:], &c.pendingDatagram)
+	if err != nil {
+		return nil, err
+	}
+	var numbers []recordNumber
+	err = c.dispatchDatagramWithACK(datagram, c.conn.RemoteAddr(), func(ack []recordNumber) {
+		numbers = append(numbers, ack...)
+	})
+	c.inputMu.Lock()
+	closed := c.peerReadClosed
+	c.inputMu.Unlock()
+	if err == nil && closed {
+		err = io.EOF
+	}
+	return numbers, err
+}
+
 func (c *Conn) receiveACKWithRetransmit(outgoing *flight, ciphers ...*recordCipher) ([]recordNumber, error) {
 	interval := c.flightInterval()
 	if interval <= 0 {
@@ -578,6 +616,9 @@ func (c *Conn) receiveACKWithRetransmit(outgoing *flight, ciphers ...*recordCiph
 	}
 	timeoutCount := 0
 	for {
+		if c.handshakeContext != nil && c.handshakeContext.Err() != nil {
+			return nil, c.handshakeContext.Err()
+		}
 		next := c.config.Time().Add(interval)
 		if next.After(c.handshakeDeadline) {
 			next = c.handshakeDeadline
@@ -585,7 +626,13 @@ func (c *Conn) receiveACKWithRetransmit(outgoing *flight, ciphers ...*recordCiph
 		if err := c.conn.SetReadDeadline(next); err != nil {
 			return nil, err
 		}
-		numbers, err := receiveACKRecordWithPending(c.conn, ackScratch[:0], &c.pendingDatagram, deferRecord, ciphers...)
+		var numbers []recordNumber
+		var err error
+		if c.earlyIO && c.resumptionSuite != nil {
+			numbers, err = c.receiveAuthenticatedACK()
+		} else {
+			numbers, err = receiveACKRecordWithPending(c.conn, ackScratch[:0], &c.pendingDatagram, deferRecord, ciphers...)
+		}
 		if err == nil {
 			acknowledged = append(acknowledged, numbers...)
 			outgoing.ack(numbers)
@@ -593,8 +640,10 @@ func (c *Conn) receiveACKWithRetransmit(outgoing *flight, ciphers ...*recordCiph
 				c.observeFlightRTT(outgoing)
 				return canonicalRecordNumbers(acknowledged), nil
 			}
-			if err = c.retransmitPartialFlight(c.conn, outgoing); err != nil {
-				return nil, err
+			if len(numbers) != 0 {
+				if err = c.retransmitPartialFlight(c.conn, outgoing); err != nil {
+					return nil, err
+				}
 			}
 			continue
 		}

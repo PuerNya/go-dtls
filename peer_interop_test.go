@@ -40,8 +40,8 @@ func TestInteropDTLS13Peers(t *testing.T) {
 				if peer == "OPENSSL" && role == "server" {
 					roleName = "server-ACKLoss"
 				}
-				for _, mode := range []string{"basic", "resume", "early", "sha384", "chacha", "p256", "p384", "hrr", "fragmented", "mutual", "pha", "ocsp", "alpn", "grease", "compression-fallback", "cached-fallback", "keyupdate", "dc", "dc-resume", "dc-early", "dc-fragmented", "dc-sha384", "dc-fallback", "dc-bad-signature", "dc-expired"} {
-					if strings.HasSuffix(mode, "early") && (peer == "BORINGSSL" || role == "server") {
+				for _, mode := range []string{"basic", "resume", "early", "early-io", "sha384", "chacha", "p256", "p384", "hrr", "fragmented", "mutual", "pha", "ocsp", "alpn", "grease", "compression-fallback", "cached-fallback", "keyupdate", "dc", "dc-resume", "dc-early", "dc-fragmented", "dc-sha384", "dc-fallback", "dc-bad-signature", "dc-expired"} {
+					if (strings.HasSuffix(mode, "early") || mode == "early-io") && (peer == "BORINGSSL" || role == "server") {
 						continue
 					}
 					if mode == "pha" && peer != "OPENSSL" {
@@ -190,7 +190,8 @@ func testDTLS13Peer(t *testing.T, peer, binary, role, mode string) {
 		config.EnableCachedInformation, config.CachedInformationCache = true, NewCachedInformationCache(1)
 	}
 	rounds := 1
-	early := strings.HasSuffix(mode, "early")
+	earlyIO := mode == "early-io"
+	early := strings.HasSuffix(mode, "early") || earlyIO
 	if mode == "resume" || mode == "dc-resume" || early {
 		rounds = 2
 		config.SessionTicketsDisabled = false
@@ -199,6 +200,7 @@ func testDTLS13Peer(t *testing.T, peer, binary, role, mode string) {
 	}
 	if early {
 		config.MaxEarlyData, config.AllowEarlyDataWithoutCookie = 256, true
+		config.EnableEarlyDataIO = earlyIO
 	}
 	useDC := strings.HasPrefix(mode, "dc") && mode != "dc-fallback"
 	if goServer && useDC {
@@ -301,7 +303,11 @@ func testDTLS13Peer(t *testing.T, peer, binary, role, mode string) {
 			if e != nil {
 				t.Fatal(e)
 			}
-			conn = Client(udp, config)
+			if early && round != 0 {
+				conn = ClientEarly(udp, config)
+			} else {
+				conn = Client(udp, config)
+			}
 		}
 		defer conn.Close()
 		if mode == "hrr" || peer == "OPENSSL" && !goServer {
@@ -325,8 +331,10 @@ func testDTLS13Peer(t *testing.T, peer, binary, role, mode string) {
 				return false, nil
 			}}
 		}
-		if early && round != 0 && !goServer {
-			if n, err := conn.WriteEarlyData([]byte("early")); err != nil || n != 5 {
+		if earlyIO && round != 0 {
+			exchangeEarlyBeforeFinished(t, conn, goServer)
+		} else if early && round != 0 && !goServer {
+			if n, err := conn.WriteDatagram([]byte("early")); err != nil || n != 5 {
 				t.Fatalf("early write: %d %v\n%s", n, err, output.String())
 			}
 		}
@@ -337,6 +345,15 @@ func testDTLS13Peer(t *testing.T, peer, binary, role, mode string) {
 			if mode == "initial-ACK-rejection" {
 				if errors.Is(err, AlertError(alertUnexpectedMessage)) {
 					return
+				}
+				// UDP can report the peer's exit before delivering its fatal alert.
+				select {
+				case peerErr := <-done:
+					done = nil
+					if peerErr != nil && strings.Contains(output.String(), "ossl_statem_server_read_transition:unexpected message") {
+						return
+					}
+				case <-ctx.Done():
 				}
 			}
 			if !goServer && (mode == "dc-bad-signature" || mode == "dc-expired") {
@@ -359,6 +376,9 @@ func testDTLS13Peer(t *testing.T, peer, binary, role, mode string) {
 			t.Fatal("accepted invalid peer DC")
 		}
 		state := conn.ConnectionState()
+		if early && round != 0 && !goServer && state.EarlyData != EarlyDataAccepted {
+			t.Fatalf("early data status = %v\n%s", state.EarlyData, output.String())
+		}
 		if state.DidResume != (round != 0) {
 			t.Fatal("session was not resumed")
 		}
@@ -390,8 +410,8 @@ func testDTLS13Peer(t *testing.T, peer, binary, role, mode string) {
 			}
 		}
 		var data [64]byte
-		if early && round != 0 && goServer {
-			if n, _, err := conn.ReadDatagram(data[:]); err != nil || string(data[:n]) != "early" || !conn.earlyAccepted {
+		if early && !earlyIO && round != 0 && goServer {
+			if n, info, err := conn.ReadDatagram(data[:]); err != nil || string(data[:n]) != "early" || !info.EarlyData || !conn.earlyAccepted {
 				t.Fatalf("early read: %d %v\n%s", n, err, output.String())
 			}
 		}

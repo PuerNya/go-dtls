@@ -412,19 +412,20 @@ func TestDelegatedCredentialResumptionAndPHA(t *testing.T) {
 		t.Fatal("session clone aliases DC")
 	}
 	left, right := memoryDatagramPair()
-	client, server := Client(left, cc), Server(right, sc)
+	client, server := ClientEarly(left, cc), Server(right, sc)
 	t.Cleanup(func() { _ = client.Close(); _ = server.Close() })
 	done := make(chan error, 1)
 	go func() { done <- server.Handshake() }()
-	if n, err := client.WriteEarlyData([]byte("early DC")); err != nil || n != 8 {
-		t.Fatalf("early data write: %d %v", n, err)
+	writeEarlyTestDatagram(t, client, []byte("early DC"))
+	if err := client.Handshake(); err != nil {
+		t.Fatal(err)
 	}
 	if err := <-done; err != nil {
 		t.Fatal(err)
 	}
 	_ = server.SetReadDeadline(time.Now().Add(time.Second))
 	var data [32]byte
-	if n, _, err := server.ReadDatagram(data[:]); err != nil || string(data[:n]) != "early DC" {
+	if n, info, err := server.ReadDatagram(data[:]); err != nil || !info.EarlyData || string(data[:n]) != "early DC" {
 		t.Fatalf("early data read: %d %v", n, err)
 	}
 	if !client.ConnectionState().DidResume || !server.ConnectionState().DidResume {

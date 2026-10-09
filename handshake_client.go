@@ -17,6 +17,7 @@ import (
 // has no back-pointer to *Conn: steps are *Conn methods that receive the state
 // explicitly, matching postHandshakeAuthState and returnRoutabilityState.
 type clientHandshakeState struct {
+	finalized bool
 	// transcriptDigest is scratch space for every transcript sum.
 	transcriptDigest [maxSupportedHashSize]byte
 
@@ -28,7 +29,6 @@ type clientHandshakeState struct {
 	session      *ClientSessionState
 	sessionSuite *cipherSuite
 	pskOffers    []clientPSKOffer
-	queuedEarly  []byte
 
 	// clientMarshalHello
 	helloBody []byte
@@ -116,7 +116,7 @@ func (c *Conn) clientHandshake() error {
 
 // clientPrepareHello generates the ephemeral key and key shares, builds the
 // ClientHello from the configuration, selects the client session and PSK
-// offers, and takes the queued early data.
+// offers.
 func (c *Conn) clientPrepareHello(s *clientHandshakeState) error {
 	key, err := generateEphemeralKey(c.config.CurvePreferences[0], c.config.Rand)
 	if err != nil {
@@ -182,12 +182,6 @@ func (c *Conn) clientPrepareHello(s *clientHandshakeState) error {
 		hello.pskIdentity = append([]byte(nil), s.session.ticket...)
 		hello.obfuscatedAge = obfuscatedTicketAge(s.session, c.config.Time())
 	}
-	c.earlyMu.Lock()
-	s.queuedEarly = append([]byte(nil), c.earlyPending...)
-	if len(s.queuedEarly) > 0 && (s.session == nil || s.session.maxEarlyData == 0) {
-		c.earlyPending = nil
-	}
-	c.earlyMu.Unlock()
 	if s.session != nil {
 		if slices.Contains(hello.cipherSuites, s.sessionSuite.id) && hello.cipherSuites[0] != s.sessionSuite.id {
 			prioritized := []uint16{s.sessionSuite.id}
@@ -198,7 +192,7 @@ func (c *Conn) clientPrepareHello(s *clientHandshakeState) error {
 			}
 			hello.cipherSuites = prioritized
 		}
-		if len(s.queuedEarly) > 0 && s.session.maxEarlyData > 0 {
+		if c.earlyIO && s.session.maxEarlyData > 0 && slices.Contains(hello.cipherSuites, s.sessionSuite.id) {
 			hello.earlyData = true
 		}
 	}
@@ -269,14 +263,13 @@ func (c *Conn) clientSendHello(s *clientHandshakeState) error {
 	return nil
 }
 
-// clientSendEarlyData sends the queued 0-RTT datagram under epoch 1 when the
-// ClientHello advertised early data. Epoch 1 is derived from the PSK and the
-// complete first ClientHello, including its binder, and can be sent before
-// ServerHello arrives.
+// clientSendEarlyData installs epoch-1 keys when ClientHello advertised early
+// data. The caller can then send datagrams before ServerHello arrives.
 func (c *Conn) clientSendEarlyData(s *clientHandshakeState) error {
 	if !s.hello.earlyData {
 		return nil
 	}
+	c.earlyStatus.Store(uint32(EarlyDataPending))
 	earlyHelloBody := s.helloBody
 	if s.ech != nil {
 		earlyHelloBody = s.ech.innerBody
@@ -285,40 +278,18 @@ func (c *Conn) clientSendEarlyData(s *clientHandshakeState) error {
 	if err != nil {
 		return err
 	}
-	if len(s.queuedEarly) > int(s.session.maxEarlyData) {
-		c.earlyMu.Lock()
-		c.earlyPending = nil
-		c.earlyRejected = true
-		c.earlyMu.Unlock()
-		return nil
-	}
 	c.writeMu.Lock()
 	maxRecord := c.maxApplicationDatagramForCipher(earlyCipher)
 	if maxRecord < 1 {
 		c.writeMu.Unlock()
 		return &ConfigError{"MTU is too small for early application data"}
 	}
-	if len(s.queuedEarly) > maxRecord {
-		c.writeMu.Unlock()
-		c.earlyMu.Lock()
-		c.earlyPending = nil
-		c.earlyMu.Unlock()
-		return datagramTooLargeError(c.conn.RemoteAddr())
-	}
-	wire, sealErr := earlyCipher.seal(recordTypeApplicationData, s.queuedEarly)
-	if sealErr != nil {
-		c.writeMu.Unlock()
-		return sealErr
-	}
-	if writeErr := c.writeRecord(wire); writeErr != nil {
-		c.writeMu.Unlock()
-		return writeErr
-	}
+	c.earlyWriteCipher = earlyCipher
+	c.earlyWriteRemaining = s.session.maxEarlyData
 	c.writeMu.Unlock()
-	c.earlyMu.Lock()
-	c.earlyPending = nil
-	c.earlySent = true
-	c.earlyMu.Unlock()
+	if c.earlyIO {
+		c.signalWriteReady()
+	}
 	return nil
 }
 
@@ -335,6 +306,7 @@ func (c *Conn) clientReceiveServerHello(s *clientHandshakeState) error {
 	}
 	s.messages = messages
 	s.serverHelloBody = messages.at(0).body
+	c.stopEarlyWrites()
 	return nil
 }
 
@@ -613,7 +585,9 @@ func (c *Conn) clientDeriveHandshakeKeys(s *clientHandshakeState) error {
 	if err != nil {
 		return err
 	}
+	c.writeMu.Lock()
 	c.sendCipher = s.sendCipher
+	c.writeMu.Unlock()
 	s.inbox = newHandshakeInbox(s.serverHandshakeStart, c.config.MaxHandshakeMessage, c.config.MaxBufferedHandshakeMessages, c.config.MaxBufferedHandshakeBytes)
 	return nil
 }
@@ -838,6 +812,9 @@ func (c *Conn) clientServerFinished(s *clientHandshakeState, message completedHa
 // clientDeriveApplicationSecrets derives the application traffic secrets from
 // the transcript through the server Finished.
 func (c *Conn) clientDeriveApplicationSecrets(s *clientHandshakeState) error {
+	if c.earlyAccepted {
+		c.earlyStatus.Store(uint32(EarlyDataAccepted))
+	}
 	return s.schedule.deriveApplication(s.transcript.sumInto(s.transcriptDigest[:0]))
 }
 
@@ -909,14 +886,26 @@ func (c *Conn) clientSendAuthAndFinished(s *clientHandshakeState) error {
 // client's final flight, accepting the ACK at either the handshake epoch or the
 // server's application epoch, then installs the application keys.
 func (c *Conn) clientAwaitFinalACK(s *clientHandshakeState) error {
-	applicationACKCipher, err := newRecordCipher(s.suite, s.schedule.serverApplicationTraffic, 3, c.config.ReplayWindow)
-	if err != nil {
-		return err
-	}
-	applicationACKCipher.setPlaintextLimit(c.localRecordSizeLimit)
-	if c.connectionIDNegotiated {
-		if err = applicationACKCipher.setConnectionID(c.receiveConnectionID); err != nil {
+	var applicationACKCipher *recordCipher
+	if c.earlyIO && (s.ech == nil || !s.ech.rejected) {
+		if err := c.installApplicationKeysAt(s.suite, s.schedule.clientApplicationTraffic, s.schedule.serverApplicationTraffic, s.clientFinishedSeq+1); err != nil {
 			return err
+		}
+		if err := c.clientFinalize(s); err != nil {
+			return err
+		}
+		c.signalApplicationReady()
+	} else {
+		var err error
+		applicationACKCipher, err = newRecordCipher(s.suite, s.schedule.serverApplicationTraffic, 3, c.config.ReplayWindow)
+		if err != nil {
+			return err
+		}
+		applicationACKCipher.setPlaintextLimit(c.localRecordSizeLimit)
+		if c.connectionIDNegotiated {
+			if err = applicationACKCipher.setConnectionID(c.receiveConnectionID); err != nil {
+				return err
+			}
 		}
 	}
 	acknowledged, err := c.receiveACKWithRetransmit(s.out, s.receiveCipher, applicationACKCipher)
@@ -938,6 +927,9 @@ func (c *Conn) clientAwaitFinalACK(s *clientHandshakeState) error {
 // resumption secret, installs the receive epoch, publishes the connection
 // state, and discards the unused session group.
 func (c *Conn) clientFinalize(s *clientHandshakeState) error {
+	if s.finalized {
+		return nil
+	}
 	if s.ech != nil && s.ech.rejected {
 		return alertError(alertECHRequired, &ECHRejectionError{RetryConfigList: append([]byte(nil), s.ech.retryConfigs...)})
 	}
@@ -978,5 +970,6 @@ func (c *Conn) clientFinalize(s *clientHandshakeState) error {
 	if s.cachedInfo != nil && !s.usingPSK {
 		c.config.CachedInformationCache.put(clientSessionCacheKey(c.config, c.conn), s.cachedInfo.received)
 	}
+	s.finalized = true
 	return nil
 }

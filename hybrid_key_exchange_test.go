@@ -160,13 +160,14 @@ func TestHybridKeyExchangeMutualTLSResumptionAndEarlyData(t *testing.T) {
 	left, right := memoryDatagramPair()
 	defer left.Close()
 	defer right.Close()
-	client := Client(left, resumingConfig)
+	client := ClientEarly(left, resumingConfig)
 	server := Server(right, serverConfig)
 	serverDone := make(chan error, 1)
 	go func() { serverDone <- server.Handshake() }()
 	payload := []byte("hybrid mTLS early data")
-	if n, err := client.WriteEarlyData(payload); err != nil || n != len(payload) {
-		t.Fatalf("WriteEarlyData = %d, %v", n, err)
+	writeEarlyTestDatagram(t, client, payload)
+	if err := client.Handshake(); err != nil {
+		t.Fatal(err)
 	}
 	if err := <-serverDone; err != nil {
 		t.Fatal(err)
@@ -175,8 +176,8 @@ func TestHybridKeyExchangeMutualTLSResumptionAndEarlyData(t *testing.T) {
 		t.Fatal("hybrid mTLS connection did not restore the authenticated session")
 	}
 	buffer := make([]byte, len(payload))
-	n, _, err := server.ReadDatagram(buffer)
-	if err != nil || !bytes.Equal(buffer[:n], payload) {
+	n, info, err := server.ReadDatagram(buffer)
+	if err != nil || !info.EarlyData || !bytes.Equal(buffer[:n], payload) {
 		t.Fatalf("early data = %q, %v", buffer[:n], err)
 	}
 }

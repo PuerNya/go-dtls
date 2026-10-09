@@ -14,6 +14,7 @@ typedef int socklen_t;
 #endif
 #include <wolfssl/options.h>
 #include <wolfssl/ssl.h>
+#include <wolfssl/error-ssl.h>
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
@@ -41,7 +42,7 @@ int main(int argc, char** argv)
     struct sockaddr_in address;
     unsigned char data[8192];
     int server, result, status = 1, port, resume, early, pha, ech, serverOnly;
-    int rawLocal, rawPeer, round, step, count;
+    int rawLocal, rawPeer, round, step, count, earlyIO;
     char serverType, clientType;
     const char* mode;
 #ifdef _WIN32
@@ -59,7 +60,8 @@ int main(int argc, char** argv)
     server = strcmp(argv[1], "server") == 0;
     port = atoi(argv[2]);
     mode = argv[6];
-    early = strcmp(mode, "early") == 0;
+    earlyIO = strcmp(mode, "early-io") == 0;
+    early = strcmp(mode, "early") == 0 || earlyIO;
     pha = strcmp(mode, "pha") == 0 || strcmp(mode, "resume-pha") == 0;
     resume = early || strcmp(mode, "resume") == 0 || strcmp(mode, "resume-pha") == 0;
     ech = strcmp(mode, "ech") == 0;
@@ -109,6 +111,7 @@ int main(int argc, char** argv)
         }
     }
     for (round = 0; round < (resume ? 2 : 1); round++) {
+        int earlyReplyRead = 0;
         fd = socket(AF_INET, SOCK_DGRAM, 0);
         CHECK(fd != INVALID_SOCKET);
         CHECK(setsockopt(fd, SOL_SOCKET, SO_RCVTIMEO, (const char*)&timeout, sizeof(timeout)) == 0);
@@ -155,12 +158,24 @@ int main(int argc, char** argv)
             if (server) {
                 CHECK(wolfSSL_read_early_data(ssl, data, sizeof(data), &count) > 0);
                 CHECK(count == 5 && memcmp(data, "early", 5) == 0);
+                if (earlyIO) CHECK(wolfSSL_write(ssl, "early reply", 11) == 11);
             }
             else CHECK(wolfSSL_write_early_data(ssl, "early", 5, &count) > 0 && count == 5);
         }
         result = server ? wolfSSL_accept(ssl) : wolfSSL_connect(ssl);
+        if (earlyIO && round && !server && result != WOLFSSL_SUCCESS &&
+                wolfSSL_get_error(ssl, result) == APP_DATA_READY) {
+            CHECK(wolfSSL_read(ssl, data, sizeof(data)) == 11);
+            CHECK(memcmp(data, "early reply", 11) == 0);
+            earlyReplyRead = 1;
+            result = wolfSSL_connect(ssl);
+        }
         if (ech) fprintf(stderr, "ECH status=%d\n", wolfSSL_GetEchStatus(ssl));
         CHECK(result == WOLFSSL_SUCCESS);
+        if (earlyIO && round && !server && !earlyReplyRead) {
+            CHECK(wolfSSL_read(ssl, data, sizeof(data)) == 11);
+            CHECK(memcmp(data, "early reply", 11) == 0);
+        }
         CHECK(wolfSSL_session_reused(ssl) == (round != 0));
         if (ech) CHECK(wolfSSL_GetEchStatus(ssl) == WOLFSSL_ECH_STATUS_ACCEPTED);
         if (strcmp(mode, "keyupdate") == 0 && !server) CHECK(wolfSSL_update_keys(ssl) == WOLFSSL_SUCCESS);

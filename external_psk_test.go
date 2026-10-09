@@ -7,7 +7,6 @@ import (
 	"crypto/sha256"
 	"crypto/tls"
 	"encoding/binary"
-	"errors"
 	"testing"
 	"time"
 )
@@ -345,26 +344,27 @@ func TestExternalPSKChangeInvalidatesClientTicket(t *testing.T) {
 	}
 }
 
-func TestExternalPSKEarlyDataUnavailable(t *testing.T) {
+func TestExternalPSKEarlyWriteFallsBack(t *testing.T) {
 	psk, _ := NewDirectExternalPSK([]byte("no-early-data"), bytes.Repeat([]byte{0xdb}, 32), crypto.SHA256)
 	left, right := memoryDatagramPair()
-	client := Client(left, &Config{ExternalPSKs: []*ExternalPSK{psk}, SessionTicketsDisabled: true})
+	client := ClientEarly(left, &Config{ExternalPSKs: []*ExternalPSK{psk}, SessionTicketsDisabled: true})
 	server := Server(right, &Config{ExternalPSKs: []*ExternalPSK{psk}, SessionTicketsDisabled: true})
 	defer client.Close()
 	defer server.Close()
 	serverDone := make(chan error, 1)
 	go func() { serverDone <- server.Handshake() }()
-	if _, err := client.WriteEarlyData([]byte("must-not-send")); !errors.Is(err, ErrEarlyDataUnavailable) {
-		t.Fatalf("WriteEarlyData returned %v", err)
+	if n, err := client.WriteDatagram([]byte("fallback")); err != nil || n != len("fallback") {
+		t.Fatalf("WriteDatagram = %d, %v", n, err)
 	}
 	if err := <-serverDone; err != nil {
 		t.Fatal(err)
 	}
-	client.earlyMu.Lock()
-	pending := len(client.earlyPending)
-	client.earlyMu.Unlock()
-	if pending != 0 {
-		t.Fatal("unavailable external early data remained buffered")
+	if client.ConnectionState().EarlyData != EarlyDataNotAttempted {
+		t.Fatal("external PSK unexpectedly offered early data")
+	}
+	var payload [16]byte
+	if n, info, err := server.ReadDatagram(payload[:]); err != nil || string(payload[:n]) != "fallback" || info.EarlyData {
+		t.Fatalf("fallback datagram = %q, %+v, %v", payload[:n], info, err)
 	}
 }
 

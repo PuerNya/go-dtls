@@ -496,11 +496,12 @@ func TestRawPublicKeyECHAndEarlyData(t *testing.T) {
 	serverConfig.AllowEarlyDataWithoutCookie = true
 	_ = issueEarlyDataTicket(t, clientConfig, serverConfig)
 	left, right := memoryDatagramPair()
-	client, server := Client(left, clientConfig), Server(right, serverConfig)
+	client, server := ClientEarly(left, clientConfig), Server(right, serverConfig)
 	t.Cleanup(func() { _ = client.Close(); _ = server.Close() })
 	done := make(chan error, 1)
 	go func() { done <- server.Handshake() }()
-	if _, err := client.WriteEarlyData([]byte("early RPK")); err != nil {
+	writeEarlyTestDatagram(t, client, []byte("early RPK"))
+	if err := client.Handshake(); err != nil {
 		t.Fatal(err)
 	}
 	if err := <-done; err != nil {
@@ -510,7 +511,7 @@ func TestRawPublicKeyECHAndEarlyData(t *testing.T) {
 		t.Fatal("RPK ECH resumption not negotiated")
 	}
 	var buffer [32]byte
-	if n, _, err := server.ReadDatagram(buffer[:]); err != nil || string(buffer[:n]) != "early RPK" {
+	if n, info, err := server.ReadDatagram(buffer[:]); err != nil || !info.EarlyData || string(buffer[:n]) != "early RPK" {
 		t.Fatalf("early data: %d %v", n, err)
 	}
 	requireRawPublicKey(t, client, rawPublicKeyDER(t, serverConfig.RawPublicKeySigner))

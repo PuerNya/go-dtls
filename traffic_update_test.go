@@ -197,14 +197,29 @@ func TestReceivingTrafficBoundsRetainedEpochs(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
+	handshakeCipher, err := newRecordCipher(suite, secret, 2, 64)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err = receiver.epochs.install(handshakeCipher); err != nil {
+		t.Fatal(err)
+	}
 	for sequence := uint16(10); sequence < 30; sequence++ {
 		if _, updated, updateErr := receiver.processKeyUpdate(sequence, []byte{0}); updateErr != nil || !updated {
 			t.Fatalf("sequence %d updated=%v err=%v", sequence, updated, updateErr)
 		}
 		receiver.epochs.mu.RLock()
 		retained := len(receiver.epochs.ciphers)
+		_, hasHandshake := receiver.epochs.ciphers[2]
 		receiver.epochs.mu.RUnlock()
-		if retained > 2 {
+		if hasHandshake != (receiver.current < 6) {
+			t.Fatalf("handshake keys retained = %v at epoch %d", hasHandshake, receiver.current)
+		}
+		maximum := 2
+		if hasHandshake {
+			maximum++
+		}
+		if retained > maximum {
 			t.Fatalf("retained %d epoch ciphers after sequence %d", retained, sequence)
 		}
 		if len(receiver.secrets) > 2 {

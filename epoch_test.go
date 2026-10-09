@@ -54,7 +54,7 @@ func TestEpochSetDiscardAndMonotonicCurrent(t *testing.T) {
 	if err := epochs.setCurrent(2); err == nil {
 		t.Fatal("moved epoch backwards")
 	}
-	epochs.discardBefore(3)
+	epochs.discardBefore(3, 0)
 	if _, err := epochs.selectCipher(byte(unifiedHeaderFixed | 2)); err == nil {
 		t.Fatal("selected discarded epoch")
 	}

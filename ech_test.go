@@ -494,13 +494,14 @@ func TestECHResumptionAndEarlyData(t *testing.T) {
 	left, right := memoryDatagramPair()
 	defer left.Close()
 	defer right.Close()
-	client := Client(left, clientConfig)
+	client := ClientEarly(left, clientConfig)
 	server := Server(right, serverConfig)
 	serverDone := make(chan error, 1)
 	go func() { serverDone <- server.Handshake() }()
 	payload := []byte("ECH early data")
-	if n, err := client.WriteEarlyData(payload); err != nil || n != len(payload) {
-		t.Fatalf("WriteEarlyData = %d, %v", n, err)
+	writeEarlyTestDatagram(t, client, payload)
+	if err := client.Handshake(); err != nil {
+		t.Fatal(err)
 	}
 	if err := <-serverDone; err != nil {
 		t.Fatal(err)
@@ -510,8 +511,8 @@ func TestECHResumptionAndEarlyData(t *testing.T) {
 		t.Fatalf("ECH resumption state: client=%#v server=%#v", client.ConnectionState(), server.ConnectionState())
 	}
 	buffer := make([]byte, len(payload))
-	n, _, err := server.ReadDatagram(buffer)
-	if err != nil || !bytes.Equal(buffer[:n], payload) {
+	n, info, err := server.ReadDatagram(buffer)
+	if err != nil || !info.EarlyData || !bytes.Equal(buffer[:n], payload) {
 		t.Fatalf("early data = %q, %v", buffer[:n], err)
 	}
 }

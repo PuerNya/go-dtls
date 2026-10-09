@@ -170,6 +170,9 @@ func serve(conn *dtls13.Conn) {
 | API | 用途 |
 | --- | --- |
 | `Dial` / `DialWithDialer` | 创建 UDP 客户端连接并完成握手；`DialWithDialer` 可配置本地地址和拨号超时 |
+| `ClientEarly` | 创建允许多次 0-RTT 写入的惰性客户端；构造时不进行 I/O |
+| `DialEarly` | 启动握手，具备 early 写入条件后返回；无可用 ticket 时等待握手完成 |
+| `HandshakeComplete` / `Context` | 被动通知握手成功与连接结束；均不启动握手 |
 | `Listen` | 创建并拥有一个 UDP listener |
 | `NewListener` | 在已有 `net.PacketConn` 上创建 DTLS listener；配置错误由 `Accept` 返回 |
 | `Listener.Accept` | 接受一个新 association，返回 `*Conn` |
@@ -201,7 +204,7 @@ if _, err := conn.WriteDatagram(payload); errors.Is(err, dtls13.ErrDatagramTooLa
 ```
 
 需要由应用主动探测 PMTU 或明确依赖 IP 分片时，可以配置
-`IgnorePathMTU: true`。此时 `WriteDatagram` 和 `WriteEarlyData` 跳过库内
+`IgnorePathMTU: true`。此时 `WriteDatagram` 跳过库内
 PMTU payload 检查，把单个完整 DTLS record 直接交给底层 transport；握手、
 ACK 和 post-handshake flight 仍按 PMTU 分片、重传和退避。该选项不会放宽
 `2^14` 字节 record content 上限或协商后的 `record_size_limit`，底层仍可能分片、丢包或返回
@@ -217,8 +220,6 @@ ACK 和 post-handshake flight 仍按 PMTU 分片、重传和退避。该选项�
 | `*ProtocolError` | 收到或生成了不符合协议状态/格式的内容 |
 | `AlertError` | 对端返回 fatal TLS alert；可用 `errors.As` 获取 alert description 数值 |
 | `ErrDatagramTooLarge` | 应用 datagram 超过当前 PMTU 或 record 上限；开启 `IgnorePathMTU` 后底层仍可能返回；可用 `errors.Is` 判断 |
-| `ErrEarlyDataUnavailable` | 没有可用的 early-data ticket，或该连接不能发送 0-RTT |
-| `ErrEarlyDataRejected` | 握手完成，但对端因 HRR、重放或策略拒绝了已发送的 0-RTT |
 | `*ECHRejectionError` | 服务端经过 `public_name` 连接认证后拒绝 ECH；可能携带仅限同一配置来源和 endpoint 使用的 `RetryConfigList` |
 | `io.EOF` | 对端发送了合法 `close_notify`，读取方向已关闭 |
 
@@ -230,7 +231,7 @@ deadline、socket 关闭和底层 UDP 错误沿 Go `net` 错误模型返回；�
 | --- | --- | --- |
 | 外部 PSK / importer | `ImportExternalPSK`、`NewDirectExternalPSK`、`ExternalPSKs` | RFC 9257/9258 证书外认证；默认推荐 importer，固定使用 `psk_dhe_ke`，支持多 identity、HRR 和派生 ticket 恢复 |
 | Session resumption | `ClientSessionCache`、`NewLRUClientSessionCache` | 客户端缓存 NewSessionTicket；服务端由 `SessionTicketKey` 和 ticket 配置控制；支持保留客户端认证状态的 mTLS 恢复 |
-| 0-RTT | `WriteEarlyData`、`MaxEarlyData`、`EarlyDataReplayCache` | 仅恢复连接可用；调用方必须处理 `ErrEarlyDataUnavailable` 和 `ErrEarlyDataRejected`，且 early data 必须具备可重放语义 |
+| 0-RTT | `ClientEarly`、`DialEarly`、`WriteDatagram`、`EnableEarlyDataIO` | 多次 early 数据报及客户端 Finished 前的服务端响应 |
 | KeyUpdate | `SendKeyUpdate(requestPeer)` | 可靠发送并在 ACK 后切换发送 epoch；接近 AEAD 使用上限时也会自动触发 |
 | CID / 路径验证 | `ConnectionID`、`GetConnectionID`、`SendNewConnectionIDs`、`RequestConnectionIDs`、`UseNextConnectionID` | 支持 RFC 9146 CID 协商和更新，并默认协商 RFC 9853 RRC；Listener 只在新路径验证完成后 rebind |
 | 证书压缩 | `EnableCertificateCompression` | 显式启用 RFC 8879 zlib；支持服务端证书以及 mTLS/PHA 客户端证书，压缩后不更小时自动发送普通 Certificate |
@@ -241,6 +242,14 @@ deadline、socket 关闭和底层 UDP 错误沿 Go `net` 错误模型返回；�
 | 握手内客户端认证 | `ClientAuth`、`ClientCAs`、`Certificates` | 使用 `crypto/tls` 的客户端证书策略 |
 | 握手后客户端认证 | `PostHandshakeAuth`、`RequestClientCertificate` | 客户端先声明支持，服务端再发起 PHA |
 | Exporter | `ConnectionState().ExportKeyingMaterial` | 提供 RFC 8446 section 7.5、使用 DTLS `dtls13` label 的导出材料 |
+
+### Early 数据报
+
+使用 `ClientEarly` 惰性构造连接，或通过 `DialEarly(ctx, ...)` 立即启动握手。有可用缓存 ticket 时，每次 `WriteDatagram` 可发送一条 0-RTT 记录；剩余额度不足时等待 application keys，不拆分单个数据报。没有可用 ticket 时，写入等待握手完成。普通 `Client` 和 `Dial` 在握手完成后才进行应用数据收发。
+
+服务端在 early-data 接受策略之外显式开启 `EnableEarlyDataIO`。此时 `ReadDatagram` 可在客户端 Finished 前交付已接受的请求，`WriteDatagram` 可在发出服务端 Finished 后使用 epoch-3 密钥响应。若请求了客户端证书，响应仍须等待认证完成，并始终遵守放大额度。`DatagramInfo.EarlyData` 标识可被重放的 epoch-1 输入；服务端响应使用 application keys，不使用 0-RTT 密钥。
+
+`ConnectionState().EarlyData` 返回 `EarlyDataNotAttempted`、`EarlyDataPending`、`EarlyDataAccepted` 或 `EarlyDataRejected`；接受不表示单个数据报已送达。应同时等待 `HandshakeComplete()` 和 `Context().Done()`：前者仅在成功时关闭，后者的 `context.Cause(conn.Context())` 给出失败或关闭原因。这两个接口不会启动 I/O。`HandshakeContext` 仍启动或等待同一次握手，首次启动者决定握手上下文。Early I/O 成功后握手仍可能失败。库不会在拒绝后自动重发已发送的业务数据，是否重试由应用依据重放安全性决定。
 
 ### CID 地址变化
 
@@ -292,6 +301,7 @@ deadline、socket 关闭和底层 UDP 错误沿 Go `net` 错误模型返回；�
 | `MaxSessionTickets` | 4；限制服务端响应 RFC 9149 请求时单次签发的 ticket 数量 |
 | `SessionTicketLifetime` | 24 小时，最大 7 天 |
 | `MaxEarlyData` | 0，即默认关闭 0-RTT |
+| `EnableEarlyDataIO` | 默认关闭；服务端显式允许 early 读取和响应，不单独启用 0-RTT 接受 |
 | `MaxConnectionIDs` | 每个方向 8 个 CID |
 | `DisableReturnRoutabilityCheck` | 默认 `false`；仅在应用提供等价地址验证时关闭 RRC |
 

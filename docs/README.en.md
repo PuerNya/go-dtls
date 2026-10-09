@@ -170,6 +170,9 @@ func serve(conn *dtls13.Conn) {
 | API | Purpose |
 | --- | --- |
 | `Dial` / `DialWithDialer` | Create a UDP client connection and complete the handshake; `DialWithDialer` configures the local address and dial timeout |
+| `ClientEarly` | Create a lazy client that permits repeated 0-RTT writes; construction performs no I/O |
+| `DialEarly` | Start a handshake and return when early writing is possible, or after completion without an eligible ticket |
+| `HandshakeComplete` / `Context` | Passive handshake-success notification and connection lifetime; neither starts a handshake |
 | `Listen` | Create and own a UDP listener |
 | `NewListener` | Create a DTLS listener over an existing `net.PacketConn`; `Accept` reports configuration errors |
 | `Listener.Accept` | Accept a new association and return `*Conn` |
@@ -200,7 +203,7 @@ if _, err := conn.WriteDatagram(payload); errors.Is(err, dtls13.ErrDatagramTooLa
 }
 ```
 
-Set `IgnorePathMTU: true` when the application actively probes PMTU or explicitly relies on IP fragmentation. `WriteDatagram` and `WriteEarlyData` then skip the library PMTU payload check and pass one complete DTLS record directly to the underlying transport. Handshake, ACK, and post-handshake flights still use PMTU fragmentation, retransmission, and backoff. This option does not relax the `2^14`-byte record content limit or a negotiated `record_size_limit`. The transport can still fragment, drop, or return `ErrDatagramTooLarge`; the library does not reduce PMTU or automatically retransmit that application datagram.
+Set `IgnorePathMTU: true` when the application actively probes PMTU or explicitly relies on IP fragmentation. `WriteDatagram` then skips the library PMTU payload check and passes one complete DTLS record directly to the underlying transport. Handshake, ACK, and post-handshake flights still use PMTU fragmentation, retransmission, and backoff. This option does not relax the `2^14`-byte record content limit or a negotiated `record_size_limit`. The transport can still fragment, drop, or return `ErrDatagramTooLarge`; the library does not reduce PMTU or automatically retransmit that application datagram.
 
 A short `ReadDatagram` buffer is not a streaming read. When `Truncated=true`, the unread part of that record has already been discarded, and the next read returns the next record.
 
@@ -212,8 +215,6 @@ A short `ReadDatagram` buffer is not a streaming read. When `Truncated=true`, th
 | `*ProtocolError` | Received or generated content that violates the protocol state or format |
 | `AlertError` | The peer returned a fatal TLS alert; use `errors.As` to obtain the numeric alert description |
 | `ErrDatagramTooLarge` | The application datagram exceeds the current PMTU or record limit; the transport may still return it with `IgnorePathMTU`; use `errors.Is` |
-| `ErrEarlyDataUnavailable` | No early-data ticket is available, or this connection cannot send 0-RTT |
-| `ErrEarlyDataRejected` | The handshake completed, but the peer rejected sent 0-RTT because of HRR, replay, or policy |
 | `*ECHRejectionError` | The server rejected ECH after authenticating the `public_name` connection; it may carry a `RetryConfigList` restricted to the same configuration source and endpoint |
 | `io.EOF` | The peer sent a valid `close_notify`, closing the read direction |
 
@@ -225,7 +226,7 @@ Deadlines, socket closure, and underlying UDP errors follow Go's `net` error mod
 | --- | --- | --- |
 | External PSK / importer | `ImportExternalPSK`, `NewDirectExternalPSK`, `ExternalPSKs` | RFC 9257/9258 certificate-free authentication; the importer is recommended, only `psk_dhe_ke` is used, and multiple identities, HRR, and ticket resumption are supported |
 | Session resumption | `ClientSessionCache`, `NewLRUClientSessionCache` | The client caches NewSessionTicket; the server is controlled by `SessionTicketKey` and ticket settings; mTLS resumption preserves client authentication state |
-| 0-RTT | `WriteEarlyData`, `MaxEarlyData`, `EarlyDataReplayCache` | Available only on resumed connections; callers must handle `ErrEarlyDataUnavailable` and `ErrEarlyDataRejected`, and early data must be replay-safe |
+| 0-RTT | `ClientEarly`, `DialEarly`, `WriteDatagram`, `EnableEarlyDataIO` | Repeated early datagrams and server responses before client Finished |
 | KeyUpdate | `SendKeyUpdate(requestPeer)` | Reliably sent, with the sending epoch switched after ACK; also triggered automatically near AEAD usage limits |
 | CID / path validation | `ConnectionID`, `GetConnectionID`, `SendNewConnectionIDs`, `RequestConnectionIDs`, `UseNextConnectionID` | Supports RFC 9146 CID negotiation and updates and negotiates RFC 9853 RRC by default; Listener rebinds only after validating the new path |
 | Certificate compression | `EnableCertificateCompression` | Explicitly enables RFC 8879 zlib for server certificates and mTLS/PHA client certificates; sends a plain Certificate when compression is not smaller |
@@ -236,6 +237,14 @@ Deadlines, socket closure, and underlying UDP errors follow Go's `net` error mod
 | Handshake client authentication | `ClientAuth`, `ClientCAs`, `Certificates` | Uses the client-certificate policies from `crypto/tls` |
 | Post-handshake client authentication | `PostHandshakeAuth`, `RequestClientCertificate` | The client first advertises support, then the server initiates PHA |
 | Exporter | `ConnectionState().ExportKeyingMaterial` | Exports RFC 8446 section 7.5 material with the DTLS `dtls13` label |
+
+### Early datagrams
+
+Use `ClientEarly` for lazy setup or `DialEarly(ctx, ...)` to start immediately. With an eligible cached ticket, each `WriteDatagram` can send one 0-RTT record. Writes exceeding the remaining ticket allowance wait for application keys; a datagram is never split. Without an eligible ticket, writes wait for the handshake. Ordinary `Client` and `Dial` wait for the full handshake before application I/O.
+
+A server explicitly enables `EnableEarlyDataIO` alongside its early-data acceptance policy. `ReadDatagram` can then return accepted requests before client Finished, and `WriteDatagram` can respond with epoch-3 keys after server Finished. Responses wait for requested client-certificate authentication and respect the amplification budget. `DatagramInfo.EarlyData` identifies replayable epoch-1 input; server responses use application keys, not 0-RTT keys.
+
+`ConnectionState().EarlyData` reports `EarlyDataNotAttempted`, `EarlyDataPending`, `EarlyDataAccepted` or `EarlyDataRejected`; acceptance is not a delivery acknowledgment. Select on both `HandshakeComplete()` and `Context().Done()`: the former closes only on success, and `context.Cause(conn.Context())` reports failure or closure. These accessors do not start I/O. `HandshakeContext` starts or waits for the same handshake; its first starter owns the handshake context. Early I/O can succeed before a later handshake failure. The library never resends sent business data after rejection; the application decides whether replay is safe.
 
 ### CID Address Changes
 
@@ -287,6 +296,7 @@ Where TLS 1.3 semantics match, `Config` follows `crypto/tls.Config`. A configura
 | `MaxSessionTickets` | 4; bounds the number of tickets a server issues for one RFC 9149 request |
 | `SessionTicketLifetime` | 24 hours, maximum 7 days |
 | `MaxEarlyData` | 0, so 0-RTT is disabled by default |
+| `EnableEarlyDataIO` | Disabled; server opt-in for early reads and responses, independent of 0-RTT acceptance |
 | `MaxConnectionIDs` | 8 CIDs per direction |
 | `DisableReturnRoutabilityCheck` | `false` by default; disable RRC only when the application provides equivalent address validation |
 
