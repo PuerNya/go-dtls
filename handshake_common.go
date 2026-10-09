@@ -1,6 +1,7 @@
 package dtls13
 
 import (
+	"bytes"
 	"crypto"
 	"crypto/tls"
 	"crypto/x509"
@@ -142,6 +143,7 @@ func (c *Conn) buildCertificateBodyMessages(certificateType uint8, certificateBo
 // handshakeCompletion is the input to finishHandshake: everything both
 // handshakes publish once their final flight is acknowledged.
 type handshakeCompletion struct {
+	handshakeMetadata       []byte
 	suite                   *cipherSuite
 	schedule                *keySchedule
 	transcript              *transcriptHash
@@ -206,6 +208,7 @@ func (c *Conn) finishHandshake(done handshakeCompletion) error {
 		PeerCertificates: done.peerCerts, VerifiedChains: done.chains,
 		PeerRawPublicKey:        append([]byte(nil), done.peerRawPublicKey...),
 		PeerDelegatedCredential: append([]byte(nil), done.peerDelegatedCredential...),
+		HandshakeMetadata:       bytes.Clone(done.handshakeMetadata),
 		ServerCertificateType:   c.serverCertificateType, ClientCertificateType: c.clientCertificateType,
 		OCSPResponse:      append([]byte(nil), done.ocspResponse...),
 		LocalConnectionID: append([]byte(nil), c.receiveConnectionID...), PeerConnectionID: append([]byte(nil), c.sendConnectionID...),

@@ -251,6 +251,14 @@ deadline、socket 关闭和底层 UDP 错误沿 Go `net` 错误模型返回；�
 
 `ConnectionState().EarlyData` 返回 `EarlyDataNotAttempted`、`EarlyDataPending`、`EarlyDataAccepted` 或 `EarlyDataRejected`；接受不表示单个数据报已送达。应同时等待 `HandshakeComplete()` 和 `Context().Done()`：前者仅在成功时关闭，后者的 `context.Cause(conn.Context())` 给出失败或关闭原因。这两个接口不会启动 I/O。`HandshakeContext` 仍启动或等待同一次握手，首次启动者决定握手上下文。Early I/O 成功后握手仍可能失败。库不会在拒绝后自动重发已发送的业务数据，是否重试由应用依据重放安全性决定。
 
+### 加密握手元数据
+
+客户端设置 `Config.HandshakeMetadata`，服务端设置 `Config.AcceptHandshakeMetadata`，即可在现有握手 flight 中双向传递各不超过 4096 字节的数据。客户端必须配置可信的 `EncryptedClientHelloConfigList`：请求只出现在 ClientHelloInner，服务端通过加密的 EncryptedExtensions 响应确认接受。ECH 被拒绝时不会退回明文发送；缺少接受响应时客户端握手失败。
+
+客户端 nil 切片禁用交换，非 nil 空切片表示请求空交换。服务端 nil 回调禁用支持；回调返回 `(nil, nil)` 表示接受并发送空响应。握手成功后，`ConnectionState().HandshakeMetadata` 返回对端数据的独立副本。恢复连接也发送本次的新数据，不从票据恢复旧数据。不需要调用 `WriteDatagram`，也不新增握手往返；分片、丢包与重传仍可能增加耗时。
+
+私用扩展编号为 `0xff02`，内容是版本字节 `1` 加元数据。双方必须明确支持该约定，并避免私用编号冲突。服务端回调在每个连接中执行一次，位于 HRR 之后、客户端认证完成之前，必须支持并发调用。不要在回调中执行不可逆业务操作：握手可靠传输不保证业务只执行一次，超时也不证明对端从未收到数据。
+
 ### CID 地址变化
 
 提供 CID 的客户端默认同时提供 RFC 9853 `rrc` 扩展；服务端只有在双方都协商 CID 和 RRC 时才启用路径验证。Listener 从新来源收到通过 CID 路由且认证成功的 record 后执行 enhanced check：先挑战旧地址；旧路径仍可达时保持原绑定，旧路径返回 `path_drop` 或超时后才挑战候选地址。候选地址正确回显随机 cookie 后，`RemoteAddr` 和 Listener tuple 路由才原子更新；验证期间应用写入仍使用旧地址。

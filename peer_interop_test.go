@@ -55,6 +55,11 @@ func TestInteropDTLS13Peers(t *testing.T) {
 					}
 					t.Run(roleName+"/"+mode, func(t *testing.T) { testDTLS13Peer(t, peer, binary, role, mode) })
 				}
+				metadataMode := "metadata-unoffered"
+				if role == "server" {
+					metadataMode = "metadata-ech-rejected"
+				}
+				t.Run(roleName+"/"+metadataMode, func(t *testing.T) { testDTLS13Peer(t, peer, binary, role, metadataMode) })
 				if peer == "OPENSSL" && role == "server" {
 					t.Run("server/initial-ACK-rejection", func(t *testing.T) { testDTLS13Peer(t, peer, binary, role, "initial-ACK-rejection") })
 				}
@@ -137,6 +142,15 @@ func testDTLS13Peer(t *testing.T, peer, binary, role, mode string) {
 	}
 	if goServer {
 		config.Certificates = []tls.Certificate{serverCert}
+	}
+	if mode == "metadata-ech-rejected" {
+		config.EncryptedClientHelloConfigList, _ = testECHConfig(t, "server.test", 23)
+		config.HandshakeMetadata = []byte("private handshake metadata")
+	}
+	if mode == "metadata-unoffered" {
+		config.AcceptHandshakeMetadata = func(*ClientHelloInfo, []byte) ([]byte, error) {
+			return nil, errors.New("metadata callback without an offer")
+		}
 	}
 	if mode == "sha384" || mode == "dc-sha384" {
 		config.CipherSuites = []uint16{TLS_AES_256_GCM_SHA384}
@@ -339,6 +353,11 @@ func testDTLS13Peer(t *testing.T, peer, binary, role, mode string) {
 			}
 		}
 		if err = conn.HandshakeContext(ctx); err != nil {
+			if mode == "metadata-ech-rejected" {
+				if _, ok := errors.AsType[*ECHRejectionError](err); ok && conn.ConnectionState().HandshakeMetadata == nil {
+					return
+				}
+			}
 			if mode == "DC-CR-rejection" && errors.Is(err, AlertError(alertIllegalParameter)) {
 				return
 			}
@@ -363,7 +382,7 @@ func testDTLS13Peer(t *testing.T, peer, binary, role, mode string) {
 			}
 			t.Fatalf("%s %s %s handshake: %v\n%s", peer, role, mode, err, output.String())
 		}
-		if mode == "initial-ACK-rejection" || mode == "DC-CR-rejection" {
+		if mode == "initial-ACK-rejection" || mode == "DC-CR-rejection" || mode == "metadata-ech-rejected" {
 			t.Fatal("peer limitation no longer reproduces; update the supported matrix")
 		}
 		if mode == "hrr" && !observedHRR.Load() {
@@ -376,6 +395,9 @@ func testDTLS13Peer(t *testing.T, peer, binary, role, mode string) {
 			t.Fatal("accepted invalid peer DC")
 		}
 		state := conn.ConnectionState()
+		if mode == "metadata-unoffered" && state.HandshakeMetadata != nil {
+			t.Fatal("metadata negotiated without an offer")
+		}
 		if early && round != 0 && !goServer && state.EarlyData != EarlyDataAccepted {
 			t.Fatalf("early data status = %v\n%s", state.EarlyData, output.String())
 		}

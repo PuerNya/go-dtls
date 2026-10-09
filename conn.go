@@ -1,6 +1,7 @@
 package dtls13
 
 import (
+	"bytes"
 	"context"
 	"crypto/x509"
 	"errors"
@@ -19,6 +20,10 @@ import (
 // connection and must not be modified. Connection ID slices returned by
 // [Conn.ConnectionState] are copies.
 type ConnectionState struct {
+	// HandshakeMetadata contains the peer's accepted metadata after handshake
+	// completion. Nil means unavailable or not negotiated. An empty non-nil
+	// slice is a successful empty exchange. Each snapshot owns its bytes.
+	HandshakeMetadata []byte
 	// Version is the negotiated DTLS version. It is VersionDTLS13 after a
 	// successful handshake.
 	Version uint16
@@ -1269,6 +1274,10 @@ func (c *Conn) ConnectionState() ConnectionState {
 	c.mu.RLock()
 	defer c.mu.RUnlock()
 	state := c.state
+	state.HandshakeMetadata = nil
+	if state.HandshakeComplete {
+		state.HandshakeMetadata = bytes.Clone(c.state.HandshakeMetadata)
+	}
 	state.EarlyData = EarlyDataStatus(c.earlyStatus.Load())
 	state.LocalConnectionID = append([]byte(nil), state.LocalConnectionID...)
 	state.PeerConnectionID = append([]byte(nil), state.PeerConnectionID...)

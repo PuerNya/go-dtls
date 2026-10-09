@@ -86,6 +86,7 @@ func FuzzACKParser(f *testing.F) {
 
 func FuzzHandshakeMessageParsers(f *testing.F) {
 	f.Add([]byte{})
+	f.Add([]byte{1})
 	f.Add([]byte{0, 0, 0, 0})
 	f.Fuzz(func(t *testing.T, data []byte) {
 		_, _ = parseClientHello(data)
@@ -96,6 +97,7 @@ func FuzzHandshakeMessageParsers(f *testing.F) {
 		_, _ = parseCertificateHandshakeMessage(handshakeTypeCompressedCertificate, data, &certificateCompressionZlibOffer, 4096)
 		_, _ = parseCertificateCompressionAlgorithms(data)
 		_, _ = parseCachedInformationOffer(data)
+		_, _ = parseHandshakeMetadata(data)
 		_, _ = parseCertificateVerify(data)
 		_, _ = parseFinished(data, 32)
 		_, _ = parseCertificateRequest(data)

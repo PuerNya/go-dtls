@@ -246,6 +246,14 @@ A server explicitly enables `EnableEarlyDataIO` alongside its early-data accepta
 
 `ConnectionState().EarlyData` reports `EarlyDataNotAttempted`, `EarlyDataPending`, `EarlyDataAccepted` or `EarlyDataRejected`; acceptance is not a delivery acknowledgment. Select on both `HandshakeComplete()` and `Context().Done()`: the former closes only on success, and `context.Cause(conn.Context())` reports failure or closure. These accessors do not start I/O. `HandshakeContext` starts or waits for the same handshake; its first starter owns the handshake context. Early I/O can succeed before a later handshake failure. The library never resends sent business data after rejection; the application decides whether replay is safe.
 
+### Encrypted handshake metadata
+
+Set `Config.HandshakeMetadata` on the client and `Config.AcceptHandshakeMetadata` on the server to exchange up to 4096 bytes per direction in the existing handshake flights. The client requires a trusted `EncryptedClientHelloConfigList`: its request is confined to ClientHelloInner, and the server accepts it with an encrypted EncryptedExtensions response. ECH rejection never falls back to sending the metadata in plaintext. Missing acceptance fails the client's handshake.
+
+A nil client slice disables the exchange; an empty non-nil slice requests an empty exchange. A nil server callback disables support; returning `(nil, nil)` accepts with an empty response. After a successful handshake, `ConnectionState().HandshakeMetadata` holds an independent copy of the peer's data. This also works on resumed connections, with fresh metadata rather than data restored from the ticket. Neither `WriteDatagram` nor an extra handshake round trip is required; fragmentation, packet loss, and retransmission can still increase latency.
+
+The private-use extension is `0xff02`; its payload is version byte `1` followed by the metadata. Both peers must explicitly support this convention and avoid private-codepoint conflicts. The server callback runs once per connection, after any HRR and before client authentication completes. It must be concurrency-safe and must not perform irreversible operations: handshake reliability does not guarantee exactly-once execution, and a timeout does not prove non-delivery.
+
 ### CID Address Changes
 
 A client that offers a CID also offers the RFC 9853 `rrc` extension by default. The server enables path validation only when both CID and RRC are negotiated. After Listener receives an authenticated CID-routed record from a new source, it performs an enhanced check: it challenges the old address first; if the old path remains reachable, the existing binding is retained; after `path_drop` or timeout, it challenges the candidate address. `RemoteAddr` and Listener tuple routing are updated atomically only after the candidate correctly echoes the random cookie. Application writes continue using the old address during validation.

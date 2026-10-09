@@ -14,6 +14,7 @@ const (
 )
 
 type encryptedExtensions struct {
+	handshakeMetadata        []byte
 	extensions               map[uint16][]byte
 	recordSizeLimit          uint16
 	hasRecordSizeLimit       bool
@@ -141,6 +142,14 @@ func validateEncryptedExtensions(hello *clientHello, message *encryptedExtension
 		return "", false, nil, alertError(alertIllegalParameter, &ProtocolError{"record_size_limit and max_fragment_length cannot both be negotiated"})
 	}
 	validate := func(typ uint16, raw []byte) error {
+		if typ == extHandshakeMetadata {
+			if hello.handshakeMetadata == nil {
+				return alertError(alertUnsupportedExtension, &ProtocolError{"unsolicited handshake metadata"})
+			}
+			var err error
+			message.handshakeMetadata, err = parseHandshakeMetadata(raw)
+			return err
+		}
 		if typ == extCachedInfo {
 			var err error
 			message.cachedInformation, err = validateCachedInformationSelection(hello, raw)

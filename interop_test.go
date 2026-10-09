@@ -902,6 +902,21 @@ func TestInteropWolfSSLClient(t *testing.T) {
 	testInteropWolfSSLClientOptions(t, wolfSSLInteropOptions{})
 }
 
+func TestInteropWolfSSLClientWithoutHandshakeMetadata(t *testing.T) {
+	testInteropWolfSSLClientOptions(t, wolfSSLInteropOptions{
+		configure: func(_ *testing.T, _ string, config *Config) {
+			config.AcceptHandshakeMetadata = func(*ClientHelloInfo, []byte) ([]byte, error) {
+				return nil, errors.New("metadata callback without an offer")
+			}
+		},
+		connected: func(t *testing.T, conn *Conn, _ int) {
+			if conn.ConnectionState().HandshakeMetadata != nil {
+				t.Fatal("metadata negotiated without an offer")
+			}
+		},
+	})
+}
+
 func TestInteropWolfSSLClientSNI(t *testing.T) {
 	var serverName string
 	testInteropWolfSSLClientOptions(t, wolfSSLInteropOptions{

@@ -42,7 +42,7 @@ func knownExtensionType(typ uint16) bool {
 		extSignatureAlgorithms, extALPN, extPadding, extCompressCertificate, extRecordSizeLimit, extPreSharedKey, extEarlyData,
 		extCookie, extPSKKeyExchangeModes, extPostHandshakeAuth,
 		extCertificateAuthorities, extOIDFilters, extSignatureAlgorithmsCert, extConnectionID, extTicketRequest, extReturnRoutability, extStatusRequest,
-		extECH, extECHOuterExtensions, extClientCertificateType, extServerCertificateType, extCachedInfo, extDelegatedCredential:
+		extECH, extECHOuterExtensions, extClientCertificateType, extServerCertificateType, extCachedInfo, extDelegatedCredential, extHandshakeMetadata:
 		return true
 	default:
 		return false
@@ -62,6 +62,7 @@ type pskIdentityEntry struct {
 	obfuscatedAge uint32
 }
 type clientHello struct {
+	handshakeMetadata             []byte
 	random                        [32]byte
 	sessionID                     []byte
 	encryptedClientHelloExtension []byte
@@ -1085,6 +1086,13 @@ func (h *clientHello) marshal() ([]byte, error) {
 	if grease, ok := h.greaseExtension(); ok {
 		extensions = append(extensions, orderedExtension{typ: grease})
 	}
+	if h.handshakeMetadata != nil {
+		raw, err := marshalHandshakeMetadata(h.handshakeMetadata)
+		if err != nil {
+			return nil, err
+		}
+		extensions = append(extensions, orderedExtension{typ: extHandshakeMetadata, value: raw})
+	}
 	if hasPSK || h.pskDHE {
 		extensions = append(extensions, orderedExtension{typ: extPSKKeyExchangeModes, value: marshalPSKKeyExchangeModes()})
 	}
@@ -1154,6 +1162,11 @@ func parseClientHello(b []byte) (*clientHello, error) {
 			extConnectionID, extTicketRequest, extReturnRoutability, extEarlyData, extPSKKeyExchangeModes, extPreSharedKey, extECH, extStatusRequest:
 		case extOIDFilters:
 			return nil, alertError(alertIllegalParameter, &ProtocolError{"oid_filters is not permitted in ClientHello"})
+		case extHandshakeMetadata:
+			h.handshakeMetadata, err = parseHandshakeMetadata(extension.value)
+			if err != nil {
+				return nil, err
+			}
 		case extDelegatedCredential:
 			h.delegatedCredentialSchemes, err = parseSignatureSchemes(extension.value)
 			if err != nil {

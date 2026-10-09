@@ -297,6 +297,30 @@
 // cache domains, or server deployments. It must contain only operations that
 // are safe to repeat. Callers decide whether to retry after the handshake.
 //
+// # Encrypted handshake metadata
+//
+// [Config.HandshakeMetadata] exchanges up to 4096 bytes per direction using
+// private-use extension 0xff02, version 1. The client requires ECH and places
+// its data only in ClientHelloInner. [Config.AcceptHandshakeMetadata] accepts
+// the request and supplies the encrypted EncryptedExtensions response. Nil
+// disables either option; an empty non-nil client value requests an empty
+// exchange, and a nil callback response accepts with no response payload.
+// Unsupported or rejecting peers cannot complete the client's handshake.
+//
+// Both full and resumed connections carry new metadata in their existing
+// handshake flights, with handshake fragmentation and retransmission. No
+// extra round trip is introduced, although larger flights and packet loss
+// can increase latency. [ConnectionState.HandshakeMetadata] returns the peer's
+// accepted bytes after successful handshake completion. No application-data
+// write is needed. Metadata is not restored from a session ticket.
+//
+// ECH rejection never sends metadata in plaintext. Applications must provision
+// a trusted ECHConfigList and coordinate use of the private extension number
+// with their peers. The server callback runs before client authentication;
+// requests can be replayed across connections. Acceptance is not an
+// exactly-once business-operation guarantee. A handshake timeout does not
+// prove the peer never received the metadata.
+//
 // # Connection IDs and network paths
 //
 // The package implements DTLS Connection IDs from [RFC 9146], including the

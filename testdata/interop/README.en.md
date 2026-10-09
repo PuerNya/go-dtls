@@ -84,12 +84,14 @@ an epoch-1 request plus an epoch-3 response before releasing it. NSS uses a
 nonblocking initial send so its socket API cannot finish the handshake before
 writing the request. Ordinary early-data cases also check `DatagramInfo.EarlyData`.
 The wolfSSL RPK matrix covers `early-io` in both roles against upstream
-`c6e4286c0269a111799ff059badd94a272e37574`, built with MSVC on Windows and the
+`23f245c02c4319bb80baf7f3ae0c1de40e3fb68e`, built with MSVC on Windows and the
 native toolchain on Linux. Its client handles `APP_DATA_READY` while connecting.
 BoringSSL's lack of native DTLS 0-RTT and the server limitations below still apply.
 The wolfSSL server HRR case verifies rejection of the 0-RTT offer without sending
-an epoch-1 payload: this revision has echoed such a payload even after the Go
-client reports that HRR rejected early data.
+an epoch-1 payload: the previously tested revision
+`c6e4286c0269a111799ff059badd94a272e37574` echoed such a payload even after the Go
+client reported that HRR rejected early data. This case does not re-probe that
+payload behavior.
 
 | Peer | Additional tested behavior | Boundary at the pinned revision |
 | --- | --- | --- |
@@ -109,3 +111,13 @@ NSS automatic DTLS tickets work and are covered; the separate
 `SSL_SendSessionTicket` API rejecting DTLS does not imply that resumption is
 unsupported. NSS authenticates an exact per-test DER pin; OpenSSL and BoringSSL
 verify a test CA and hostname. None of the fixtures disables peer authentication.
+
+The handshake-metadata extension (`0xff02`, version 1) is a private convention,
+not a standard feature of these peers. The `metadata-unoffered` cases verify
+ordinary clients against a Go server with metadata support enabled;
+`metadata-ech-rejected` requires authenticated ECH rejection when the peer is
+not configured for ECH. Neither is a successful encrypted-metadata exchange.
+The latter uses OpenSSL's existing `server-ACKLoss` fixture where applicable.
+The wolfSSL client-without-metadata test likewise verifies that the acceptance
+callback is not called without an offer. Full/resumed metadata exchange,
+fragmentation, retransmission, confidentiality, and UDP are covered by self-interop.

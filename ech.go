@@ -540,6 +540,7 @@ func newECHClientContext(list []byte) (*echClientContext, error) {
 
 func makeECHOuter(inner *clientHello, config *echConfig, random io.Reader) (*clientHello, error) {
 	outer := cloneClientHello(inner)
+	outer.handshakeMetadata = nil
 	outer.serverName = config.publicName
 	outer.alpn = nil
 	_ = outer.setCertificateAuthorities(nil)
@@ -747,6 +748,7 @@ func cloneClientHello(source *clientHello) *clientHello {
 	clone.connectionID = bytes.Clone(source.connectionID)
 	clone.statusRequestRaw = bytes.Clone(source.statusRequestRaw)
 	clone.unknownExtensions = nil
+	clone.handshakeMetadata = bytes.Clone(source.handshakeMetadata)
 	if source.unknownExtensions != nil {
 		clone.unknownExtensions = make(map[uint16][]byte, len(source.unknownExtensions))
 		for typ, value := range source.unknownExtensions {

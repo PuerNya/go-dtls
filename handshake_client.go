@@ -17,7 +17,8 @@ import (
 // has no back-pointer to *Conn: steps are *Conn methods that receive the state
 // explicitly, matching postHandshakeAuthState and returnRoutabilityState.
 type clientHandshakeState struct {
-	finalized bool
+	handshakeMetadata []byte
+	finalized         bool
 	// transcriptDigest is scratch space for every transcript sum.
 	transcriptDigest [maxSupportedHashSize]byte
 
@@ -118,6 +119,9 @@ func (c *Conn) clientHandshake() error {
 // ClientHello from the configuration, selects the client session and PSK
 // offers.
 func (c *Conn) clientPrepareHello(s *clientHandshakeState) error {
+	if c.config.HandshakeMetadata != nil && c.config.EncryptedClientHelloConfigList == nil {
+		return &ConfigError{"HandshakeMetadata requires EncryptedClientHelloConfigList"}
+	}
 	key, err := generateEphemeralKey(c.config.CurvePreferences[0], c.config.Rand)
 	if err != nil {
 		return alertError(alertInternalError, err)
@@ -129,6 +133,7 @@ func (c *Conn) clientPrepareHello(s *clientHandshakeState) error {
 	}
 	hello := &clientHello{cipherSuites: append([]uint16(nil), c.config.CipherSuites...), keyShares: keyShares, supportedGroups: c.config.CurvePreferences, signatureSchemes: defaultSignatureSchemes(), serverName: c.config.ServerName, alpn: c.config.NextProtos, postHandshakeAuth: c.config.PostHandshakeAuth, recordSizeLimit: c.config.RecordSizeLimit, hasRecordSizeLimit: true, statusRequest: c.config.EnableOCSPStapling}
 	hello.pskDHE = !c.config.SessionTicketsDisabled && c.config.ClientSessionCache != nil
+	hello.handshakeMetadata = c.config.HandshakeMetadata
 	if c.config.EnableDelegatedCredentials {
 		hello.delegatedCredentialSchemes = delegatedCredentialSchemes()
 	}
@@ -663,6 +668,13 @@ func (c *Conn) clientEncryptedExtensions(s *clientHandshakeState, message comple
 		return err
 	}
 	s.negotiated = negotiated
+	if s.echAccepted && c.config.HandshakeMetadata != nil && ee.handshakeMetadata == nil {
+		return alertError(alertMissingExtension, &ProtocolError{"server did not accept handshake metadata"})
+	}
+	if ee.handshakeMetadata != nil && !s.echAccepted {
+		return alertError(alertIllegalParameter, &ProtocolError{"handshake metadata requires ECH acceptance"})
+	}
+	s.handshakeMetadata = ee.handshakeMetadata
 	if ee.cachedInformation != 0 && (s.cachedInfo == nil || s.usingPSK) {
 		return alertError(alertIllegalParameter, &ProtocolError{"cached_info selected without certificate authentication"})
 	}
@@ -947,6 +959,7 @@ func (c *Conn) clientFinalize(s *clientHandshakeState) error {
 		peerCerts:               s.peerCerts,
 		peerRawPublicKey:        s.peerRawPublicKey,
 		peerDelegatedCredential: s.peerDelegatedCredential,
+		handshakeMetadata:       s.handshakeMetadata,
 		chains:                  s.chains,
 		serverName:              c.config.ServerName,
 		ocspResponse:            s.ocspResponse,

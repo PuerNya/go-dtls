@@ -80,11 +80,12 @@ NSS 和 OpenSSL 的 `client/early-io` 场景扣留客户端 Finished，要求释
 已收到 epoch-1 请求并发出 epoch-3 响应。NSS 首次发送使用非阻塞模式，避免
 socket API 在写入请求前完成握手。普通 early-data 场景也检查
 `DatagramInfo.EarlyData`。wolfSSL RPK 矩阵在两个角色覆盖 `early-io`，使用
-未修改的上游 `c6e4286c0269a111799ff059badd94a272e37574`，分别经 Windows
+未修改的上游 `23f245c02c4319bb80baf7f3ae0c1de40e3fb68e`，分别经 Windows
 MSVC 和 Linux 原生工具链构建；客户端正确处理连接期间的 `APP_DATA_READY`。
 BoringSSL 不支持原生 DTLS 0-RTT，以及下述服务端限制仍然适用。
 wolfSSL 服务端的 HRR 用例只验证拒绝 0-RTT 提议，不发送 epoch-1 数据：
-实测该版本在 Go 客户端报告 HRR 已拒绝早期数据后，仍会回显该数据。
+此前验证的 `c6e4286c0269a111799ff059badd94a272e37574` 在 Go 客户端报告
+HRR 已拒绝早期数据后，仍会回显该数据；当前用例不重新探测该 payload 行为。
 
 | 对端 | 额外验证的行为 | 固定版本下的能力边界 |
 | --- | --- | --- |
@@ -104,3 +105,10 @@ NSS 自动发送 DTLS 票据的功能正常，并已纳入测试；独立的
 `SSL_SendSessionTicket` API 拒绝 DTLS，不代表不支持会话恢复。
 NSS 使用每次测试固定的 DER 证书进行精确匹配认证；OpenSSL 和 BoringSSL
 验证测试 CA 和主机名。这些测试程序均未关闭对端认证。
+
+握手元数据扩展（`0xff02`，版本 1）是私有约定，不是这些对端的标准功能。
+`metadata-unoffered` 验证启用元数据支持的 Go 服务端仍接受普通客户端；
+`metadata-ech-rejected` 验证对端未配置 ECH 时客户端收到经过认证的 ECH 拒绝。
+两者都不代表成功交换加密元数据；后者在 OpenSSL 上沿用 `server-ACKLoss` 夹具。
+wolfSSL client-without-metadata 测试同样确认未提供扩展时不会调用接受回调。
+完整/恢复连接的元数据交换、分片、重传、保密性和 UDP 由自互通覆盖。

@@ -15,6 +15,7 @@ import (
 // struct holds no back-pointer to *Conn; steps are *Conn methods that receive
 // the state explicitly.
 type serverHandshakeState struct {
+	handshakeMetadata []byte
 	// transcriptDigest is scratch space for every transcript sum.
 	transcriptDigest [maxSupportedHashSize]byte
 
@@ -156,6 +157,9 @@ func (c *Conn) serverReceiveClientHello(s *serverHandshakeState) error {
 		return err
 	}
 	s.ch = s.outerHello
+	if s.outerHello.handshakeMetadata != nil {
+		return alertError(alertIllegalParameter, &ProtocolError{"handshake metadata must be inside ECH"})
+	}
 	return nil
 }
 
@@ -345,6 +349,9 @@ func (c *Conn) serverReceiveSecondClientHello(s *serverHandshakeState) error {
 	second, err := parseClientHello(secondBody)
 	if err != nil {
 		return err
+	}
+	if second.handshakeMetadata != nil {
+		return alertError(alertIllegalParameter, &ProtocolError{"handshake metadata must be inside ECH"})
 	}
 	if s.echAccepted {
 		if second, secondBody, err = processSecondECHClientHello(second, secondBody, s.echContext); err != nil {
@@ -635,6 +642,9 @@ func (c *Conn) serverSendFlight(s *serverHandshakeState) error {
 		if err != nil {
 			return err
 		}
+	}
+	if err := c.serverHandshakeMetadata(s, ee); err != nil {
+		return err
 	}
 	eeBody, err := ee.marshal()
 	if err != nil {
@@ -940,6 +950,7 @@ func (c *Conn) serverFinalize(s *serverHandshakeState) error {
 		serverName:              s.ch.serverName,
 		peerRawPublicKey:        s.clientRawPublicKey,
 		peerDelegatedCredential: s.clientDelegatedCredential,
+		handshakeMetadata:       s.handshakeMetadata,
 		chains:                  s.clientChains,
 		ocspResponse:            s.ocspResponse,
 		promoteEarly:            true,

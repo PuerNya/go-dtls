@@ -696,6 +696,8 @@ func equalClientHelloAfterHRR(initial, second *clientHello, requestedGroup tls.C
 		return false
 	}
 	return initial.random == second.random &&
+		(initial.handshakeMetadata == nil) == (second.handshakeMetadata == nil) &&
+		equalBytes(initial.handshakeMetadata, second.handshakeMetadata) &&
 		equalBytes(initial.sessionID, second.sessionID) &&
 		slices.Equal(initial.cipherSuites, second.cipherSuites) &&
 		slices.Equal(initial.signatureSchemes, second.signatureSchemes) &&
