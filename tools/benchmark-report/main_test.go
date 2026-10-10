@@ -16,9 +16,9 @@ goos: linux
 goarch: amd64
 cpu: Example CPU
 BenchmarkProtectedRecordSeal-2 10 1500 ns/op 800 MB/s 1280 B/op 1 allocs/op
-BenchmarkMarshalExtensions-2 10 9 ns/op 30 B/op 2 allocs/op
-BenchmarkMarshalExtensions-2 10 3 ns/op 10 B/op 0 allocs/op
-BenchmarkMarshalExtensions-2 10 6 ns/op 20 B/op 1 allocs/op
+BenchmarkBuildPlainFlight-2 10 9 ns/op 30 B/op 2 allocs/op
+BenchmarkBuildPlainFlight-2 10 3 ns/op 10 B/op 0 allocs/op
+BenchmarkBuildPlainFlight-2 10 6 ns/op 20 B/op 1 allocs/op
 BenchmarkWolfSSLFeatureRealUDP/KeyUpdate/GoClient/WolfSSLServer-2 1 2000000 ns/op 2.5 go_ms/conn
 BenchmarkWolfSSLFeatureRealUDP/SessionResumption/WolfSSLClient/GoServer-2 1 3000000 ns/op 3 wolf_process_ms/pair
 BenchmarkMutualTLSHandshakeLifecycle/Full-2 1 2000000 ns/op 100000 B/op 900 allocs/op
@@ -53,8 +53,7 @@ BenchmarkConnectionHandshakeLifecycle-2 1 1500000 ns/op 90000 B/op 800 allocs/op
 		"Session resumption handshake | 1 | 3 ms/pair | - | -",
 		"## Record layer and reliability",
 		"Record seal | 1 | 1.5 us/op | 800 MB/s | 1280 B/op | 1 allocs/op",
-		"## Wire encoding and parsing",
-		"Marshal Extensions | 3 | 6 ns/op | 20 B/op | 1 allocs/op",
+		"Build Plain Flight | 3 | 6 ns/op | - | 20 B/op | 1 allocs/op",
 		"- Platform: `linux/amd64, Example CPU`",
 		"- wolfSSL: `0123456789abcdef (Linux Release static)`",
 	} {
@@ -80,15 +79,14 @@ BenchmarkConnectionHandshakeLifecycle-2 1 1500000 ns/op 90000 B/op 800 allocs/op
 	if strings.Contains(connectionSection, "Throughput") {
 		t.Fatalf("section without throughput metrics contains a throughput column:\n%s", connectionSection)
 	}
-	recordSection := text[strings.Index(text, "## Record layer and reliability"):strings.Index(text, "## Wire encoding and parsing")]
+	_, recordSection, _ := strings.Cut(text, "## Record layer and reliability")
 	if !strings.Contains(recordSection, "Throughput") {
 		t.Fatalf("section with throughput metrics does not contain a throughput column:\n%s", recordSection)
 	}
 	connection := strings.Index(text, "## Connection lifecycle")
 	realUDP := strings.Index(text, "## Real UDP interoperability")
 	record := strings.Index(text, "## Record layer and reliability")
-	wire := strings.Index(text, "## Wire encoding and parsing")
-	if connection >= realUDP || realUDP >= record || record >= wire {
+	if connection >= realUDP || realUDP >= record {
 		t.Fatalf("report sections are not in the expected order:\n%s", text)
 	}
 	connectionBenchmark := strings.Index(text, "Certificate-authenticated full handshake / AES-128-GCM")
@@ -99,12 +97,17 @@ BenchmarkConnectionHandshakeLifecycle-2 1 1500000 ns/op 90000 B/op 800 allocs/op
 }
 
 func TestParseReportRejectsUncoveredBenchmark(t *testing.T) {
+	for _, name := range []string{"BenchmarkTranscriptClone/1301", "BenchmarkParseExtensions/Owned", "BenchmarkCertificateCompression/Decompress", "BenchmarkHandshakeInboxSequentialSingleFragment"} {
+		if err := validateBenchmarkCoverage(name); err == nil {
+			t.Errorf("removed benchmark %q was accepted", name)
+		}
+	}
 	_, err := parseReport(strings.NewReader("BenchmarkNewFeature-2 1 100 ns/op 1 B/op 1 allocs/op\n"))
 	if err == nil || !strings.Contains(err.Error(), "not covered by the report generator") {
 		t.Fatalf("parseReport error = %v, want an uncovered benchmark error", err)
 	}
 
-	_, err = parseReport(strings.NewReader("BenchmarkParseExtensions/NewMode-2 1 100 ns/op 1 B/op 1 allocs/op\n"))
+	_, err = parseReport(strings.NewReader("BenchmarkFlightWireWindow/NewMode-2 1 100 ns/op 1 B/op 1 allocs/op\n"))
 	if err == nil || !strings.Contains(err.Error(), "unmapped part") {
 		t.Fatalf("parseReport error = %v, want an unmapped benchmark part error", err)
 	}
@@ -294,16 +297,12 @@ func TestBenchmarkLabel(t *testing.T) {
 		{"zh-CN", "BenchmarkWolfSSLFeatureRealUDP/KeyUpdate/GoClient/WolfSSLServer-2", "KeyUpdate + 应用数据 1-RTT 往返"},
 		{"ru", "BenchmarkWolfSSLFeatureRealUDP/ApplicationDataRoundTrip/WolfSSLClient/GoServer-2", "Обмен прикладными данными 1-RTT"},
 		{"en", "BenchmarkProtectedRecordRoundTripSuites/ChaCha20Poly1305-2", "Record round trip / ChaCha20-Poly1305"},
+		{"en", "BenchmarkListenerDatagramRoundTrip/Connections1024/NoCID/Bytes1200-4", "Listener UDP round trip / 1024 connections / No CID / 1200 bytes"},
+		{"en", "BenchmarkMemoryDatagramRoundTrip/Bytes64-4", "In-memory datagram round trip / 64 bytes"},
+		{"zh-CN", "BenchmarkListenerDatagramRoundTrip/Connections64/CID/Bytes64-4", "Listener UDP 往返 / 64 个连接 / CID / 64 字节"},
+		{"ru", "BenchmarkEarlyDataHandshakeLifecycle/Entries4096-4", "0-RTT / 4096 начальных записей повторов"},
 		{"zh-CN", "BenchmarkProtectedRecordRoundTripSuites/ChaCha20Poly1305-2", "记录往返 / ChaCha20-Poly1305"},
 		{"ru", "BenchmarkBuildProtectedACKRecords/SingleReuse-2", "Построение защищенного ACK / Повторное использование одного"},
-		{"en", "BenchmarkCalculatePSKBinder/1301-2", "Calculate PSK Binder / AES-128-GCM"},
-		{"en", "BenchmarkParseKeyShares/Client4/ViewInto-2", "Key share parse / 4 key shares / View Into"},
-		{"zh-CN", "BenchmarkParseKeyShares/Client4/ViewInto-2", "解析密钥份额 / 4 个密钥份额 / 写入视图"},
-		{"ru", "BenchmarkMarshalHandshakeMessages/CertificateVerify-2", "Кодирование рукопожатия / Проверка сертификата"},
-		{"zh-CN", "BenchmarkKeyScheduleSideDerivations/1301/EarlyTraffic-2", "密钥派生 / AES-128-GCM / 早期流量"},
-		{"en", "BenchmarkCertificateCompression/Decompress-2", "Decompress"},
-		{"zh-CN", "BenchmarkCertificateCompression/Decompress-2", "解压"},
-		{"ru", "BenchmarkCertificateCompression/Decompress-2", "Распаковка"},
 	}
 	for _, test := range tests {
 		if got := benchmarkLabel(test.input, reportLanguages[test.language]); got != test.want {
@@ -356,13 +355,12 @@ func TestBenchmarkSection(t *testing.T) {
 		want int
 	}{
 		{"BenchmarkConnectionHandshakeLifecycle", 0},
+		{"BenchmarkListenerDatagramRoundTrip/Connections1/CID/Bytes64", 0},
+		{"BenchmarkEarlyDataHandshakeLifecycle/Entries64", 0},
 		{"BenchmarkCertificateSelectionHandshakeLifecycle/InitialMutualTLS", 0},
 		{"BenchmarkWolfSSLFeatureRealUDP/KeyUpdate/GoClient/GoServer", 1},
 		{"BenchmarkProtectedRecordSeal", 2},
-		{"BenchmarkKeyScheduleDerivation", 3},
-		{"BenchmarkParseExtensions", 4},
-		{"BenchmarkCertificateCompression/Zlib", 5},
-		{"BenchmarkSomethingElse", 6},
+		{"BenchmarkSomethingElse", 3},
 	}
 	for _, test := range tests {
 		if got := benchmarkSection(test.name); got != test.want {

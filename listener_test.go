@@ -6,10 +6,39 @@ import (
 	"errors"
 	"fmt"
 	"net"
+	"os"
 	"sync"
 	"testing"
 	"time"
 )
+
+func TestPacketSessionDatagramOwnership(t *testing.T) {
+	session := newPacketSession(nil, memoryAddr("peer"), 1, nil, nil, nil, nil, nil)
+	defer session.Close()
+	payload := []byte("first")
+	session.enqueue(payload, memoryAddr("first-source"))
+	clear(payload)
+	first, err := session.readDatagram()
+	if err != nil || string(first) != "first" || session.lastReadSource() != memoryAddr("first-source") {
+		t.Fatalf("owned datagram=%q error=%v source=%v", first, err, session.lastReadSource())
+	}
+	session.enqueue([]byte("second"), memoryAddr("second-source"))
+	session.enqueue([]byte("dropped"), memoryAddr("dropped-source"))
+	clear(first)
+	var buffer [3]byte
+	if n, readErr := session.Read(buffer[:]); readErr != nil || n != 3 || string(buffer[:]) != "sec" {
+		t.Fatalf("truncated read=%q n=%d error=%v", buffer, n, readErr)
+	}
+	if session.lastReadSource() != memoryAddr("second-source") {
+		t.Fatal("source changed after a dropped datagram")
+	}
+	if err = session.SetReadDeadline(time.Now()); err != nil {
+		t.Fatal(err)
+	}
+	if _, err = session.readDatagram(); err == nil {
+		t.Fatal("truncated or dropped bytes were delivered again")
+	}
+}
 
 type reusableUDPClientConn struct {
 	conn   *net.UDPConn
@@ -253,7 +282,13 @@ func TestListenerConcurrentClients(t *testing.T) {
 		t.Fatal(err)
 	}
 	defer listener.Close()
-	const clients = 8
+	clients := 8
+	if os.Getenv("GO_DTLS_STRESS") == "1" {
+		clients = 128
+		if err = listener.conn.(*net.UDPConn).SetReadBuffer(4 << 20); err != nil {
+			t.Fatal(err)
+		}
+	}
 	serverErrors := make(chan error, clients)
 	go func() {
 		for range clients {
@@ -275,6 +310,13 @@ func TestListenerConcurrentClients(t *testing.T) {
 		}
 	}()
 	var wait sync.WaitGroup
+	var handshakes sync.WaitGroup
+	handshakes.Add(clients)
+	exchangeReady := make(chan struct{})
+	go func() {
+		handshakes.Wait()
+		close(exchangeReady)
+	}()
 	clientErrors := make(chan error, clients)
 	for i := range clients {
 		wait.Add(1)
@@ -285,11 +327,14 @@ func TestListenerConcurrentClients(t *testing.T) {
 				RootCAs: roots, ServerName: "server.test", HandshakeTimeout: 3 * time.Second,
 				FlightInterval: 5 * time.Millisecond, MaxFlightInterval: 20 * time.Millisecond,
 			})
+			handshakes.Done()
 			if dialErr != nil {
 				clientErrors <- dialErr
 				return
 			}
 			defer conn.Close()
+			// Avoid losing the one-shot application datagram in the handshake burst.
+			<-exchangeReady
 			_ = conn.SetDeadline(time.Now().Add(3 * time.Second))
 			message := fmt.Sprintf("client-%d", index)
 			if _, dialErr = conn.WriteDatagram([]byte(message)); dialErr == nil {

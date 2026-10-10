@@ -198,6 +198,12 @@ func (c *recordCipher) seal(contentType uint8, content []byte) ([]byte, error) {
 	return c.sealWithHeader(contentType, content, true, true)
 }
 
+func (c *recordCipher) sealInto(dst []byte, contentType uint8, content []byte) ([]byte, error) {
+	return c.sealWithHeaderBuilderInto(dst, contentType, len(content), true, true, func(plain []byte) {
+		copy(plain, content)
+	})
+}
+
 func (c *recordCipher) sealWithHeader(contentType uint8, content []byte, sequence16, lengthPresent bool) ([]byte, error) {
 	return c.sealWithHeaderBuilder(contentType, len(content), sequence16, lengthPresent, func(dst []byte) {
 		copy(dst, content)

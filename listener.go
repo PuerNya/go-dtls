@@ -501,6 +501,12 @@ func (s *packetSession) enqueue(datagram []byte, from net.Addr) {
 }
 
 func (s *packetSession) Read(p []byte) (int, error) {
+	datagram, err := s.readDatagram()
+	return copy(p, datagram), err
+}
+
+// The queue owns its payload, so record readers can decrypt it in place.
+func (s *packetSession) readDatagram() ([]byte, error) {
 	for {
 		s.mu.Lock()
 		deadline := s.readBy
@@ -520,19 +526,19 @@ func (s *packetSession) Read(p []byte) (int, error) {
 			s.mu.Lock()
 			s.lastReadFrom = datagram.from
 			s.mu.Unlock()
-			return copy(p, datagram.payload), nil
+			return datagram.payload, nil
 		case <-s.done:
 			if timer != nil {
 				timer.Stop()
 			}
-			return 0, net.ErrClosed
+			return nil, net.ErrClosed
 		case <-s.deadline:
 			if timer != nil {
 				timer.Stop()
 			}
 			continue
 		case <-timeout:
-			return 0, &sessionTimeoutError{}
+			return nil, &sessionTimeoutError{}
 		}
 	}
 }

@@ -2,6 +2,7 @@ package dtls13
 
 import (
 	"bytes"
+	"container/heap"
 	"container/list"
 	"crypto"
 	"crypto/aes"
@@ -141,16 +142,31 @@ type EarlyDataReplayCache interface {
 }
 
 type earlyDataReplayCache struct {
-	mu      sync.Mutex
-	entries map[string]time.Time
-	order   *list.List
-	index   map[string]*list.Element
-	max     int
+	mu          sync.Mutex
+	entries     map[string]struct{}
+	expirations earlyReplayExpirations
+	max         int
 }
 
 type earlyReplayEntry struct {
 	identity string
 	expires  time.Time
+}
+
+type earlyReplayExpirations []*earlyReplayEntry
+
+func (q *earlyReplayExpirations) Len() int           { return len(*q) }
+func (q *earlyReplayExpirations) Less(i, j int) bool { return (*q)[i].expires.Before((*q)[j].expires) }
+func (q *earlyReplayExpirations) Swap(i, j int)      { (*q)[i], (*q)[j] = (*q)[j], (*q)[i] }
+func (q *earlyReplayExpirations) Push(value any) {
+	*q = append(*q, value.(*earlyReplayEntry))
+}
+func (q *earlyReplayExpirations) Pop() any {
+	last := len(*q) - 1
+	entry := (*q)[last]
+	(*q)[last] = nil
+	*q = (*q)[:last]
+	return entry
 }
 
 // NewLRUEarlyDataReplayCache creates a bounded, concurrency-safe in-process
@@ -165,35 +181,22 @@ func NewLRUEarlyDataReplayCache(capacity int) EarlyDataReplayCache {
 	if capacity <= 0 {
 		return nil
 	}
-	return &earlyDataReplayCache{entries: make(map[string]time.Time), order: list.New(), index: make(map[string]*list.Element), max: capacity}
+	return &earlyDataReplayCache{entries: make(map[string]struct{}), max: capacity}
 }
 
 func (c *earlyDataReplayCache) CheckAndStore(identity string, expires time.Time) bool {
 	now := time.Now()
 	c.mu.Lock()
 	defer c.mu.Unlock()
-	for key, value := range c.entries {
-		if !value.After(now) {
-			delete(c.entries, key)
-			if element := c.index[key]; element != nil {
-				c.order.Remove(element)
-				delete(c.index, key)
-			}
-		}
+	for len(c.expirations) > 0 && !c.expirations[0].expires.After(now) {
+		entry := heap.Pop(&c.expirations).(*earlyReplayEntry)
+		delete(c.entries, entry.identity)
 	}
-	if existing, ok := c.entries[identity]; ok && existing.After(now) {
+	if _, exists := c.entries[identity]; exists || len(c.entries) >= c.max {
 		return false
 	}
-	if element := c.index[identity]; element != nil {
-		c.order.Remove(element)
-		delete(c.index, identity)
-	}
-	if len(c.entries) >= c.max {
-		return false
-	}
-	c.entries[identity] = expires
-	element := c.order.PushFront(earlyReplayEntry{identity: identity, expires: expires})
-	c.index[identity] = element
+	c.entries[identity] = struct{}{}
+	heap.Push(&c.expirations, &earlyReplayEntry{identity: identity, expires: expires})
 	return true
 }
 

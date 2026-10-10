@@ -259,6 +259,7 @@ type Conn struct {
 
 	// Guarded by writeMu.
 	writeMu                          sync.Mutex
+	applicationWriteBuffer           []byte
 	sendCipher                       *recordCipher
 	earlyWriteCipher                 *recordCipher
 	earlyWriteRemaining              uint32
@@ -617,10 +618,10 @@ func (c *Conn) finishRecordReader(err error) {
 }
 
 func (c *Conn) queueApplicationData(content []byte, from net.Addr) error {
-	return c.queueApplicationDatagram(content, from, false)
+	return c.queueApplicationDatagram(content, from, false, false)
 }
 
-func (c *Conn) queueApplicationDatagram(content []byte, from net.Addr, early bool) error {
+func (c *Conn) queueApplicationDatagram(content []byte, from net.Addr, early, owned bool) error {
 	c.inputMu.Lock()
 	if len(c.applicationDatagrams) >= c.config.MaxBufferedApplicationDatagrams {
 		c.inputMu.Unlock()
@@ -630,9 +631,11 @@ func (c *Conn) queueApplicationDatagram(content []byte, from net.Addr, early boo
 		c.inputMu.Unlock()
 		return &ProtocolError{"buffered application data limit exceeded"}
 	}
-	c.applicationDatagrams = append(c.applicationDatagrams, applicationDatagram{
-		payload: append([]byte(nil), content...), from: from, early: early,
-	})
+	payload := content
+	if !owned || len(content) == 0 || cap(content) > 2*len(content) {
+		payload = append([]byte(nil), content...)
+	}
+	c.applicationDatagrams = append(c.applicationDatagrams, applicationDatagram{payload: payload, from: from, early: early})
 	c.bufferedApplicationBytes += len(content)
 	c.inputMu.Unlock()
 	c.notifyRead()
@@ -742,7 +745,7 @@ func (c *Conn) queueEarlyApplicationData(content []byte) error {
 	}
 	c.earlyReadBytes += len(content)
 	if c.earlyIO {
-		return c.queueApplicationDatagram(content, c.conn.RemoteAddr(), true)
+		return c.queueApplicationDatagram(content, c.conn.RemoteAddr(), true, false)
 	}
 	if c.earlyReadBytes > c.config.MaxBufferedApplicationData {
 		return &ProtocolError{"buffered early application data limit exceeded"}
@@ -758,7 +761,7 @@ func (c *Conn) promoteEarlyApplicationData() error {
 	c.earlyReadBytes = 0
 	c.earlyMu.Unlock()
 	for _, datagram := range datagrams {
-		if err := c.queueApplicationDatagram(datagram, c.conn.RemoteAddr(), true); err != nil {
+		if err := c.queueApplicationDatagram(datagram, c.conn.RemoteAddr(), true, false); err != nil {
 			return err
 		}
 	}
@@ -766,8 +769,13 @@ func (c *Conn) promoteEarlyApplicationData() error {
 }
 
 func (c *Conn) readRecords() {
-	buffer := acquireDatagramBuffer()
-	defer releaseDatagramBuffer(buffer)
+	var buffer []byte
+	_, owned := c.conn.(*packetSession)
+	if !owned {
+		storage := acquireDatagramBuffer()
+		defer releaseDatagramBuffer(storage)
+		buffer = storage[:]
+	}
 	for {
 		var datagram []byte
 		var err error
@@ -776,7 +784,7 @@ func (c *Conn) readRecords() {
 			c.pendingPostHandshakeRecords[0] = nil
 			c.pendingPostHandshakeRecords = c.pendingPostHandshakeRecords[1:]
 		} else {
-			datagram, err = readDatagramWithPending(c.conn, buffer[:], &c.pendingDatagram)
+			datagram, err = readDatagramWithPending(c.conn, buffer, &c.pendingDatagram)
 		}
 		if err != nil {
 			c.finishRecordReader(err)
@@ -788,7 +796,7 @@ func (c *Conn) readRecords() {
 				from = actual
 			}
 		}
-		if err = c.dispatchDatagramFrom(datagram, from); err != nil {
+		if err = c.dispatchDatagramFrom(datagram, from, owned); err != nil {
 			c.failConnection(err)
 			return
 		}
@@ -825,6 +833,8 @@ func (c *Conn) clearTrafficSecrets(failure error) {
 	c.writeMu.Lock()
 	c.clearReturnRoutabilityLocked()
 	c.sendCipher = nil
+	clear(c.applicationWriteBuffer)
+	c.applicationWriteBuffer = nil
 	c.earlyWriteCipher = nil
 	c.earlyWriteRemaining = 0
 	c.earlyWriteGuard = nil
@@ -909,14 +919,14 @@ func (c *Conn) sendPlainFatalAlert(description uint8) {
 }
 
 func (c *Conn) dispatchDatagram(datagram []byte) error {
-	return c.dispatchDatagramFrom(datagram, c.conn.RemoteAddr())
+	return c.dispatchDatagramFrom(datagram, c.conn.RemoteAddr(), false)
 }
 
-func (c *Conn) dispatchDatagramFrom(datagram []byte, from net.Addr) error {
-	return c.dispatchDatagramWithACK(datagram, from, nil)
+func (c *Conn) dispatchDatagramFrom(datagram []byte, from net.Addr, owned bool) error {
+	return c.dispatchDatagramWithACK(datagram, from, nil, owned)
 }
 
-func (c *Conn) dispatchDatagramWithACK(datagram []byte, from net.Addr, onACK func([]recordNumber)) error {
+func (c *Conn) dispatchDatagramWithACK(datagram []byte, from net.Addr, onACK func([]recordNumber), owned bool) error {
 	c.dispatchMu.Lock()
 	defer c.dispatchMu.Unlock()
 	for len(datagram) > 0 {
@@ -932,6 +942,8 @@ func (c *Conn) dispatchDatagramWithACK(datagram []byte, from net.Addr, onACK fun
 			}
 			return nil
 		}
+		// A trailing record must not keep a large coalesced datagram alive.
+		owned = owned && consumed == len(datagram)
 		cipher, selectErr := c.receiveEpochs.selectCipher(datagram[0])
 		if selectErr != nil {
 			return nil
@@ -959,7 +971,7 @@ func (c *Conn) dispatchDatagramWithACK(datagram []byte, from net.Addr, onACK fun
 			if epoch < 3 {
 				return alertError(alertUnexpectedMessage, &ProtocolError{"application data used handshake keys"})
 			}
-			err = c.dispatchApplicationData(content, number, from)
+			err = c.dispatchApplicationData(content, number, from, owned)
 		case recordTypeAlert:
 			err = c.dispatchAlert(content, number)
 		case recordTypeACK:
@@ -1032,7 +1044,12 @@ func (c *Conn) ReadDatagram(p []byte) (int, DatagramInfo, error) {
 		c.inputMu.Lock()
 		if len(c.applicationDatagrams) > 0 {
 			datagram := c.applicationDatagrams[0]
-			c.applicationDatagrams = c.applicationDatagrams[1:]
+			c.applicationDatagrams[0] = applicationDatagram{}
+			if len(c.applicationDatagrams) == 1 {
+				c.applicationDatagrams = c.applicationDatagrams[:0]
+			} else {
+				c.applicationDatagrams = c.applicationDatagrams[1:]
+			}
 			c.bufferedApplicationBytes -= len(datagram.payload)
 			n := copy(p, datagram.payload)
 			c.inputMu.Unlock()
@@ -1126,10 +1143,13 @@ func (c *Conn) WriteDatagram(p []byte) (int, error) {
 			c.writeMu.Unlock()
 			return 0, datagramTooLargeError(addr)
 		}
-		wire, err := c.sendCipher.seal(recordTypeApplicationData, p)
+		wire, err := c.sendCipher.sealInto(c.applicationWriteBuffer, recordTypeApplicationData, p)
 		if err != nil {
 			c.writeMu.Unlock()
 			return 0, err
+		}
+		if len(wire) > len(c.applicationWriteBuffer) {
+			c.applicationWriteBuffer = wire
 		}
 		if c.earlyWriteGuard != nil && !c.earlyWriteGuard.allowSend(len(wire)) {
 			c.writeMu.Unlock()

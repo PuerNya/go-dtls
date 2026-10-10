@@ -351,34 +351,6 @@ func TestCompressedCertificateUsesWireTranscript(t *testing.T) {
 	}
 }
 
-func BenchmarkCertificateCompression(b *testing.B) {
-	certificate, err := (&certificateMessage{certificates: []certificateEntry{{data: bytes.Repeat([]byte("certificate-der"), 256)}}}).marshal()
-	if err != nil {
-		b.Fatal(err)
-	}
-	compressed, err := marshalCompressedCertificate(certificate)
-	if err != nil {
-		b.Fatal(err)
-	}
-	b.ReportMetric(float64(len(compressed))/float64(len(certificate)), "wire-ratio")
-	b.Run("Compress", func(b *testing.B) {
-		b.ReportAllocs()
-		for b.Loop() {
-			if _, err := marshalCompressedCertificate(certificate); err != nil {
-				b.Fatal(err)
-			}
-		}
-	})
-	b.Run("Decompress", func(b *testing.B) {
-		b.ReportAllocs()
-		for b.Loop() {
-			if _, err := parseCertificateHandshakeMessage(handshakeTypeCompressedCertificate, compressed, &certificateCompressionZlibOffer, 1<<20); err != nil {
-				b.Fatal(err)
-			}
-		}
-	})
-}
-
 func BenchmarkCertificateCompressionHandshakeLifecycle(b *testing.B) {
 	serverCertificate, roots := testServerCertificate(b)
 	clientCertificate, clientRoots := testClientCertificate(b)

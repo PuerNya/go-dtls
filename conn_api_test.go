@@ -3,6 +3,7 @@ package dtls13
 import (
 	"bytes"
 	"errors"
+	"fmt"
 	"net"
 	"testing"
 )
@@ -61,11 +62,26 @@ func TestPathMTUFloorUsesUDPPayloadSize(t *testing.T) {
 func TestConnDatagramBoundariesAndSources(t *testing.T) {
 	client, server := establishedConnPair(t)
 
-	payloads := [][]byte{[]byte("first"), bytes.Repeat([]byte("x"), 700), []byte("second")}
+	cases := []struct {
+		payload  []byte
+		readSize int
+	}{
+		{[]byte("first"), 1024},
+		{bytes.Repeat([]byte("x"), 700), 1024},
+		{nil, 0},
+		{[]byte("abcdef"), 3},
+		{[]byte("next"), 1024},
+		{bytes.Repeat([]byte("y"), 1000), 1024},
+	}
 	writes := make(chan error, 1)
 	go func() {
-		for _, payload := range payloads {
-			if _, err := client.WriteDatagram(payload); err != nil {
+		for _, test := range cases {
+			payload := test.payload
+			n, err := client.WriteDatagram(payload)
+			if err == nil && n != len(payload) {
+				err = fmt.Errorf("WriteDatagram count=%d, want %d", n, len(payload))
+			}
+			if err != nil {
 				writes <- err
 				return
 			}
@@ -73,64 +89,24 @@ func TestConnDatagramBoundariesAndSources(t *testing.T) {
 		writes <- nil
 	}()
 	buffer := make([]byte, 1024)
-	for _, want := range payloads {
-		n, info, err := server.ReadDatagram(buffer)
+	for _, test := range cases {
+		want := test.payload
+		destination := buffer[:test.readSize]
+		if test.readSize == 0 {
+			destination = nil
+		}
+		n, info, err := server.ReadDatagram(destination)
 		if err != nil {
 			t.Fatal(err)
 		}
-		if !bytes.Equal(buffer[:n], want) {
+		if n != min(len(destination), len(want)) || !bytes.Equal(buffer[:n], want[:n]) {
 			t.Fatalf("ReadDatagram=%q, want %q", buffer[:n], want)
 		}
-		if info.Source == nil || info.Source.String() != server.RemoteAddr().String() || info.FullLength != len(want) || info.Truncated {
+		if info.Source == nil || info.Source.String() != server.RemoteAddr().String() || info.FullLength != len(want) || info.Truncated != (len(want) > len(destination)) {
 			t.Fatalf("info=%+v, want source %v and length %d", info, server.RemoteAddr(), len(want))
 		}
 	}
 	if err := <-writes; err != nil {
-		t.Fatal(err)
-	}
-}
-
-func TestConnReadDatagramReportsTruncation(t *testing.T) {
-	client, server := establishedConnPair(t)
-	writes := make(chan error, 1)
-	go func() {
-		if _, err := client.WriteDatagram([]byte("abcdef")); err != nil {
-			writes <- err
-			return
-		}
-		_, err := client.WriteDatagram([]byte("next"))
-		writes <- err
-	}()
-	buffer := make([]byte, 3)
-	n, info, err := server.ReadDatagram(buffer)
-	if err != nil || string(buffer[:n]) != "abc" || !info.Truncated || info.FullLength != 6 {
-		t.Fatalf("first ReadDatagram=%q, %+v, %v", buffer[:n], info, err)
-	}
-	buffer = make([]byte, 8)
-	n, info, err = server.ReadDatagram(buffer)
-	if err != nil || string(buffer[:n]) != "next" || info.Truncated || info.FullLength != 4 {
-		t.Fatalf("second ReadDatagram=%q, %+v, %v", buffer[:n], info, err)
-	}
-	if err := <-writes; err != nil {
-		t.Fatal(err)
-	}
-}
-
-func TestConnZeroLengthDatagram(t *testing.T) {
-	client, server := establishedConnPair(t)
-	written := make(chan error, 1)
-	go func() {
-		n, err := client.WriteDatagram(nil)
-		if err == nil && n != 0 {
-			err = errors.New("zero-length WriteDatagram returned a non-zero count")
-		}
-		written <- err
-	}()
-	n, info, err := server.ReadDatagram(nil)
-	if err != nil || n != 0 || info.Source == nil || info.FullLength != 0 || info.Truncated {
-		t.Fatalf("ReadDatagram(nil)=%d, %+v, %v", n, info, err)
-	}
-	if err := <-written; err != nil {
 		t.Fatal(err)
 	}
 }

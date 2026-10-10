@@ -294,7 +294,11 @@ func TestEarlyIOPendingFinalACK(t *testing.T) {
 				return
 			}
 			dropACK.Store(false)
-			if err := serverGate.flush(); err != nil {
+			// The record observer reads sending keys, including during a flush.
+			server.writeMu.Lock()
+			err := serverGate.flush()
+			server.writeMu.Unlock()
+			if err != nil {
 				t.Fatal(err)
 			}
 			handshakePair(t, client, server)

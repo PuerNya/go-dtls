@@ -487,6 +487,9 @@ func readDatagramWithPending(conn net.Conn, buffer []byte, pending *[]byte) ([]b
 		*pending = nil
 		return datagram, nil
 	}
+	if session, ok := conn.(*packetSession); ok {
+		return session.readDatagram()
+	}
 	n, err := conn.Read(buffer)
 	return buffer[:n], err
 }
@@ -584,7 +587,7 @@ func (c *Conn) receiveAuthenticatedACK() ([]recordNumber, error) {
 	var numbers []recordNumber
 	err = c.dispatchDatagramWithACK(datagram, c.conn.RemoteAddr(), func(ack []recordNumber) {
 		numbers = append(numbers, ack...)
-	})
+	}, false)
 	c.inputMu.Lock()
 	closed := c.peerReadClosed
 	c.inputMu.Unlock()

@@ -78,7 +78,7 @@ type reportLanguage struct {
 	details         string
 	quickNavigation string
 	metadata        [5]string
-	sections        [7]string
+	sections        [4]string
 	realUDP         [4]string
 	realUDPTiming   [2]string
 	columns         [6]string
@@ -89,9 +89,6 @@ var sectionAnchors = [...]string{
 	"section-connection-lifecycle",
 	"section-real-udp-interoperability",
 	"section-record-layer-and-reliability",
-	"section-key-schedule-and-cryptography",
-	"section-wire-encoding-and-parsing",
-	"section-certificate-compression",
 	"section-other-benchmarks",
 }
 
@@ -112,7 +109,7 @@ var realUDPDirectionPaths = [...]string{
 const (
 	realUDPMatrixSamples  = 5
 	realUDPSkipSamples    = 1
-	reviewedWolfSSLCommit = "7a8aae3e40138d19c640ae5bc0bc4e8f2998c22d"
+	reviewedWolfSSLCommit = "7499fc5b6c99eb39055a59f538bb3709971341c9"
 )
 
 type realUDPSkipAllowance struct {
@@ -173,13 +170,10 @@ var reportLanguages = map[string]reportLanguage{
 		details:         "Workload-specific connection metrics are preferred over the Go harness time. Memory and allocations remain per Go benchmark operation. Exact raw output remains in the workflow artifact.",
 		quickNavigation: "Quick navigation",
 		metadata:        [5]string{"Commit", "Generated", "Go", "Platform", "wolfSSL"},
-		sections: [7]string{
+		sections: [4]string{
 			"Connection lifecycle",
 			"Real UDP interoperability",
 			"Record layer and reliability",
-			"Key schedule and cryptography",
-			"Wire encoding and parsing",
-			"Certificate compression",
 			"Other benchmarks",
 		},
 		realUDP: [4]string{
@@ -202,13 +196,10 @@ var reportLanguages = map[string]reportLanguage{
 		details:         "工作负载专用的连接指标优先于 Go 基准测试框架耗时。内存和分配次数仍按每次 Go 基准测试操作统计。精确原始输出保留在 Workflow Artifact 中。",
 		quickNavigation: "快速跳转",
 		metadata:        [5]string{"提交", "生成时间", "Go", "平台", "wolfSSL"},
-		sections: [7]string{
+		sections: [4]string{
 			"连接生命周期",
 			"真实 UDP 互通",
 			"记录层与可靠性",
-			"密钥调度与密码学",
-			"报文编码与解析",
-			"证书压缩",
 			"其他基准测试",
 		},
 		realUDP: [4]string{
@@ -231,13 +222,10 @@ var reportLanguages = map[string]reportLanguage{
 		details:         "Специализированные метрики соединения имеют приоритет над временем стенда Go. Память и число аллокаций указаны на одну операцию Go-бенчмарка. Точный исходный вывод сохранен в артефакте Workflow.",
 		quickNavigation: "Быстрая навигация",
 		metadata:        [5]string{"Коммит", "Сформировано", "Go", "Платформа", "wolfSSL"},
-		sections: [7]string{
+		sections: [4]string{
 			"Жизненный цикл соединения",
 			"Совместимость через реальный UDP",
 			"Уровень записей и надежность",
-			"Расписание ключей и криптография",
-			"Кодирование и разбор данных",
-			"Сжатие сертификатов",
 			"Другие бенчмарки",
 		},
 		realUDP: [4]string{
@@ -266,41 +254,29 @@ var workloadMetrics = [...]struct {
 }
 
 var benchmarkPartLabels = map[string]string{
-	"1301":                                   "AES-128-GCM",
-	"1302":                                   "AES-256-GCM",
-	"AES128CCM":                              "AES-128-CCM",
-	"AES128GCM":                              "AES-128-GCM",
-	"AES256GCM":                              "AES-256-GCM",
-	"ApplicationDataRoundTrip":               "Application data",
-	"BuildPlainACKRecords":                   "Plain ACK build",
-	"BuildProtectedACKRecords":               "Protected ACK build",
-	"CertificateAES128GCM":                   "Certificate / AES-128-GCM",
-	"CertificateCompression":                 "Certificate compression",
-	"ChaCha20Poly1305":                       "ChaCha20-Poly1305",
-	"Client1":                                "1 key share",
-	"Client4":                                "4 key shares",
-	"Client9":                                "9 key shares",
-	"ConnectionID":                           "CID",
-	"EarlyData":                              "0-RTT",
-	"HandshakeInboxSequentialSingleFragment": "Inbox / Single fragment",
-	"HandshakeInboxSequentialSingleFragmentBatch": "Inbox / Fragment batch",
-	"HandshakeInboxSequentialSingleFragmentReuse": "Inbox / Fragment reuse",
-	"HybridKeyExchange":                           "Hybrid KEX",
-	"KeyScheduleSideDerivations":                  "Key derivation",
-	"MarshalHandshakeMessages":                    "Handshake marshal",
-	"MutualTLS":                                   "mTLS",
-	"MutualTLSSessionResumption":                  "mTLS resumption",
-	"ParseKeyShares":                              "Key share parse",
-	"PostHandshakeAuthentication":                 "Post-handshake authentication",
-	"ProtectedRecordReceiveErrorUnauthenticated":  "Reject unauthenticated record",
-	"ProtectedRecordRoundTrip":                    "Record round trip",
-	"ProtectedRecordSeal":                         "Record seal",
-	"ReceivingTrafficKeyUpdate":                   "Receive KeyUpdate",
-	"SecP256r1MLKEM768":                           "SecP256r1MLKEM768",
-	"SecP384r1MLKEM1024":                          "SecP384r1MLKEM1024",
-	"SendingTrafficKeyUpdate":                     "Send KeyUpdate",
-	"ServerCertificate":                           "Server cert",
-	"SessionResumption":                           "Session resumption",
+	"1301":                        "AES-128-GCM",
+	"1302":                        "AES-256-GCM",
+	"AES128CCM":                   "AES-128-CCM",
+	"AES128GCM":                   "AES-128-GCM",
+	"AES256GCM":                   "AES-256-GCM",
+	"ApplicationDataRoundTrip":    "Application data",
+	"BuildPlainACKRecords":        "Plain ACK build",
+	"BuildProtectedACKRecords":    "Protected ACK build",
+	"CertificateAES128GCM":        "Certificate / AES-128-GCM",
+	"ChaCha20Poly1305":            "ChaCha20-Poly1305",
+	"ConnectionID":                "CID",
+	"EarlyData":                   "0-RTT",
+	"HybridKeyExchange":           "Hybrid KEX",
+	"MutualTLS":                   "mTLS",
+	"MutualTLSSessionResumption":  "mTLS resumption",
+	"PostHandshakeAuthentication": "Post-handshake authentication",
+	"ProtectedRecordReceiveErrorUnauthenticated": "Reject unauthenticated record",
+	"ProtectedRecordRoundTrip":                   "Record round trip",
+	"ProtectedRecordSeal":                        "Record seal",
+	"SecP256r1MLKEM768":                          "SecP256r1MLKEM768",
+	"SecP384r1MLKEM1024":                         "SecP384r1MLKEM1024",
+	"ServerCertificate":                          "Server cert",
+	"SessionResumption":                          "Session resumption",
 }
 
 var benchmarkFeatureLabels = map[string][3]string{
@@ -442,6 +418,17 @@ var benchmarkFeatureLabels = map[string][3]string{
 }
 
 var benchmarkPartTranslations = map[string][3]string{
+	"Memory Datagram Round Trip":           {"In-memory datagram round trip", "内存 datagram 往返", "Обмен датаграммами в памяти"},
+	"Listener Datagram Round Trip":         {"Listener UDP round trip", "Listener UDP 往返", "Обмен UDP через Listener"},
+	"Connections1":                         {"1 connection", "1 个连接", "1 соединение"},
+	"Connections64":                        {"64 connections", "64 个连接", "64 соединения"},
+	"Connections1024":                      {"1024 connections", "1024 个连接", "1024 соединения"},
+	"No CID":                               {"No CID", "无 CID", "Без CID"},
+	"CID":                                  {"CID", "CID", "CID"},
+	"Bytes64":                              {"64 bytes", "64 字节", "64 байта"},
+	"Bytes1200":                            {"1200 bytes", "1200 字节", "1200 байт"},
+	"Entries64":                            {"64 initial replay entries", "初始 64 条重放记录", "64 начальные записи повторов"},
+	"Entries4096":                          {"4096 initial replay entries", "初始 4096 条重放记录", "4096 начальных записей повторов"},
 	"Plain ACK build":                      {"Plain ACK build", "明文 ACK 构建", "Построение открытого ACK"},
 	"Protected ACK build":                  {"Protected ACK build", "受保护 ACK 构建", "Построение защищенного ACK"},
 	"Build Plain Flight":                   {"Build Plain Flight", "构建明文握手报文组", "Построение открытой группы сообщений"},
@@ -449,74 +436,25 @@ var benchmarkPartTranslations = map[string][3]string{
 	"Combine Flights":                      {"Combine Flights", "合并握手报文组", "Объединение групп сообщений"},
 	"Flight First Refresh":                 {"Flight First Refresh", "握手报文组首次刷新", "Первое обновление группы сообщений"},
 	"Flight Initial History Batch":         {"Flight Initial History Batch", "握手报文组初始历史批次", "Начальная история группы сообщений"},
-	"Flight Pending Indices":               {"Flight Pending Indices", "握手报文组待处理索引", "Индексы ожидания группы сообщений"},
 	"Flight Wire Window":                   {"Flight Wire Window", "握手报文组传输窗口", "Окно передачи группы сообщений"},
-	"Inbox / Single fragment":              {"Inbox / Single fragment", "接收缓存 / 单分片", "Буфер приема / один фрагмент"},
-	"Inbox / Fragment batch":               {"Inbox / Fragment batch", "接收缓存 / 分片批次", "Буфер приема / пакет фрагментов"},
-	"Inbox / Fragment reuse":               {"Inbox / Fragment reuse", "接收缓存 / 分片复用", "Буфер приема / повторное использование фрагмента"},
-	"Handshake Reassembly":                 {"Handshake Reassembly", "握手重组", "Сборка рукопожатия"},
-	"Handshake Reassembly Single Fragment": {"Handshake Reassembly Single Fragment", "握手重组单分片", "Сборка рукопожатия одним фрагментом"},
 	"Parse ACK":                            {"Parse ACK", "解析 ACK", "Разбор ACK"},
 	"Protected Record CID":                 {"Protected Record CID", "受保护记录 CID", "Защищенная запись CID"},
 	"Reject unauthenticated record":        {"Reject unauthenticated record", "拒绝未认证记录", "Отклонение неаутентифицированной записи"},
 	"Record round trip":                    {"Record round trip", "记录往返", "Обмен записью туда и обратно"},
 	"Protected Record Round Trip In Place": {"Protected Record Round Trip In Place", "受保护记录原地往返", "Обмен защищенной записью на месте"},
 	"Record seal":                          {"Record seal", "记录封装", "Защита записи"},
-	"Calculate PSK Binder":                 {"Calculate PSK Binder", "计算 PSK 绑定值", "Расчет привязки PSK"},
-	"Derive Traffic Keys":                  {"Derive Traffic Keys", "派生流量密钥", "Вывод ключей трафика"},
-	"Derive Traffic Keys Into":             {"Derive Traffic Keys Into", "派生流量密钥并写入", "Вывод ключей трафика в буфер"},
-	"Empty Transcript Hash":                {"Empty Transcript Hash", "空握手转录哈希", "Хеш пустого транскрипта"},
-	"Finished Verify Data":                 {"Finished Verify Data", "Finished 验证数据", "Данные проверки Finished"},
-	"Install Application Keys":             {"Install Application Keys", "安装应用密钥", "Установка ключей приложения"},
-	"Key Schedule Derivation":              {"Key Schedule Derivation", "密钥调度派生", "Вывод расписания ключей"},
-	"Key derivation":                       {"Key derivation", "密钥派生", "Вывод ключей"},
-	"New Record Cipher":                    {"New Record Cipher", "新建记录密码器", "Новый шифр записи"},
-	"Receive KeyUpdate":                    {"Receive KeyUpdate", "接收 KeyUpdate", "Получение KeyUpdate"},
-	"Send KeyUpdate":                       {"Send KeyUpdate", "发送 KeyUpdate", "Отправка KeyUpdate"},
-	"Transcript Clone":                     {"Transcript Clone", "握手转录克隆", "Клонирование транскрипта"},
-	"Transcript Sum":                       {"Transcript Sum", "握手转录求和", "Сумма транскрипта"},
-	"Marshal Extensions":                   {"Marshal Extensions", "编码扩展", "Кодирование расширений"},
-	"Handshake marshal":                    {"Handshake marshal", "编码握手", "Кодирование рукопожатия"},
-	"Parse Extensions":                     {"Parse Extensions", "解析扩展", "Разбор расширений"},
-	"Parse Handshake Fragment":             {"Parse Handshake Fragment", "解析握手分片", "Разбор фрагмента рукопожатия"},
-	"Key share parse":                      {"Key share parse", "解析密钥份额", "Разбор доли ключа"},
-	"Parse Plain Record":                   {"Parse Plain Record", "解析明文记录", "Разбор открытой записи"},
-	"Compress":                             {"Compress", "压缩", "Сжатие"},
-	"Decompress":                           {"Decompress", "解压", "Распаковка"},
 	"Empty":                                {"Empty", "空", "Пустой"},
 	"Single":                               {"Single", "单条", "Один"},
 	"Sorted64":                             {"Sorted64", "已排序 64", "Отсортированный 64"},
 	"Reversed64":                           {"Reversed64", "逆序 64", "Обратный 64"},
 	"Single Reuse":                         {"Single Reuse", "单条复用", "Повторное использование одного"},
 	"Reuse Single":                         {"Reuse Single", "单条复用", "Повторное использование одного"},
-	"Allocated":                            {"Allocated", "已分配", "Выделенный"},
-	"Reuse Window":                         {"Reuse Window", "复用窗口", "Окно повторного использования"},
-	"Pending":                              {"Pending", "待处理", "Ожидание"},
 	"Retransmit":                           {"Retransmit", "重传", "Повторная передача"},
 	"Round Trip":                           {"Round Trip", "往返", "Обмен туда и обратно"},
 	"Seal":                                 {"Seal", "封装", "Защита"},
 	"Owned":                                {"Owned", "独占", "Владеемое"},
 	"Reuse":                                {"Reuse", "复用", "Повторное использование"},
-	"View":                                 {"View", "视图", "Представление"},
-	"View Into":                            {"View Into", "写入视图", "Представление в буфере"},
-	"Ordered View":                         {"Ordered View", "有序视图", "Упорядоченное представление"},
 	"Certificate":                          {"Certificate", "证书", "Сертификат"},
-	"Certificate Verify":                   {"Certificate Verify", "证书验证", "Проверка сертификата"},
-	"Client Hello":                         {"Client Hello", "客户端 Hello", "Client Hello"},
-	"Hello Retry Request":                  {"Hello Retry Request", "Hello 重试请求", "Hello Retry Request"},
-	"New Connection ID":                    {"New Connection ID", "新连接 ID", "Новый ID соединения"},
-	"New Session Ticket":                   {"New Session Ticket", "新会话票据", "Новый билет сеанса"},
-	"Resumption Client Hello":              {"Resumption Client Hello", "恢复 Client Hello", "Client Hello возобновления"},
-	"Server Hello":                         {"Server Hello", "服务端 Hello", "Server Hello"},
-	"Session Ticket State":                 {"Session Ticket State", "会话票据状态", "Состояние билета сеанса"},
-	"Early Traffic":                        {"Early Traffic", "早期流量", "Ранний трафик"},
-	"Exporter":                             {"Exporter", "导出器", "Экспортер"},
-	"Exporter Zero":                        {"Exporter Zero", "零值导出器", "Нулевой экспортер"},
-	"Resumption PSK":                       {"Resumption PSK", "恢复 PSK", "PSK возобновления"},
-	"Traffic Update":                       {"Traffic Update", "流量更新", "Обновление трафика"},
-	"1 key share":                          {"1 key share", "1 个密钥份额", "1 доля ключа"},
-	"4 key shares":                         {"4 key shares", "4 个密钥份额", "4 доли ключа"},
-	"9 key shares":                         {"9 key shares", "9 个密钥份额", "9 долей ключа"},
 }
 
 var benchmarkDisplayOrders = map[string]int{
@@ -538,6 +476,22 @@ var benchmarkDisplayOrders = map[string]int{
 	"HybridKeyExchangeHandshakeLifecycle/X25519MLKEM768":                 110,
 	"HybridKeyExchangeHandshakeLifecycle/SecP256r1MLKEM768":              120,
 	"HybridKeyExchangeHandshakeLifecycle/SecP384r1MLKEM1024":             130,
+	"ListenerDatagramRoundTrip/Connections1/NoCID/Bytes64":               140,
+	"ListenerDatagramRoundTrip/Connections1/NoCID/Bytes1200":             141,
+	"ListenerDatagramRoundTrip/Connections1/CID/Bytes64":                 142,
+	"ListenerDatagramRoundTrip/Connections1/CID/Bytes1200":               143,
+	"ListenerDatagramRoundTrip/Connections64/NoCID/Bytes64":              144,
+	"ListenerDatagramRoundTrip/Connections64/NoCID/Bytes1200":            145,
+	"ListenerDatagramRoundTrip/Connections64/CID/Bytes64":                146,
+	"ListenerDatagramRoundTrip/Connections64/CID/Bytes1200":              147,
+	"ListenerDatagramRoundTrip/Connections1024/NoCID/Bytes64":            148,
+	"ListenerDatagramRoundTrip/Connections1024/NoCID/Bytes1200":          149,
+	"ListenerDatagramRoundTrip/Connections1024/CID/Bytes64":              150,
+	"ListenerDatagramRoundTrip/Connections1024/CID/Bytes1200":            151,
+	"EarlyDataHandshakeLifecycle/Entries64":                              160,
+	"EarlyDataHandshakeLifecycle/Entries4096":                            161,
+	"MemoryDatagramRoundTrip/Bytes64":                                    162,
+	"MemoryDatagramRoundTrip/Bytes1200":                                  163,
 
 	"WolfSSLFeatureRealUDP/CertificateAES128GCM":        10,
 	"WolfSSLFeatureRealUDP/ApplicationDataRoundTrip":    20,
@@ -1206,8 +1160,6 @@ func validateBenchmarkCoverage(name string) error {
 		return errors.New("benchmark has no report label")
 	}
 	switch parts[0] {
-	case "CertificateCompression":
-		parts = parts[1:]
 	case "GREASEHandshakeLifecycle":
 		return fmt.Errorf("benchmark %q is not covered by the report generator", name)
 	default:
@@ -1352,23 +1304,14 @@ func writeReport(writer io.Writer, result *report, commit, wolfSSL, generated st
 func benchmarkSection(name string) int {
 	root, _, _ := strings.Cut(strings.TrimPrefix(name, "Benchmark"), "/")
 	switch {
-	case strings.Contains(root, "HandshakeLifecycle"):
+	case strings.Contains(root, "HandshakeLifecycle"), root == "ListenerDatagramRoundTrip", root == "MemoryDatagramRoundTrip":
 		return 0
 	case strings.Contains(root, "RealUDP"):
 		return 1
-	case strings.Contains(root, "ProtectedRecord"), strings.Contains(root, "Flight"), strings.Contains(root, "ACK"),
-		strings.Contains(root, "HandshakeReassembly"), strings.Contains(root, "HandshakeInbox"):
+	case strings.Contains(root, "ProtectedRecord"), strings.Contains(root, "Flight"), strings.Contains(root, "ACK"):
 		return 2
-	case strings.Contains(root, "Transcript"), strings.Contains(root, "TrafficKey"), strings.Contains(root, "KeySchedule"),
-		strings.Contains(root, "Finished"), strings.Contains(root, "PSKBinder"), strings.Contains(root, "RecordCipher"),
-		strings.Contains(root, "ApplicationKeys"):
-		return 3
-	case strings.HasPrefix(root, "Parse"), strings.HasPrefix(root, "Marshal"):
-		return 4
-	case strings.Contains(root, "CertificateCompression"):
-		return 5
 	default:
-		return 6
+		return 3
 	}
 }
 
@@ -1464,8 +1407,6 @@ func benchmarkLabel(name string, text reportLanguage) string {
 		parts = parts[1:]
 	case "HybridKeyExchangeRealUDP":
 		parts[0] = "HybridKeyExchange"
-	case "CertificateCompression":
-		parts = parts[1:]
 	default:
 		parts[0] = strings.TrimSuffix(parts[0], "HandshakeLifecycle")
 		parts[0] = strings.TrimSuffix(parts[0], "Suites")

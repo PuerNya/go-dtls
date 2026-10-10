@@ -182,9 +182,12 @@ func (c *Conn) writeEarlyDatagramLocked(p []byte) (int, error) {
 		if len(p) > c.maxApplicationDatagramForCipher(c.earlyWriteCipher) {
 			return 0, datagramTooLargeError(c.RemoteAddr())
 		}
-		wire, err := c.earlyWriteCipher.seal(recordTypeApplicationData, p)
+		wire, err := c.earlyWriteCipher.sealInto(c.applicationWriteBuffer, recordTypeApplicationData, p)
 		if err != nil {
 			return 0, err
+		}
+		if len(wire) > len(c.applicationWriteBuffer) {
+			c.applicationWriteBuffer = wire
 		}
 		if err = c.writeRecord(wire); err != nil {
 			if !c.config.IgnorePathMTU && isMessageTooLong(err) {

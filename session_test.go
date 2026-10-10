@@ -467,6 +467,25 @@ func TestEarlyDataReplayCacheIsConcurrentAndBounded(t *testing.T) {
 	if !expiryCache.CheckAndStore("already-expired", expires) {
 		t.Fatal("expired identity was not reusable")
 	}
+	mixedExpiry := NewLRUEarlyDataReplayCache(3)
+	for _, entry := range []struct {
+		identity string
+		deadline time.Time
+	}{
+		{"long", expires.Add(time.Hour)},
+		{"short", expires},
+		{"expired", time.Now().Add(-time.Second)},
+		{"replacement", expires},
+	} {
+		if !mixedExpiry.CheckAndStore(entry.identity, entry.deadline) {
+			t.Fatalf("out-of-order expiry did not admit %q", entry.identity)
+		}
+	}
+	for _, identity := range []string{"long", "short", "replacement", "overflow"} {
+		if mixedExpiry.CheckAndStore(identity, expires) {
+			t.Fatalf("expiry removed a live identity or exceeded capacity: %q", identity)
+		}
+	}
 }
 
 func TestPSKBinderInitialAndHelloRetryRequest(t *testing.T) {

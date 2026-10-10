@@ -372,6 +372,14 @@ func combineFlights(first, second *flight) *flight {
 	combined := &flight{}
 	combined.records = combineFlightRecords(nil, first, second)
 	combined.rebuildPending = func(_ flightRecordIndices) error {
+		// ACK and send state live on the combined flight; carry them into
+		// each part before rebuilding so pending records remain retransmittable.
+		first.mu.Lock()
+		copy(first.records, combined.records[:len(first.records)])
+		first.mu.Unlock()
+		second.mu.Lock()
+		copy(second.records, combined.records[len(first.records):])
+		second.mu.Unlock()
 		if err := first.refreshPending(); err != nil {
 			return err
 		}

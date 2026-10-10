@@ -2,6 +2,7 @@ package dtls13
 
 import (
 	"bytes"
+	"fmt"
 	"testing"
 	"time"
 )
@@ -123,42 +124,6 @@ func TestBuildProtectedFlightFragmentsToMTU(t *testing.T) {
 	}
 }
 
-func TestProtectedFlightRetainsMessageHeadersAndPayload(t *testing.T) {
-	sender, receiver := recordCipherPair(t, TLS_AES_128_GCM_SHA256, 2)
-	body := []byte("original")
-	messages := []handshakeMessage{{typ: handshakeTypeCertificate, body: body}}
-	f, err := buildProtectedFlight(messages, 1200, sender)
-	if err != nil {
-		t.Fatal(err)
-	}
-	messages[0] = handshakeMessage{typ: handshakeTypeFinished, body: []byte("modified")}
-	if err = f.refreshPending(); err != nil {
-		t.Fatal(err)
-	}
-	content, typ, _, err := receiver.open(f.records[0].wire)
-	if err != nil || typ != recordTypeHandshake {
-		t.Fatalf("open retransmission: type=%d err=%v", typ, err)
-	}
-	fragments, err := parseHandshakeFragments(content)
-	if err != nil || len(fragments) != 1 {
-		t.Fatalf("parse retransmission: fragments=%d err=%v", len(fragments), err)
-	}
-	if string(fragments[0].body) != "original" {
-		t.Fatalf("retransmission payload=%q", fragments[0].body)
-	}
-	if err = f.resize(1000); err != nil {
-		t.Fatal(err)
-	}
-	content, typ, _, err = receiver.open(f.records[0].wire)
-	if err != nil || typ != recordTypeHandshake {
-		t.Fatalf("open resized record: type=%d err=%v", typ, err)
-	}
-	fragments, err = parseHandshakeFragments(content)
-	if err != nil || len(fragments) != 1 || fragments[0].typ != handshakeTypeCertificate || string(fragments[0].body) != "original" {
-		t.Fatalf("resized fragments=%#v err=%v", fragments, err)
-	}
-}
-
 func TestPlainFlightRetainsSingleMessageHeader(t *testing.T) {
 	messages := []handshakeMessage{{typ: handshakeTypeCertificate, body: []byte("original")}}
 	f, _, err := buildPlainFlight(messages, 1200, 0, 0)
@@ -179,32 +144,41 @@ func TestPlainFlightRetainsSingleMessageHeader(t *testing.T) {
 	}
 }
 
-func TestProtectedFlightRetainsMultipleMessageHeaders(t *testing.T) {
-	sender, receiver := recordCipherPair(t, TLS_AES_128_GCM_SHA256, 2)
-	messages := []handshakeMessage{
-		{typ: handshakeTypeCertificate, body: []byte("first")},
-		{typ: handshakeTypeFinished, sequence: 1, body: []byte("second")},
-	}
-	f, err := buildProtectedFlight(messages, 1200, sender)
-	if err != nil {
-		t.Fatal(err)
-	}
-	messages[0], messages[1] = messages[1], messages[0]
-	if err = f.resize(1000); err != nil {
-		t.Fatal(err)
-	}
-	for i, want := range []struct {
-		typ  uint8
-		body string
-	}{{handshakeTypeCertificate, "first"}, {handshakeTypeFinished, "second"}} {
-		content, typ, _, openErr := receiver.open(f.records[i].wire)
-		if openErr != nil || typ != recordTypeHandshake {
-			t.Fatalf("record %d type=%d err=%v", i, typ, openErr)
-		}
-		fragments, parseErr := parseHandshakeFragments(content)
-		if parseErr != nil || len(fragments) != 1 || fragments[0].typ != want.typ || string(fragments[0].body) != want.body {
-			t.Fatalf("record %d fragments=%#v err=%v", i, fragments, parseErr)
-		}
+func TestProtectedFlightRetainsMessageHeadersAndPayload(t *testing.T) {
+	for _, count := range []int{1, 2} {
+		t.Run(fmt.Sprint(count), func(t *testing.T) {
+			sender, receiver := recordCipherPair(t, TLS_AES_128_GCM_SHA256, 2)
+			original := []handshakeMessage{
+				{typ: handshakeTypeCertificate, body: []byte("first")},
+				{typ: handshakeTypeFinished, sequence: 1, body: []byte("second")},
+			}
+			messages := append([]handshakeMessage(nil), original[:count]...)
+			f, err := buildProtectedFlight(messages, 1200, sender)
+			if err != nil {
+				t.Fatal(err)
+			}
+			for i := range messages {
+				messages[i] = handshakeMessage{typ: handshakeTypeClientHello, body: []byte("modified")}
+			}
+			for _, rebuild := range []func() error{f.refreshPending, func() error { return f.resize(1000) }} {
+				if err := rebuild(); err != nil {
+					t.Fatal(err)
+				}
+				if len(f.records) != count {
+					t.Fatalf("records=%d, want %d", len(f.records), count)
+				}
+				for i, want := range original[:count] {
+					content, typ, _, err := receiver.open(f.records[i].wire)
+					if err != nil || typ != recordTypeHandshake {
+						t.Fatalf("record %d type=%d err=%v", i, typ, err)
+					}
+					fragments, err := parseHandshakeFragments(content)
+					if err != nil || len(fragments) != 1 || fragments[0].typ != want.typ || fragments[0].messageSequence != want.sequence || !bytes.Equal(fragments[0].body, want.body) {
+						t.Fatalf("record %d fragments=%#v err=%v", i, fragments, err)
+					}
+				}
+			}
+		})
 	}
 }
 
@@ -424,6 +398,53 @@ func TestFlightWireSnapshotSurvivesRefresh(t *testing.T) {
 		if cap(f.records[i].wire) != len(f.records[i].wire) {
 			t.Fatalf("refreshed record %d len=%d cap=%d", i, len(f.records[i].wire), cap(f.records[i].wire))
 		}
+	}
+}
+
+func TestCombinedFlightPreservesSelectiveRetransmission(t *testing.T) {
+	for _, count := range []int{2, 12} {
+		t.Run(fmt.Sprint(count), func(t *testing.T) {
+			sender, _ := recordCipherPair(t, TLS_AES_128_GCM_SHA256, 2)
+			plain, _, err := buildPlainFlight([]handshakeMessage{{typ: handshakeTypeServerHello, body: []byte{1}}}, 1200, 0, 0)
+			if err != nil {
+				t.Fatal(err)
+			}
+			messages := make([]handshakeMessage, count)
+			for i := range messages {
+				messages[i] = handshakeMessage{typ: handshakeTypeCertificate, sequence: uint16(i + 1), body: []byte{byte(i)}}
+			}
+			protected, err := buildProtectedFlight(messages, 1200, sender)
+			if err != nil {
+				t.Fatal(err)
+			}
+			f := combineFlights(plain, protected)
+			initial := min(10, count+1)
+			if got := len(f.nextUnsentWire(nil)); got != initial {
+				t.Fatalf("initial records=%d", got)
+			}
+			acknowledged, missing := f.records[1].number, f.records[2].number
+			f.ack([]recordNumber{acknowledged})
+			for range 2 {
+				if err = f.refreshPending(); err != nil {
+					t.Fatal(err)
+				}
+				if got := len(f.retransmitWire(10, nil)); got != initial-1 {
+					t.Fatalf("retransmitted records=%d, want %d", got, initial-1)
+				}
+				if !f.records[1].acked || f.records[1].number != acknowledged {
+					t.Fatal("refresh forgot acknowledged record")
+				}
+			}
+			if got, want := len(f.nextUnsentWire(nil)), min(1, count+1-initial); got != want {
+				t.Fatalf("new records=%d, want %d", got, want)
+			}
+			if got := len(f.retransmitWire(1, nil)); got != 1 {
+				t.Fatalf("bounded retransmission returned %d records", got)
+			}
+			if changed := f.ack([]recordNumber{missing}); changed != 1 {
+				t.Fatal("delayed ACK lost its record history")
+			}
+		})
 	}
 }
 

@@ -7,6 +7,7 @@ import (
 	"io"
 	"net"
 	"runtime"
+	"slices"
 	"syscall"
 	"testing"
 	"time"
@@ -43,6 +44,78 @@ func bufferedApplicationDatagrams(c *Conn) int {
 	c.inputMu.Lock()
 	defer c.inputMu.Unlock()
 	return len(c.applicationDatagrams)
+}
+
+func TestApplicationDatagramBufferOwnership(t *testing.T) {
+	_, server := establishedConnPair(t)
+	from := memoryAddr("peer")
+	owned := bytes.Repeat([]byte{'a'}, 1200)
+	unowned := []byte("unowned")
+	oversizedBacking := make([]byte, 1, 4096)
+	oversizedBacking[0] = 'b'
+	for _, test := range []struct {
+		content []byte
+		owned   bool
+		shares  bool
+	}{
+		{owned, true, true},
+		{unowned, false, false},
+		{oversizedBacking, true, false},
+	} {
+		if err := server.queueApplicationDatagram(test.content, from, false, test.owned); err != nil {
+			t.Fatal(err)
+		}
+		server.inputMu.Lock()
+		queued := server.applicationDatagrams[len(server.applicationDatagrams)-1].payload
+		server.inputMu.Unlock()
+		if (&queued[0] == &test.content[0]) != test.shares {
+			t.Fatalf("owned=%v length=%d capacity=%d: backing ownership mismatch", test.owned, len(test.content), cap(test.content))
+		}
+	}
+	queued := server.applicationDatagrams
+	buffer := make([]byte, len(owned))
+	for _, want := range [][]byte{owned, unowned, oversizedBacking} {
+		n, info, err := server.ReadDatagram(buffer)
+		if err != nil || info.Truncated || info.Source != from || !bytes.Equal(buffer[:n], want) {
+			t.Fatalf("queued datagram=%q info=%+v error=%v", buffer[:n], info, err)
+		}
+	}
+	for _, datagram := range queued {
+		if datagram.payload != nil || datagram.from != nil {
+			t.Fatal("consumed queue entry retained its payload or source")
+		}
+	}
+	if server.bufferedApplicationBytes != 0 {
+		t.Fatal("drained queue retained buffered byte accounting")
+	}
+}
+
+func TestCoalescedApplicationDatagramsReleaseBacking(t *testing.T) {
+	client, server := establishedConnPair(t)
+	payloads := [][]byte{bytes.Repeat([]byte{'a'}, 4096), bytes.Repeat([]byte{'b'}, 64)}
+	var records []byte
+	for _, payload := range payloads {
+		wire, err := client.sendCipher.seal(recordTypeApplicationData, payload)
+		if err != nil {
+			t.Fatal(err)
+		}
+		records = append(records, wire...)
+	}
+	// Exact capacity makes the trailing record's slice small, unlike its backing.
+	datagram := make([]byte, len(records))
+	copy(datagram, records)
+	if err := server.dispatchDatagramFrom(datagram, memoryAddr("peer"), true); err != nil {
+		t.Fatal(err)
+	}
+	clear(datagram)
+	if len(server.applicationDatagrams) != len(payloads) {
+		t.Fatalf("queued %d datagrams, want %d", len(server.applicationDatagrams), len(payloads))
+	}
+	for i, payload := range slices.Backward(payloads) {
+		if !bytes.Equal(server.applicationDatagrams[i].payload, payload) {
+			t.Fatalf("datagram %d retained the coalesced buffer", i)
+		}
+	}
 }
 
 func (c *failNthRecordWriteConn) Write(p []byte) (int, error) {
@@ -473,6 +546,10 @@ func TestConnCloseClearsTrafficSecrets(t *testing.T) {
 	client, _ := establishedConnPair(t)
 	client.conn = &recordSinkConn{Conn: client.conn}
 
+	if _, err := client.WriteDatagram([]byte("application payload")); err != nil {
+		t.Fatal(err)
+	}
+	writeBuffer := client.applicationWriteBuffer
 	client.resumptionMasterSecret = []byte("resumption secret")
 	client.resumptionSuite = client.sendingTraffic.suite
 	client.sendingTraffic.nextSecret = bytes.Repeat([]byte{0x41}, client.sendingTraffic.suite.hash.Size())
@@ -493,12 +570,13 @@ func TestConnCloseClearsTrafficSecrets(t *testing.T) {
 	if err := client.Close(); err != nil {
 		t.Fatal(err)
 	}
-	if client.sendCipher != nil || client.sendingTraffic != nil || client.receivingTraffic != nil || client.resumptionMasterSecret != nil || client.resumptionSuite != nil {
+	if client.sendCipher != nil || client.applicationWriteBuffer != nil || client.sendingTraffic != nil || client.receivingTraffic != nil || client.resumptionMasterSecret != nil || client.resumptionSuite != nil {
 		t.Fatal("Close retained traffic or resumption secrets")
 	}
 	for name, secret := range map[string][]byte{
 		"sending": sendingSecret, "next sending": nextSendingSecret, "receiving": receivingSecret,
 		"stale receiving": staleReceiveSecret, "resumption": resumptionSecret, "exporter": exporterSecret,
+		"application write buffer": writeBuffer,
 	} {
 		if !bytes.Equal(secret, make([]byte, len(secret))) {
 			t.Fatalf("Close did not clear %s secret backing", name)

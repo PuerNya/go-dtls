@@ -22,7 +22,7 @@ concurrency:
 
 jobs:
   benchmark:
-    name: all benchmarks
+    name: retained benchmarks
     runs-on: ubuntu-latest
     timeout-minutes: 90
     steps:
@@ -181,12 +181,16 @@ jobs:
           printf 'commit: %s\nworkload-changed: %s\n' "$HEAD_SHA" "$workload_changed" > "$head_output"
           lifecycle='^(BenchmarkConnectionHandshakeLifecycle|BenchmarkSessionTicketRequestHandshakeLifecycle|BenchmarkGREASEHandshakeLifecycle|BenchmarkECHHandshakeLifecycle|BenchmarkExternalPSKHandshakeLifecycle|BenchmarkMutualTLSHandshakeLifecycle|BenchmarkCertificateSelectionHandshakeLifecycle|BenchmarkCertificateCompressionHandshakeLifecycle|BenchmarkHybridKeyExchangeHandshakeLifecycle)$'
           records='^BenchmarkProtectedRecord(Seal|RoundTripInPlace)$'
+          datagrams='^BenchmarkListenerDatagramRoundTrip$'
+          early='^BenchmarkEarlyDataHandshakeLifecycle$'
           run_suite() {
             local binary="$1" output="$2" directory="$3"
             (
               cd "$directory"
               "$binary" -test.run='^$' -test.bench="$lifecycle" -test.benchmem -test.benchtime=500x -test.count=1 -test.cpu=1 -test.timeout=20m | tee -a "$output"
               "$binary" -test.run='^$' -test.bench="$records" -test.benchmem -test.benchtime=100000x -test.count=1 -test.cpu=1 -test.timeout=20m | tee -a "$output"
+              "$binary" -test.run='^$' -test.bench="$datagrams" -test.benchmem -test.benchtime=2000x -test.count=1 -test.cpu=1 -test.timeout=20m | tee -a "$output"
+              "$binary" -test.run='^$' -test.bench="$early" -test.benchmem -test.benchtime=2000x -test.count=1 -test.cpu=1 -test.timeout=20m | tee -a "$output"
             )
           }
           warm_up() {
@@ -195,6 +199,8 @@ jobs:
               cd "$directory"
               "$binary" -test.run='^$' -test.bench="$lifecycle" -test.benchtime=1x -test.count=1 -test.cpu=1 -test.timeout=20m >/dev/null
               "$binary" -test.run='^$' -test.bench="$records" -test.benchtime=1x -test.count=1 -test.cpu=1 -test.timeout=20m >/dev/null
+              "$binary" -test.run='^$' -test.bench="$datagrams" -test.benchtime=1x -test.count=1 -test.cpu=1 -test.timeout=20m >/dev/null
+              "$binary" -test.run='^$' -test.bench="$early" -test.benchtime=1x -test.count=1 -test.cpu=1 -test.timeout=20m >/dev/null
             )
           }
           warm_up "$base_binary" "$base_dir"
@@ -211,7 +217,7 @@ jobs:
           cp "$base_output" benchmark-base.txt
           cp "$head_output" benchmark-head.txt
           printf 'workload-changed=%s\n' "$workload_changed"
-      - name: Run all benchmarks
+      - name: Run retained benchmarks
         env:
           WOLFSSL_COMMIT: ${{ steps.wolfssl.outputs.commit }}
           WOLFSSL_SOURCE: ${{ runner.temp }}/wolfssl
@@ -222,7 +228,8 @@ jobs:
           printf 'commit: %s\nwolfssl: %s (Linux Release static)\n' \
             "$(git rev-parse HEAD)" "$WOLFSSL_COMMIT" > benchmark.txt
           go version >> benchmark.txt
-          go test . -run '^$' -bench . -benchmem -count=5 -cpu=1 -timeout=45m | tee -a benchmark.txt
+          go test . -run '^$' -bench . -skip '^BenchmarkEarlyDataHandshakeLifecycle$' -benchmem -count=5 -cpu=1 -timeout=45m | tee -a benchmark.txt
+          go test . -run '^$' -bench '^BenchmarkEarlyDataHandshakeLifecycle$' -benchtime=2000x -benchmem -count=5 -cpu=1 -timeout=45m | tee -a benchmark.txt
           WOLFSSL_ROOT="$WOLFSSL_SOURCE" \
           WOLFSSL_SERVER="$WOLFSSL_BUILD/examples/server/server" \
           WOLFSSL_CLIENT="$WOLFSSL_BUILD/examples/client/client" \

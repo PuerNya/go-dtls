@@ -398,7 +398,7 @@ func completeHandshakePair(t *testing.T, clientConfig, serverConfig *Config) (*C
 	return client, server
 }
 
-func handshakePair(t *testing.T, client, server *Conn) {
+func handshakePair(t testing.TB, client, server *Conn) {
 	t.Helper()
 	t.Cleanup(func() { _ = client.Close(); _ = server.Close() })
 	serverDone := make(chan error, 1)
