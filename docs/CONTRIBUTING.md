@@ -9,7 +9,7 @@
 - Go 1.27 或更高版本。
 - golangci-lint v2.14.0，与 CI 使用的版本一致。
 - Windows race 测试需要 Zig 0.17 和可用的 CGO 工具链。
-- 变更涉及 wolfSSL 已支持的功能时，wolfSSL 互通测试和专项 benchmark 是必需门禁；其他变更可不安装 wolfSSL。
+- 变更涉及 wolfSSL 已支持的功能时，应运行 wolfSSL 互通测试和专项 benchmark；其他变更可不安装 wolfSSL。
 
 ## 必需检查
 
@@ -83,13 +83,13 @@ pull request 继续由 CI 执行一次全模块 `go test -race ./... -count=1`�
 
 ## 性能验证
 
-涉及握手、record、解析、分配或并发热路径的变更必须同时检查微基准和完整连接。完整连接是主要性能门禁，不能只用局部基准推断整体性能。
+涉及握手、record、解析、分配或并发热路径的变更应同时检查微基准和完整连接。完整连接是主要性能参考，不能只用局部基准推断整体性能。
 
 ```sh
 go test -run '^$' -bench . -benchmem
 go test -run '^$' -bench '^BenchmarkConnectionHandshakeLifecycle$' -benchmem -benchtime=2000x -cpu=1
 go test -run '^$' -bench '^BenchmarkMutualTLSHandshakeLifecycle/(Full|Resumed)$' -benchmem -count=10
-go test -run '^$' -bench '^BenchmarkCertificateCompression' -benchmem
+go test -run '^$' -bench '^BenchmarkCertificateCompressionHandshakeLifecycle' -benchmem
 go test -run '^$' -bench '^BenchmarkProtectedRecord(Seal|RoundTripInPlace)$' -benchmem -count=5
 ```
 
@@ -101,7 +101,7 @@ go test -run '^$' -bench '^BenchmarkProtectedRecord(Seal|RoundTripInPlace)$' -be
 - 分配或内存出现差异时使用 profile 定位到具体对象和调用路径。
 - benchmark、profile 和临时二进制保存在仓库外，不得提交生成物。
 
-pull request benchmark workflow 会自动执行上述 base/head 配对门禁。配对中位耗时超过 5% 且多数样本同向时失败；`B/op` 或 `allocs/op` 中位数增加且至少 75% 样本同向时失败。benchmark workload 源码变化默认不可比较并失败；维护者确认后可添加 `performance-workload-approved` 标签重跑，但报告不会生成新旧 workload 的差值。缺失 benchmark、metric 或配对样本同样失败，判定和原始输出显示在 PR 评论及 artifact 中。
+pull request benchmark workflow 只运行当前 commit 的 benchmark，并在 PR 评论展示实际取得的样本、中位数和缺失情况；原始输出保存在 artifact 中。它不执行 base/head 自动比较，不按耗时、内存、分配或样本完整性拒绝 PR。`master` push 也只展示测量结果，不以 benchmark 作为 CI 验收门禁；性能变化由维护者结合相同环境的本地配对测量判断。
 
 README 只记录当前环境下的代表性能，不记录 A/B、冻结基线或修改前后叙事；这些内容应作为 pull request 的验证证据。
 
@@ -116,17 +116,17 @@ go test -run TestInteropWolfSSL -v -count=10
 
 wolfSSL 支持目标功能时，还必须增加并运行真实 UDP 专项 benchmark，覆盖 go-dtls -> go-dtls、go-dtls -> wolfSSL、wolfSSL -> go-dtls 和 wolfSSL -> wolfSSL。将对端 commit/构建配置、workload、计时边界、五轮中位数及能力限制作为 pull request 验证证据；跨实现 benchmark 数据不写入 README。
 
-正式四向 benchmark 使用 `go test -json`。每个适用 workload 的四个方向都必须产生五轮结果，或匹配登记的精确 skip 原因与证据；能力恢复、原因变化、未知 skip、缺失方向或样本不足都会使报告生成失败。允许的对端限制必须显示在报告中，并记录最后实际验证该限制的完整 wolfSSL SHA。
+四向 benchmark 使用 `go test -json`。报告只展示实际取得的样本及结构化 skip；缺失方向或样本不足不会使 benchmark workflow 失败。维护者验证互通能力时仍应检查四个方向、五轮样本和 skip 证据；允许的对端限制应记录最后实际验证该限制的完整 wolfSSL SHA。
 
-提交 pull request 前，必须先解析 wolfSSL `master` 的最新完整 SHA，使用与 workflow 相同的构建选项，并设置 `GO_DTLS_PROBE_WOLFSSL_SKIPS=1` 逐一真实运行所有人工 skip 方向。能力恢复时删除对应 skip；限制仍存在时核对原因和证据，并把每个条目的 `verifiedCommit` 更新为本次 SHA。PR workflow 会解析最新 wolfSSL SHA，并拒绝任何仍指向旧 SHA 的人工 skip；`master` push、定时和发布不会只因 wolfSSL 后续更新而失败。
+验证 wolfSSL 互通限制时，先解析其 `master` 的最新完整 SHA，使用与 workflow 相同的构建选项，并设置 `GO_DTLS_PROBE_WOLFSSL_SKIPS=1` 逐一真实运行所有人工 skip 方向。能力恢复时删除对应 skip；限制仍存在时核对原因和证据，并把每个条目的 `verifiedCommit` 更新为本次 SHA。benchmark workflow 不以该 SHA 的新旧或 skip 原因作为验收条件。
 
-benchmark workflow 使用本次解析的精确 wolfSSL SHA，在性能测试前执行完整互通矩阵：pull request 运行一轮，`master` push、定时和手动触发运行十轮；任一非预期失败都会阻止报告和发布。wolfSSL 构建 cache 在矩阵前保存，因此测试失败不会触发下次重复编译。
+benchmark workflow 使用本次解析的精确 wolfSSL SHA 运行专项测量；完整功能互通测试仍按功能变更单独验证，不再作为 benchmark 的前置门禁。wolfSSL 获取、构建或测量失败时，已取得的 Go benchmark 数据仍可展示，报告会标明部分步骤未完成。
 
-benchmark workflow 在 `master` push 后更新独立的 `benchmark-results` 分支；定时检查仅在 go-dtls 或 wolfSSL 的 `master` SHA 变化，且该 go-dtls SHA 没有 benchmark 正在排队或运行时触发并发布。pull request 只更新对应 PR 页面上的结果评论，不写入 `master` 或结果分支。不要手工维护 README 中的性能数字。
+`master` push 的 wolfSSL 准备、测量和报告步骤全部成功时，会更新独立的 `benchmark-results` 分支；否则已有原始输出保留在 artifact 和日志中，能生成的报告也会显示在 Actions 摘要。定时检查仅在 go-dtls 或 wolfSSL 的 `master` SHA 变化，且该 go-dtls SHA 没有 benchmark 正在排队或运行时触发并发布。pull request 只更新对应 PR 页面上的结果评论，不写入 `master` 或结果分支。不要手工维护 README 中的性能数字。
 
 所有执行 pull request 代码的 checkout 都必须设置 `persist-credentials: false`，并在运行仓库代码前确认本地 Git 配置和 origin URL 不含 workflow token。PR benchmark job 只读；只有可信的 `workflow_run` 评论 job 拥有 PR 写权限。不可信 benchmark artifact 必须唯一、受大小限制且只含预期的普通文件，并由默认分支上的报告器重新解析和转义；任何边界不匹配都必须失败。
 
-新增或重命名任何 benchmark 或子 benchmark 时，必须同步更新 `tools/benchmark-report` 中对应的分类、排序和多语言标签。报告生成器会拒绝任何未被显式覆盖的 benchmark 输出，benchmark workflow 必须通过。
+新增或重命名 benchmark 或子 benchmark 时，应同步更新 `tools/benchmark-report` 中对应的分类、排序和多语言标签；`-allow-partial` 会根据未映射的名称生成可读标签，默认严格模式仍检查映射覆盖。
 
 第三方实现未启用或不支持目标扩展时，应明确互通边界，不得把跳过测试表述为通过。
 

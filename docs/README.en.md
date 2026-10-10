@@ -570,7 +570,7 @@ The following items do not reduce completion of mandatory RFC 9147 semantics, bu
 
 ## Benchmark
 
-Every push to `master` resolves and locks the latest wolfSSL `master` commit for that run, runs all Go benchmarks and the real-UDP four-way benchmarks, then publishes the exact SHA and five-run medians to a separate results branch: [view the latest automated benchmark report](https://github.com/puernya/go-dtls/blob/benchmark-results/benchmark.en.md). A scheduled check at 08:00, 16:00, and 00:00 Asia/Shanghai compares both go-dtls and wolfSSL `master` SHAs and reruns only when either changed and no benchmark for that go-dtls SHA is queued or running. wolfSSL sources and build outputs are cached by SHA. Pull requests use the same process and display their results directly on the PR without updating the master report.
+Every push to `master` resolves and locks the latest wolfSSL `master` commit for that run, then runs Go benchmarks and the real-UDP four-way benchmarks. When the measurement and report steps succeed, the medians of observed samples and exact SHA are published to a separate results branch: [view the latest automated benchmark report](https://github.com/puernya/go-dtls/blob/benchmark-results/benchmark.en.md); raw partial output remains in the artifact and logs, and any generated report also appears in the Actions summary. A scheduled check at 08:00, 16:00, and 00:00 Asia/Shanghai compares both go-dtls and wolfSSL `master` SHAs and reruns only when either changed and no benchmark for that go-dtls SHA is queued or running. wolfSSL sources and build outputs are cached by SHA. Pull requests use the same process and display their results directly on the PR without updating the master report.
 
 Run all benchmarks:
 

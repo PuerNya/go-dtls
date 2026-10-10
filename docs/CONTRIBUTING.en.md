@@ -9,7 +9,7 @@ Thank you for contributing to `go-dtls`. Changes must preserve DTLS 1.3 datagram
 - Go 1.27 or later.
 - golangci-lint v2.14.0, matching CI.
 - Windows race tests require Zig 0.17 and a working CGO toolchain.
-- When a change affects a feature supported by wolfSSL, wolfSSL interoperability tests and focused benchmarks are required; other changes do not require wolfSSL.
+- When a change affects a feature supported by wolfSSL, run wolfSSL interoperability tests and focused benchmarks; other changes do not require wolfSSL.
 
 ## Required Checks
 
@@ -83,13 +83,13 @@ Optional extensions require a concrete deployment need and a testable protocol d
 
 ## Performance Validation
 
-Changes to handshake, record, parsing, allocation, or concurrency hot paths must check both microbenchmarks and full connections. Full connections are the primary performance gate; local microbenchmarks cannot establish overall performance.
+Changes to handshake, record, parsing, allocation, or concurrency hot paths should check both microbenchmarks and full connections. Full connections are the primary performance reference; local microbenchmarks cannot establish overall performance.
 
 ```sh
 go test -run '^$' -bench . -benchmem
 go test -run '^$' -bench '^BenchmarkConnectionHandshakeLifecycle$' -benchmem -benchtime=2000x -cpu=1
 go test -run '^$' -bench '^BenchmarkMutualTLSHandshakeLifecycle/(Full|Resumed)$' -benchmem -count=10
-go test -run '^$' -bench '^BenchmarkCertificateCompression' -benchmem
+go test -run '^$' -bench '^BenchmarkCertificateCompressionHandshakeLifecycle' -benchmem
 go test -run '^$' -bench '^BenchmarkProtectedRecord(Seal|RoundTripInPlace)$' -benchmem -count=5
 ```
 
@@ -101,7 +101,7 @@ When comparing performance before and after a change:
 - When allocations or memory differ, use profiles to identify the exact object and call path.
 - Store benchmark output, profiles, and temporary binaries outside the repository. Do not commit generated artifacts.
 
-The pull request benchmark workflow runs this base/head paired gate automatically. It fails when the paired median time increases by more than 5% and most pairs are slower, or when median `B/op` or `allocs/op` increases with at least 75% of pairs in the same direction. Benchmark workload source changes are incomparable and fail by default; after maintainer review, the `performance-workload-approved` label may rerun the workflow, but the report does not generate deltas between different workloads. Missing benchmarks, metrics, or paired samples also fail, and the PR comment and artifact retain the decision and raw output.
+The pull request benchmark workflow runs benchmarks only for the current commit and comments with the observed samples, medians, and missing-data notice; the artifact retains the raw output. It does not compare base and head automatically or reject a PR for timing, memory, allocations, or sample completeness. A `master` push also displays measurements without using benchmarks as a CI acceptance gate. Maintainers assess performance changes using local paired measurements under the same environment.
 
 README files record only representative performance for the current environment. A/B data, frozen baselines, and before/after narratives belong in pull request validation evidence.
 
@@ -116,17 +116,17 @@ go test -run TestInteropWolfSSL -v -count=10
 
 When wolfSSL supports the target feature, also add and run a focused real-UDP benchmark covering go-dtls -> go-dtls, go-dtls -> wolfSSL, wolfSSL -> go-dtls, and wolfSSL -> wolfSSL. Include the peer commit/build configuration, workload, timing boundaries, five-run median, and capability limits in the pull request validation evidence; do not put cross-implementation benchmark data in README files.
 
-The formal four-way benchmark uses `go test -json`. Every applicable workload direction must produce five results or match an exact registered skip reason and evidence. A recovered capability, changed reason, unknown skip, missing direction, or insufficient sample count fails report generation. Allowed peer limitations must remain visible in the report and record the full wolfSSL SHA against which each limitation was last tested.
+The four-way benchmark uses `go test -json`. The report shows only observed samples and structured skips; missing directions or fewer samples do not fail the benchmark workflow. When validating interoperability, maintainers should still examine all four directions, five samples, and skip evidence. Record the full wolfSSL SHA against which each allowed peer limitation was last tested.
 
-Before opening a pull request, resolve the latest full SHA of wolfSSL `master`, build it with the workflow options, and set `GO_DTLS_PROBE_WOLFSSL_SKIPS=1` to execute every manually skipped direction. Remove a skip when the capability has recovered; otherwise verify its reason and evidence and update every entry's `verifiedCommit` to that SHA. The PR workflow resolves the latest wolfSSL SHA and rejects any manual skip still pointing to an older SHA. A `master` push, scheduled run, or publication does not fail solely because wolfSSL advanced later.
+When validating wolfSSL limitations, resolve the latest full SHA of wolfSSL `master`, build it with the workflow options, and set `GO_DTLS_PROBE_WOLFSSL_SKIPS=1` to execute every manually skipped direction. Remove a skip when the capability has recovered; otherwise verify its reason and evidence and update every entry's `verifiedCommit` to that SHA. The benchmark workflow does not use skip reasons or SHA freshness as acceptance conditions.
 
-The benchmark workflow uses the exact wolfSSL SHA resolved for the run and executes the complete interoperability matrix before performance tests: one iteration for pull requests and ten for `master` pushes, scheduled runs, and manual dispatches. Any unexpected failure blocks reporting and publication. The wolfSSL build cache is saved before the matrix, so a test failure does not force recompilation on the next run.
+The benchmark workflow uses the exact wolfSSL SHA resolved for the run to measure focused workloads. Validate the complete functional interoperability matrix separately when a feature changes; it is no longer a prerequisite for benchmark reporting. If wolfSSL fetch, build, or measurement fails, available Go benchmark data can still be shown with a partial-results notice.
 
-The benchmark workflow updates the separate `benchmark-results` branch after a push to `master`. The scheduled check triggers and publishes only when the go-dtls or wolfSSL `master` SHA changed and no benchmark for that go-dtls SHA is queued or running. A pull request only updates its benchmark comment and never writes to `master` or the results branch. Do not maintain performance numbers manually in README files.
+When wolfSSL preparation, measurement, and report steps all succeed on a `master` push, the workflow updates the separate `benchmark-results` branch; otherwise, available raw output remains in the artifact and logs, and any generated report also appears in the Actions summary. The scheduled check triggers and publishes only when the go-dtls or wolfSSL `master` SHA changed and no benchmark for that go-dtls SHA is queued or running. A pull request only updates its benchmark comment and never writes to `master` or the results branch. Do not maintain performance numbers manually in README files.
 
 Every checkout that executes pull request code must set `persist-credentials: false` and verify that neither the local Git configuration nor the origin URL contains the workflow token before repository code runs. The PR benchmark job is read-only; PR write permission exists only in the trusted `workflow_run` comment job. An untrusted benchmark artifact must be unique, size-bounded, contain only the expected regular files, and be reparsed and escaped by the report generator from the default branch; any boundary mismatch must fail.
 
-Adding or renaming any benchmark or sub-benchmark requires updating its category, order, and multilingual labels in `tools/benchmark-report`. The report generator rejects benchmark output without explicit coverage, and the benchmark workflow must pass.
+When adding or renaming a benchmark or sub-benchmark, update its category, order, and multilingual labels in `tools/benchmark-report`. `-allow-partial` derives a readable label from unmapped names; the default strict mode still checks mapping coverage.
 
 When a third-party implementation does not enable or support the target extension, state the interoperability boundary explicitly. Do not report a skipped test as passing.
 

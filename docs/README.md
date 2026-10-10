@@ -575,7 +575,7 @@ serverConfig.MaxSessionTickets = 4
 
 ## Benchmark
 
-`master` 每次 push 后都会解析并固定本次运行所用的最新 wolfSSL `master` commit，运行全部 Go benchmark 和真实 UDP 四向 benchmark，并把精确 SHA 与五轮中位数发布到独立结果分支：[查看最新自动 benchmark 报告](https://github.com/puernya/go-dtls/blob/benchmark-results/README.md)。每天北京时间 08:00、16:00 和 00:00 还会检查 go-dtls 与 wolfSSL 的 `master` SHA，仅在任一方变化且该 go-dtls SHA 没有 benchmark 正在排队或运行时重新执行。wolfSSL 源码和构建产物按 SHA 缓存。Pull request 使用相同流程，结果直接显示在对应 PR 页面，不会更新 master 的报告。
+`master` 每次 push 后都会解析并固定本次运行所用的最新 wolfSSL `master` commit，运行 Go benchmark 和真实 UDP 四向 benchmark。各测量及报告步骤成功时，实测样本的中位数与精确 SHA 会发布到独立结果分支：[查看最新自动 benchmark 报告](https://github.com/puernya/go-dtls/blob/benchmark-results/README.md)；部分测量的原始输出保留在 artifact 和日志中，能生成的报告也会显示在 Actions 摘要。每天北京时间 08:00、16:00 和 00:00 还会检查 go-dtls 与 wolfSSL 的 `master` SHA，仅在任一方变化且该 go-dtls SHA 没有 benchmark 正在排队或运行时重新执行。wolfSSL 源码和构建产物按 SHA 缓存。Pull request 使用相同流程，结果直接显示在对应 PR 页面，不会更新 master 的报告。
 
 运行全部 benchmark：
 

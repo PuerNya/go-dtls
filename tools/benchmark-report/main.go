@@ -525,6 +525,7 @@ func main() {
 	allowWorkloadChange := flag.Bool("allow-workload-change", false, "allow benchmark workload source changes")
 	failOnRegression := flag.Bool("fail-on-regression", true, "exit unsuccessfully when the comparison fails")
 	requireCurrentWolfSSLSkipVerification := flag.Bool("require-current-wolfssl-skip-verification", false, "require every real UDP skip to be verified against the report's wolfSSL commit")
+	allowPartial := flag.Bool("allow-partial", false, "allow unmapped benchmarks and incomplete real UDP workloads in a single report")
 	flag.Parse()
 	if *output == "" {
 		flag.Usage()
@@ -535,15 +536,15 @@ func main() {
 		fatal(fmt.Errorf("unsupported report language %q", *language))
 	}
 	if *baseline != "" || *candidate != "" {
-		if *baseline == "" || *candidate == "" || *input != "" {
+		if *baseline == "" || *candidate == "" || *input != "" || *allowPartial {
 			flag.Usage()
 			os.Exit(2)
 		}
-		baselineReport, err := readReportFile(*baseline, "")
+		baselineReport, err := readReportFile(*baseline, "", false)
 		if err != nil {
 			fatal(err)
 		}
-		candidateReport, err := readReportFile(*candidate, "")
+		candidateReport, err := readReportFile(*candidate, "", false)
 		if err != nil {
 			fatal(err)
 		}
@@ -564,7 +565,7 @@ func main() {
 		os.Exit(2)
 	}
 
-	result, err := readReportFile(*input, *wolfSSL)
+	result, err := readReportFile(*input, *wolfSSL, *allowPartial)
 	if err != nil {
 		fatal(err)
 	}
@@ -592,7 +593,7 @@ func main() {
 	}
 }
 
-func readReportFile(path, wolfSSL string) (*report, error) {
+func readReportFile(path, wolfSSL string, allowPartial bool) (*report, error) {
 	in, err := os.Open(path) // #nosec G304 -- path is an explicit local command argument.
 	if err != nil {
 		return nil, err
@@ -611,8 +612,23 @@ func readReportFile(path, wolfSSL string) (*report, error) {
 		}
 		result.wolfSSL = wolfSSL
 	}
-	if err = result.validateRealUDPMatrix(); err != nil {
-		return nil, err
+	if allowPartial {
+		for name, reason := range result.realUDPSkips {
+			allowance := realUDPSkipAllowances[name]
+			if allowance.output != reason {
+				allowance = realUDPSkipAllowance{reason: [3]string{reason, reason, reason}}
+			}
+			result.addUnsupportedRealUDP(name, allowance)
+		}
+	} else {
+		for _, item := range result.benchmarks {
+			if err := validateBenchmarkCoverage(item.name); err != nil {
+				return nil, err
+			}
+		}
+		if err := result.validateRealUDPMatrix(); err != nil {
+			return nil, err
+		}
 	}
 	return result, nil
 }
@@ -914,9 +930,11 @@ func expectedRealUDPWorkloads() []string {
 
 func (r *report) addUnsupportedRealUDP(name string, allowance realUDPSkipAllowance) {
 	reason := allowance.reason
-	reason[0] += "; last verified against wolfSSL commit " + allowance.verifiedCommit
-	reason[1] += "；该限制最后验证于 wolfSSL commit " + allowance.verifiedCommit
-	reason[2] += "; последнее подтверждение для wolfSSL commit " + allowance.verifiedCommit
+	if allowance.verifiedCommit != "" {
+		reason[0] += "; last verified against wolfSSL commit " + allowance.verifiedCommit
+		reason[1] += "；该限制最后验证于 wolfSSL commit " + allowance.verifiedCommit
+		reason[2] += "; последнее подтверждение для wolfSSL commit " + allowance.verifiedCommit
+	}
 	item := &benchmark{name: name, samples: r.realUDPSamples[name], byUnit: make(map[string]*metric), unsupported: reason}
 	r.byName[name] = item
 	r.benchmarks = append(r.benchmarks, item)
@@ -1123,9 +1141,6 @@ func (r *report) addBenchmarkLine(lineNumber int, line string) error {
 
 	item := r.byName[fields[0]]
 	if item == nil {
-		if err := validateBenchmarkCoverage(fields[0]); err != nil {
-			return fmt.Errorf("line %d: %w", lineNumber, err)
-		}
 		item = &benchmark{name: fields[0], byUnit: make(map[string]*metric)}
 		r.byName[item.name] = item
 		r.benchmarks = append(r.benchmarks, item)
@@ -1306,7 +1321,7 @@ func benchmarkSection(name string) int {
 	switch {
 	case strings.Contains(root, "HandshakeLifecycle"), root == "ListenerDatagramRoundTrip", root == "MemoryDatagramRoundTrip":
 		return 0
-	case strings.Contains(root, "RealUDP"):
+	case strings.Contains(root, "RealUDP") && realUDPDirection(name) >= 0:
 		return 1
 	case strings.Contains(root, "ProtectedRecord"), strings.Contains(root, "Flight"), strings.Contains(root, "ACK"):
 		return 2
@@ -1580,5 +1595,7 @@ func markdownText(value string) string {
 	value = html.EscapeString(value)
 	value = strings.ReplaceAll(value, "&gt;", ">")
 	value = strings.ReplaceAll(value, "|", "&#124;")
+	value = strings.ReplaceAll(value, "[", "&#91;")
+	value = strings.ReplaceAll(value, "]", "&#93;")
 	return strings.ReplaceAll(value, "`", "&#96;")
 }

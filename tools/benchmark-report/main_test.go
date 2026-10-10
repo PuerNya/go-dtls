@@ -96,31 +96,100 @@ BenchmarkConnectionHandshakeLifecycle-2 1 1500000 ns/op 90000 B/op 800 allocs/op
 	}
 }
 
-func TestParseReportRejectsUncoveredBenchmark(t *testing.T) {
-	for _, name := range []string{"BenchmarkTranscriptClone/1301", "BenchmarkParseExtensions/Owned", "BenchmarkCertificateCompression/Decompress", "BenchmarkHandshakeInboxSequentialSingleFragment"} {
+func TestValidateBenchmarkCoverageRejectsUnknownNames(t *testing.T) {
+	for _, name := range []string{
+		"BenchmarkTranscriptClone/1301", "BenchmarkParseExtensions/Owned",
+		"BenchmarkCertificateCompression/Decompress", "BenchmarkHandshakeInboxSequentialSingleFragment",
+		"BenchmarkNewFeature-2", "BenchmarkFlightWireWindow/NewMode-2", "BenchmarkGREASEHandshakeLifecycle-2",
+	} {
 		if err := validateBenchmarkCoverage(name); err == nil {
-			t.Errorf("removed benchmark %q was accepted", name)
+			t.Errorf("uncovered benchmark %q was accepted", name)
 		}
 	}
-	_, err := parseReport(strings.NewReader("BenchmarkNewFeature-2 1 100 ns/op 1 B/op 1 allocs/op\n"))
-	if err == nil || !strings.Contains(err.Error(), "not covered by the report generator") {
-		t.Fatalf("parseReport error = %v, want an uncovered benchmark error", err)
-	}
+}
 
-	_, err = parseReport(strings.NewReader("BenchmarkFlightWireWindow/NewMode-2 1 100 ns/op 1 B/op 1 allocs/op\n"))
-	if err == nil || !strings.Contains(err.Error(), "unmapped part") {
-		t.Fatalf("parseReport error = %v, want an unmapped benchmark part error", err)
+func TestAllowPartialReportShowsSamplesAndSkips(t *testing.T) {
+	const skipped = "BenchmarkWolfSSLFeatureRealUDP/KeyUpdate/GoClient/WolfSSLServer"
+	var input bytes.Buffer
+	input.WriteString("wolfssl: " + reviewedWolfSSLCommit + " (Linux Release static)\n")
+	input.WriteString("BenchmarkNewFeatureRealUDP-2 1 100 ns/op 1 B/op 1 allocs/op\n")
+	input.WriteString(skipped + " 1 200 ns/op 1 B/op 1 allocs/op\n")
+	encoder := json.NewEncoder(&input)
+	for _, event := range []goTestEvent{
+		{Action: "output", Test: skipped, Output: "    interop_test.go:1: <img src=x onerror=alert(1)>\n"},
+		{Action: "skip", Test: skipped},
+	} {
+		if err := encoder.Encode(event); err != nil {
+			t.Fatal(err)
+		}
 	}
+	path := filepath.Join(t.TempDir(), "benchmark.txt")
+	if err := os.WriteFile(path, input.Bytes(), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := readReportFile(path, "", false); err == nil {
+		t.Fatal("strict report accepted incomplete and unmapped output")
+	}
+	report, err := readReportFile(path, "", true)
+	if err != nil {
+		t.Fatal(err)
+	}
+	var output bytes.Buffer
+	if err := writeReport(&output, report, "", "", "", reportLanguages["en"], ""); err != nil {
+		t.Fatal(err)
+	}
+	text := output.String()
+	for _, want := range []string{"100 ns/op", "200 ns/op", "Skipped: &lt;img src=x onerror=alert(1)>"} {
+		if !strings.Contains(text, want) {
+			t.Fatalf("display report lacks %q:\n%s", want, text)
+		}
+	}
+	if got := strings.Count(text, "KeyUpdate + 1-RTT application-data round trip"); got != 2 {
+		t.Fatalf("mixed result and skip produced %d rows, want 2", got)
+	}
+	if strings.Contains(text, "last verified against wolfSSL commit") {
+		t.Fatal("unknown skip claims a verified peer limit")
+	}
+}
 
-	_, err = parseReport(strings.NewReader("BenchmarkGREASEHandshakeLifecycle-2 1 100 ns/op 1 B/op 1 allocs/op\n"))
-	if err == nil || !strings.Contains(err.Error(), "not covered by the report generator") {
-		t.Fatalf("parseReport error = %v, want the unsplit GREASE benchmark to be rejected", err)
+func TestAllowPartialReportAllowsIncompleteMatrix(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "benchmark.txt")
+	const name = "BenchmarkWolfSSLFeatureRealUDP/KeyUpdate/GoClient/WolfSSLServer"
+	input := "wolfssl: " + reviewedWolfSSLCommit + " (Linux Release static)\n" +
+		`{"Action":"run","Test":"` + name + `"}` + "\n" +
+		name + "-2 1 100 ns/op 1 B/op 1 allocs/op\n"
+	if err := os.WriteFile(path, []byte(input), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := readReportFile(path, "", false); err == nil {
+		t.Fatal("strict report accepted an incomplete real UDP matrix")
+	}
+	if _, err := readReportFile(path, "", true); err != nil {
+		t.Fatalf("display report rejected observed samples: %v", err)
+	}
+}
+
+func TestParseReportRejectsMalformedInput(t *testing.T) {
+	for name, input := range map[string]string{
+		"empty":             "",
+		"json":              "{\n",
+		"unfinished output": `{"Action":"output","Output":"BenchmarkNewFeature-2"}`,
+		"iterations":        "BenchmarkNewFeature-2 invalid 100 ns/op\n",
+		"metric pair":       "BenchmarkNewFeature-2 1 100 ns/op 1\n",
+		"NaN":               "BenchmarkNewFeature-2 1 NaN ns/op\n",
+		"Inf":               "BenchmarkNewFeature-2 1 +Inf ns/op\n",
+	} {
+		t.Run(name, func(t *testing.T) {
+			if _, err := parseReport(strings.NewReader(input)); err == nil {
+				t.Fatal("malformed input was accepted")
+			}
+		})
 	}
 }
 
 func TestMarkdownTextEscapesArtifactInput(t *testing.T) {
-	const input = "<img src=x onerror=alert(1)> | `value` &"
-	const want = "&lt;img src=x onerror=alert(1)> &#124; &#96;value&#96; &amp;"
+	const input = "<img src=x onerror=alert(1)> | `value` & [link](https://example.invalid)"
+	const want = "&lt;img src=x onerror=alert(1)> &#124; &#96;value&#96; &amp; &#91;link&#93;(https://example.invalid)"
 	if got := markdownText(input); got != want {
 		t.Fatalf("markdownText(%q) = %q, want %q", input, got, want)
 	}
@@ -511,7 +580,7 @@ func TestReadReportFileAppliesWolfSSLMetadataBeforeMatrixValidation(t *testing.T
 		t.Fatal(err)
 	}
 
-	report, err := readReportFile(path, futureCommit+" (future build)")
+	report, err := readReportFile(path, futureCommit+" (future build)", false)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -537,7 +606,7 @@ func TestReadReportFileRejectsConflictingWolfSSLMetadata(t *testing.T) {
 	if err := os.WriteFile(path, []byte("wolfssl: "+reviewedWolfSSLCommit+" (input build)\nBenchmarkProtectedRecordSeal-2 1 100 ns/op\n"), 0o600); err != nil {
 		t.Fatal(err)
 	}
-	if _, err := readReportFile(path, strings.Repeat("0", 40)+" (explicit build)"); err == nil || !strings.Contains(err.Error(), "does not match explicit value") {
+	if _, err := readReportFile(path, strings.Repeat("0", 40)+" (explicit build)", false); err == nil || !strings.Contains(err.Error(), "does not match explicit value") {
 		t.Fatalf("conflicting wolfSSL metadata error = %v", err)
 	}
 }

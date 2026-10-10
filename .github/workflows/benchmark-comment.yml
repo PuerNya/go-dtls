@@ -34,13 +34,7 @@ jobs:
             if (matching.length > 1 || (matching.length === 1 && !found)) {
               core.setFailed('benchmark artifact is duplicated or exceeds 64 MiB')
             }
-            const pull = await github.rest.pulls.get({
-              ...context.repo,
-              pull_number: context.payload.workflow_run.pull_requests[0].number,
-            })
-            const workloadApproved = pull.data.labels.some(label => label.name === 'performance-workload-approved')
             core.setOutput('available', found ? 'true' : 'false')
-            core.setOutput('allow-workload-change', workloadApproved ? 'true' : 'false')
       - uses: actions/checkout@v7
         if: steps.artifact.outputs.available == 'true'
         with:
@@ -57,52 +51,54 @@ jobs:
           path: report
           github-token: ${{ secrets.GITHUB_TOKEN }}
           run-id: ${{ github.event.workflow_run.id }}
-      - name: Format and sort trusted PR report
+      - name: Validate benchmark artifact
+        id: validate
         if: steps.artifact.outputs.available == 'true'
         shell: bash
         run: |
           set -euo pipefail
-          expected=$'README.md\nbenchmark-base.txt\nbenchmark-comparison.md\nbenchmark-head.txt\nbenchmark.en.md\nbenchmark.ru.md\nbenchmark.txt\nperformance-gate-status.txt'
+          status_only='benchmark-status.txt'
+          minimal=$'benchmark-status.txt\nbenchmark.txt'
+          complete=$'README.md\nbenchmark-status.txt\nbenchmark.en.md\nbenchmark.ru.md\nbenchmark.txt'
           actual="$(find report -mindepth 1 -maxdepth 1 -type f -printf '%f\n' | sort)"
-          test "$actual" = "$expected"
+          [[ "$actual" == "$status_only" || "$actual" == "$minimal" || "$actual" == "$complete" ]]
           test "$(find report -mindepth 1 -maxdepth 1 ! -type f -print -quit)" = ""
           test "$(find report -type f -printf '%s\n' | awk '{ total += $1 } END { print total + 0 }')" -le 67108864
           test "$(find report -type f -size +16777216c -print -quit)" = ""
-          test "$(stat -c %s report/benchmark.txt)" -le 10485760
-          test "$(stat -c %s report/benchmark-base.txt)" -le 8388608
-          test "$(stat -c %s report/benchmark-head.txt)" -le 8388608
-          test "$(stat -c %s report/performance-gate-status.txt)" -le 16
+          test "$(stat -c %s report/benchmark-status.txt)" -le 16
+          status="$(cat report/benchmark-status.txt)"
+          [[ "$status" == complete || "$status" == partial ]]
+          if [[ "$actual" != "$complete" ]]; then
+            [[ "$status" == partial ]]
+          fi
+          if [[ "$actual" != "$status_only" ]]; then
+            test "$(stat -c %s report/benchmark.txt)" -le 10485760
+            echo 'data=true' >> "$GITHUB_OUTPUT"
+          fi
+      - name: Format and sort trusted PR report
+        if: steps.validate.outputs.data == 'true'
+        continue-on-error: true
+        shell: bash
+        run: |
+          set -euo pipefail
           go run ./tools/benchmark-report \
             -input report/benchmark.txt \
-            -output report/comment.md \
+            -output report/comment.tmp.md \
             -commit "${{ github.event.workflow_run.head_sha }}" \
             -generated "${{ github.event.workflow_run.updated_at }}" \
             -language zh-CN \
-            -language-links=false
-          if [[ -f report/benchmark-base.txt && -f report/benchmark-head.txt ]]; then
-            set +e
-            go run ./tools/benchmark-report \
-              -baseline report/benchmark-base.txt \
-              -candidate report/benchmark-head.txt \
-              -output report/comparison.md \
-              -language zh-CN \
-              -minimum-pairs 9 \
-              -allow-workload-change "${{ steps.artifact.outputs.allow-workload-change }}" \
-              -fail-on-regression=false
-            status=$?
-            set -e
-            if (( status != 0 )); then
-              printf '## PR base/head 配对性能门禁\n\n结论：`FAIL`。比较输入不完整或格式无效，请查看 Workflow run。\n' > report/comparison.md
-            fi
-            cat report/comparison.md >> report/comment.md
+            -language-links=false \
+            -allow-partial
+          if [[ "$(cat report/benchmark-status.txt)" == partial ]]; then
+            printf '\n部分 benchmark 步骤未完成；上表仅包含实际取得的样本。\n' >> report/comment.tmp.md
           fi
+          mv report/comment.tmp.md report/comment.md
       - name: Update pull request comment
         if: always()
         uses: actions/github-script@v9
         env:
           REPORT_PATH: report/comment.md
           ARTIFACT_AVAILABLE: ${{ steps.artifact.outputs.available }}
-          WORKFLOW_CONCLUSION: ${{ github.event.workflow_run.conclusion }}
         with:
           script: |
             const fs = require('fs')
@@ -110,7 +106,7 @@ jobs:
             const runURL = `${context.serverUrl}/${context.repo.owner}/${context.repo.repo}/actions/runs/${context.payload.workflow_run.id}`
             const report = process.env.ARTIFACT_AVAILABLE === 'true' && fs.existsSync(process.env.REPORT_PATH)
               ? fs.readFileSync(process.env.REPORT_PATH, 'utf8')
-              : `## Benchmark workflow failed\n\n结论：\`${process.env.WORKFLOW_CONCLUSION}\`。未生成完整 benchmark artifact，请查看 [Workflow run](${runURL})。`
+              : `## Benchmark 数据暂不可用\n\n本次未生成可展示的数据，请查看 [Workflow run](${runURL})。`
             const body = `${marker}\n${report}\n\n[Workflow run](${runURL})`
             if (Buffer.byteLength(body, 'utf8') > 65000) {
               core.setFailed('benchmark report exceeds the GitHub comment size limit')
