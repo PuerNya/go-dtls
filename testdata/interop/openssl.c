@@ -2,8 +2,13 @@
 #include <openssl/ssl.h>
 #include <openssl/pem.h>
 #include <openssl/err.h>
+#ifndef OPENSSL_IS_BORINGSSL
+#include <openssl/ech.h>
+#include <openssl/sslerr.h>
+#endif
 #ifdef OPENSSL_IS_BORINGSSL
 #include <openssl/pool.h>
+#include <openssl/hpke.h>
 #endif
 #include <arpa/inet.h>
 #include <sys/socket.h>
@@ -19,6 +24,7 @@ static void check(int ok, const char *what) {
 static SSL_SESSION *session;
 static unsigned char ocsp_response[4096];
 static size_t ocsp_length;
+static EVP_PKEY *expected_rpk;
 static int remember_session(SSL *ssl, SSL_SESSION *value) {
     (void)ssl;
     SSL_SESSION_free(session);
@@ -28,6 +34,34 @@ static int remember_session(SSL *ssl, SSL_SESSION *value) {
 }
 
 #ifndef OPENSSL_IS_BORINGSSL
+static const unsigned char psk_identity[] = "interop-psk";
+static SSL_SESSION *external_psk_session(SSL *ssl) {
+    static const unsigned char cipher_id[] = { 0x13, 0x01 };
+    unsigned char key[32]; memset(key, 0x42, sizeof(key));
+    SSL_SESSION *value = SSL_SESSION_new();
+    const SSL_CIPHER *cipher = SSL_CIPHER_find(ssl, cipher_id);
+    if (value == NULL || cipher == NULL || !SSL_SESSION_set1_master_key(value, key, sizeof(key)) ||
+        !SSL_SESSION_set_cipher(value, cipher) || !SSL_SESSION_set_protocol_version(value, DTLS1_3_VERSION)) {
+        SSL_SESSION_free(value);
+        return NULL;
+    }
+    return value;
+}
+static int use_external_psk(SSL *ssl, const EVP_MD *md, const unsigned char **id,
+                            size_t *idlen, SSL_SESSION **value) {
+    if (md != NULL && EVP_MD_type(md) != NID_sha256) return 0;
+    *value = external_psk_session(ssl);
+    *id = psk_identity; *idlen = sizeof(psk_identity) - 1;
+    return *value != NULL;
+}
+static int find_external_psk(SSL *ssl, const unsigned char *id, size_t idlen,
+                             SSL_SESSION **value) {
+    *value = NULL;
+    if (idlen != sizeof(psk_identity) - 1 || memcmp(id, psk_identity, idlen) != 0) return 1;
+    *value = external_psk_session(ssl);
+    return *value != NULL;
+}
+
 static int staple(SSL *ssl, void *arg) {
     (void)arg;
     unsigned char *data = OPENSSL_memdup(ocsp_response, ocsp_length);
@@ -62,6 +96,14 @@ static int read_datagram(SSL *ssl, unsigned char *data, int len) {
 }
 
 #ifdef OPENSSL_IS_BORINGSSL
+static enum ssl_verify_result_t verify_rpk(SSL *ssl, uint8_t *alert) {
+    EVP_PKEY *peer = SSL_get0_peer_rpk(ssl);
+    if (peer != NULL && expected_rpk != NULL && EVP_PKEY_cmp(peer, expected_rpk) == 1)
+        return ssl_verify_ok;
+    *alert = SSL_AD_BAD_CERTIFICATE;
+    return ssl_verify_invalid;
+}
+
 static EVP_PKEY *read_key(const char *path) {
     FILE *f = fopen(path, "rb"); check(f != NULL, "open key");
     EVP_PKEY *key = PEM_read_PrivateKey(f, NULL, NULL, NULL);
@@ -75,6 +117,23 @@ static CRYPTO_BUFFER *read_buffer(const char *path) {
     CRYPTO_BUFFER *b = CRYPTO_BUFFER_new(data, n, NULL); check(b != NULL, "credential buffer"); return b;
 }
 #endif
+
+static EVP_PKEY *read_trusted_public_key(const char *cert_path) {
+    char path[4096]; snprintf(path, sizeof(path), "%s.trust", cert_path);
+    FILE *f = fopen(path, "rb"); check(f != NULL, "open RPK pin");
+    X509 *cert = PEM_read_X509(f, NULL, NULL, NULL);
+    fclose(f); check(cert != NULL, "parse RPK pin");
+    EVP_PKEY *key = X509_get_pubkey(cert); X509_free(cert);
+    check(key != NULL, "extract RPK pin");
+    return key;
+}
+
+static size_t read_bytes(const char *path, unsigned char *data, size_t capacity) {
+    FILE *f = fopen(path, "rb"); check(f != NULL, "open fixture");
+    size_t n = fread(data, 1, capacity, f);
+    check(!ferror(f) && feof(f) && n != 0, "read fixture"); fclose(f);
+    return n;
+}
 
 int main(int argc, char **argv) {
     check(argc == 11, "role port mode cert.pem key.pem cert.der key.der dc.bin delegated.pem delegated.der");
@@ -90,6 +149,18 @@ int main(int argc, char **argv) {
         check(!ferror(f) && feof(f) && ocsp_length != 0, "read OCSP"); fclose(f);
     }
     SSL_CTX *ctx = SSL_CTX_new(DTLS_method()); check(ctx != NULL, "context");
+#ifdef OPENSSL_IS_BORINGSSL
+    if (strcmp(mode, "ccm-fallback") == 0)
+        check(SSL_get_cipher_by_value(0x1304) == NULL, "AES-128-CCM unexpectedly implemented");
+    if (strcmp(mode, "imported-psk") == 0) {
+        unsigned char key[32]; memset(key, 0x42, sizeof(key));
+        static const unsigned char identity[] = "interop-psk", context[] = "interop-context";
+        SSL_CREDENTIAL *credential = SSL_CREDENTIAL_new_pre_shared_key(key, sizeof(key), identity,
+            sizeof(identity) - 1, EVP_sha256(), context, sizeof(context) - 1);
+        check(credential != NULL && SSL_CTX_add1_credential(ctx, credential), "imported PSK credential");
+        SSL_CREDENTIAL_free(credential);
+    }
+#endif
     SSL_CTX_set_msg_callback(ctx, trace);
     SSL_CTX_set_session_cache_mode(ctx, SSL_SESS_CACHE_BOTH);
     if (!server) SSL_CTX_sess_set_new_cb(ctx, remember_session);
@@ -98,26 +169,88 @@ int main(int argc, char **argv) {
     check(SSL_CTX_use_certificate_chain_file(ctx, argv[4]) == 1 &&
           SSL_CTX_use_PrivateKey_file(ctx, argv[5], SSL_FILETYPE_PEM) == 1, "X.509 credential");
     SSL_CTX_set_verify(ctx, !server ? SSL_VERIFY_PEER : strcmp(mode, "mutual") == 0 || strcmp(mode, "pha") == 0 ? SSL_VERIFY_PEER | SSL_VERIFY_FAIL_IF_NO_PEER_CERT : SSL_VERIFY_NONE, NULL);
+#ifndef OPENSSL_IS_BORINGSSL
+    if (!server && strcmp(mode, "ech-client-unavailable") == 0) {
+        unsigned char config[512];
+        size_t n = read_bytes(argv[8], config, sizeof(config));
+        SSL *probe = SSL_new(ctx);
+        check(probe != NULL, "ECH probe");
+        BIO *input = BIO_new(BIO_s_mem()), *output = BIO_new(BIO_s_mem());
+        check(input != NULL && output != NULL, "ECH probe BIOs");
+        SSL_set_bio(probe, input, output);
+        SSL_set_connect_state(probe);
+        check(SSL_set1_ech_config_list(probe, config, n), "ECH probe config");
+        check(SSL_set_tlsext_host_name(probe, "server.test"), "ECH probe SNI");
+        ERR_clear_error();
+        int result = SSL_do_handshake(probe);
+        check(result != 1 && ERR_GET_REASON(ERR_peek_error()) == SSL_R_UNSUPPORTED_SSL_VERSION, "DTLS ECH version rejection");
+        SSL_free(probe); ERR_clear_error();
+    }
+#endif
+    if (strcmp(mode, "rpk") == 0) {
+        static const unsigned char rpk[] = { TLSEXT_cert_type_rpk };
+#ifdef OPENSSL_IS_BORINGSSL
+        EVP_PKEY *key = read_key(argv[5]);
+        SSL_CREDENTIAL *credential = SSL_CREDENTIAL_new_raw_public_key(key);
+        check(credential != NULL && SSL_CTX_add1_credential(ctx, credential), "RPK credential");
+        SSL_CREDENTIAL_free(credential); EVP_PKEY_free(key);
+        if (!server) {
+            expected_rpk = read_trusted_public_key(argv[4]);
+            check(SSL_CTX_set1_accepted_peer_cert_types(ctx, rpk, sizeof(rpk)), "accept RPK");
+            SSL_CTX_set_custom_verify(ctx, SSL_VERIFY_PEER, verify_rpk);
+        }
+#else
+        check(SSL_CTX_set1_server_cert_type(ctx, rpk, sizeof(rpk)), "offer RPK");
+        if (!server) check(SSL_CTX_dane_enable(ctx) > 0, "enable RPK pinning");
+        if (!server) expected_rpk = read_trusted_public_key(argv[4]);
+#endif
+    }
     if (!server || strcmp(mode, "mutual") == 0 || strcmp(mode, "pha") == 0) {
         char trust[4096]; snprintf(trust, sizeof(trust), "%s.trust", argv[4]);
         check(SSL_CTX_load_verify_locations(ctx, trust, NULL) == 1, "mutual trust");
     }
 #ifndef OPENSSL_IS_BORINGSSL
+    if (strcmp(mode, "external-psk") == 0) {
+        static const unsigned char context[] = "interop";
+        if (server) {
+            check(SSL_CTX_set_session_id_context(ctx, context, sizeof(context)), "PSK context");
+            SSL_CTX_set_psk_find_session_callback(ctx, find_external_psk);
+        } else {
+            SSL_CTX_set_psk_use_session_callback(ctx, use_external_psk);
+        }
+    }
+    if (server && strcmp(mode, "ech-server-rejection") == 0) {
+        BIO *pem = BIO_new_file(argv[9], "r");
+        OSSL_ECHSTORE *store = OSSL_ECHSTORE_new(NULL, NULL);
+        check(pem != NULL && store != NULL && OSSL_ECHSTORE_read_pem(store, pem, OSSL_ECH_FOR_RETRY) &&
+              SSL_CTX_set1_echstore(ctx, store), "ECH server keys");
+        OSSL_ECHSTORE_free(store); BIO_free(pem);
+    }
     if (early) check(SSL_CTX_set_max_early_data(ctx, 256), "early data limit");
     SSL_CTX_set_post_handshake_auth(ctx, 1);
     if (server && strcmp(mode, "pha") == 0) SSL_CTX_set_verify(ctx, SSL_VERIFY_PEER | SSL_VERIFY_POST_HANDSHAKE, NULL);
     if (server && strcmp(mode, "ocsp") == 0) SSL_CTX_set_tlsext_status_cb(ctx, staple);
 #else
     if (server && strcmp(mode, "ocsp") == 0) check(SSL_CTX_set_ocsp_response(ctx, ocsp_response, ocsp_length), "OCSP staple");
+    if (server && strcmp(mode, "ech") == 0) {
+        unsigned char config[512], private_key[64];
+        size_t config_len = read_bytes(argv[8], config, sizeof(config));
+        size_t key_len = read_bytes(argv[9], private_key, sizeof(private_key));
+        EVP_HPKE_KEY *key = EVP_HPKE_KEY_new();
+        SSL_ECH_KEYS *keys = SSL_ECH_KEYS_new();
+        check(key != NULL && keys != NULL && EVP_HPKE_KEY_init(key, EVP_hpke_x25519_hkdf_sha256(), private_key, key_len) &&
+              SSL_ECH_KEYS_add(keys, 1, config, config_len, key) && SSL_CTX_set1_ech_keys(ctx, keys), "ECH server keys");
+        SSL_ECH_KEYS_free(keys); EVP_HPKE_KEY_free(key);
+    }
 #endif
     if (strcmp(mode, "alpn") == 0) {
         if (server) SSL_CTX_set_alpn_select_cb(ctx, alpn, NULL);
         else { static const unsigned char p[] = {4, 'c','o','a','p'}; check(SSL_CTX_set_alpn_protos(ctx, p, sizeof(p)) == 0, "ALPN"); }
     }
-    const char *group = strcmp(mode, "p256") == 0 || strcmp(mode, "hrr") == 0 ? "P-256" : strcmp(mode, "p384") == 0 ? "P-384" : "X25519";
+    const char *group = strcmp(mode, "p256") == 0 || strcmp(mode, "hrr") == 0 ? "P-256" : strcmp(mode, "p384") == 0 ? "P-384" : strcmp(mode, "hybrid") == 0 ? "X25519MLKEM768" : "X25519";
     if (!server && strcmp(mode, "hrr") == 0) group = "X25519:P-256";
     check(SSL_CTX_set1_groups_list(ctx, group) == 1, "groups");
-    const char *cipher = (strcmp(mode, "sha384") == 0 || strcmp(mode, "dc-sha384") == 0) ? "TLS_AES_256_GCM_SHA384" : strcmp(mode, "chacha") == 0 ? "TLS_CHACHA20_POLY1305_SHA256" : "TLS_AES_128_GCM_SHA256";
+    const char *cipher = (strcmp(mode, "sha384") == 0 || strcmp(mode, "dc-sha384") == 0) ? "TLS_AES_256_GCM_SHA384" : strcmp(mode, "chacha") == 0 ? "TLS_CHACHA20_POLY1305_SHA256" : strcmp(mode, "ccm") == 0 ? "TLS_AES_128_CCM_SHA256" : "TLS_AES_128_GCM_SHA256";
 #ifndef OPENSSL_IS_BORINGSSL
     check(SSL_CTX_set_ciphersuites(ctx, cipher) == 1, "cipher suites");
 #else
@@ -134,7 +267,7 @@ int main(int argc, char **argv) {
         SSL_CREDENTIAL_free(cred); CRYPTO_BUFFER_free(cert); CRYPTO_BUFFER_free(dc); EVP_PKEY_free(key);
     }
 #endif
-    int rounds = (strcmp(mode, "resume") == 0 || strcmp(mode, "dc-resume") == 0 || early) ? 2 : 1;
+    int rounds = (strcmp(mode, "resume") == 0 || strcmp(mode, "dc-resume") == 0 || strcmp(mode, "ticket-request-fallback") == 0 || early) ? 2 : 1;
     for (int round = 0; round < rounds; round++) {
         int fd = socket(AF_INET, SOCK_DGRAM, 0); check(fd >= 0, "socket");
         struct sockaddr_in address = {0}; address.sin_family = AF_INET;
@@ -178,8 +311,19 @@ int main(int argc, char **argv) {
 #endif
         if (!server) {
             SSL_set_connect_state(ssl);
+            if (strcmp(mode, "ech") == 0) {
+                unsigned char config[512];
+                size_t n = read_bytes(argv[8], config, sizeof(config));
+                check(SSL_set1_ech_config_list(ssl, config, n), "ECH client config");
+            }
             check(SSL_set_tlsext_host_name(ssl, "server.test") == 1, "SNI");
             check(X509_VERIFY_PARAM_set1_host(SSL_get0_param(ssl), "server.test", 11) == 1, "expected hostname");
+#ifndef OPENSSL_IS_BORINGSSL
+            if (strcmp(mode, "rpk") == 0) {
+                check(SSL_dane_enable(ssl, "server.test") > 0, "enable RPK verification");
+                check(SSL_add_expected_rpk(ssl, expected_rpk), "RPK pin");
+            }
+#endif
             if (strcmp(mode, "ocsp") == 0) {
 #ifdef OPENSSL_IS_BORINGSSL
                 SSL_enable_ocsp_stapling(ssl);
@@ -198,8 +342,20 @@ int main(int argc, char **argv) {
 #ifndef OPENSSL_IS_BORINGSSL
         if (early && round != 0) check(SSL_get_early_data_status(ssl) == SSL_EARLY_DATA_ACCEPTED, "early data accepted");
 #endif
-        check(SSL_session_reused(ssl) == (round != 0), "session reuse");
+        check(SSL_session_reused(ssl) == (round != 0 || strcmp(mode, "external-psk") == 0), "session reuse");
         check(SSL_version(ssl) == DTLS1_3_VERSION, "negotiated version");
+#ifdef OPENSSL_IS_BORINGSSL
+        if (strcmp(mode, "ech") == 0) check(SSL_ech_accepted(ssl), "ECH not accepted");
+#else
+        if (strcmp(mode, "ech") == 0) check(SSL_ech_get1_status(ssl, NULL, NULL) == SSL_ECH_STATUS_SUCCESS, "ECH not accepted");
+#endif
+        if (strcmp(mode, "rpk") == 0) {
+#ifdef OPENSSL_IS_BORINGSSL
+            check(server || SSL_get_peer_cert_type(ssl) == TLSEXT_cert_type_rpk, "negotiated server RPK");
+#else
+            check(SSL_get_negotiated_server_cert_type(ssl) == TLSEXT_cert_type_rpk, "negotiated server RPK");
+#endif
+        }
         if (server) { const char *name = SSL_get_servername(ssl, TLSEXT_NAMETYPE_host_name); check(name && strcmp(name, "server.test") == 0, "received SNI"); }
         if (!server && strcmp(mode, "ocsp") == 0) {
             const unsigned char *response; size_t length;
@@ -234,6 +390,6 @@ int main(int argc, char **argv) {
         SSL_set_shutdown(ssl, SSL_SENT_SHUTDOWN | SSL_RECEIVED_SHUTDOWN);
         SSL_free(ssl); SSL_free(listener); close(fd);
     }
-    SSL_SESSION_free(session); SSL_CTX_free(ctx);
+    SSL_SESSION_free(session); SSL_CTX_free(ctx); EVP_PKEY_free(expected_rpk);
     return 0;
 }

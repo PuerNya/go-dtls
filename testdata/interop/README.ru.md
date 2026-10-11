@@ -87,7 +87,7 @@ key share, фрагментацию, mTLS, OCSP, SNI, ALPN, GREASE, KeyUpdate и
 отправки NSS неблокирующий, чтобы socket API не завершил рукопожатие до записи
 запроса. Обычные проверки early data также проверяют `DatagramInfo.EarlyData`.
 Матрица wolfSSL RPK проверяет `early-io` в обеих ролях на неизмененной ревизии
-`23f245c02c4319bb80baf7f3ae0c1de40e3fb68e`, собранной MSVC в Windows и штатным
+`799bd17483efd76f30bd0f17cb080a0fc0ea92da`, собранной MSVC в Windows и штатным
 компилятором в Linux. Клиент обрабатывает `APP_DATA_READY` при подключении.
 Отсутствие DTLS 0-RTT в BoringSSL и серверные ограничения ниже сохраняются.
 Сценарий HRR сервера wolfSSL проверяет отклонение предложения 0-RTT без отправки
@@ -101,6 +101,24 @@ key share, фрагментацию, mTLS, OCSP, SNI, ALPN, GREASE, KeyUpdate и
 | NSS | Отправка DC сервером; проверка DC сервера Go клиентом; клиентский 0-RTT, включая сессию с аутентификацией DC | Отклоняет DC в CertificateRequest (`tls13con.c`, `KnownExtensions`) вопреки RFC 9345 §4.1.2. В обычных сценариях mTLS это предложение Go отключено. PHA для DTLS с собственным слоем записей не поддерживается. |
 | BoringSSL | Отправка DC сервером | Проверка DC клиентом, PHA и DTLS 0-RTT недоступны. `tls13_client.cc` явно исключает DTLS 0-RTT. |
 | OpenSSL | Оба направления PHA; клиентский 0-RTT | DC отсутствует. Сервер отклоняет допустимый начальный ACK с `unexpected_message`; положительные серверные сценарии намеренно отбрасывают ACK эпохи 2 и называются `server-ACKLoss`. `server/initial-ACK-rejection` сохраняет проверку отказа без изменения обмена. |
+
+Отдельные сценарии проверяют обе роли узла: `hybrid` (только
+X25519MLKEM768), `ccm`, `rpk` (RPK сервера с независимой проверкой ключа),
+`external-psk`, `imported-psk` и `ech`, включая сравнение exporter и обмен
+данными. Фактически согласованы CCM с OpenSSL, RPK с BoringSSL/OpenSSL,
+прямой PSK с NSS/OpenSSL, PSK через importer с BoringSSL и ECH с BoringSSL.
+В API NSS/BoringSSL отсутствует шифр `0x1304`, поэтому `ccm-fallback`
+согласует только GCM. `cid-rrc-fallback` предлагает CID со стороны Go,
+но с этими тремя узлами не согласует ни CID, ни RRC; wolfSSL согласует CID,
+но не RRC. В `ticket-request-fallback` запрос нулевого числа tickets всё равно
+приводит к выдаче обычного ticket и возобновлению соединения: запрошенное число
+было проигнорировано.
+
+Отрицательные проверки ECH отделены: общедоступные API настройки клиента и
+сервера NSS отклоняют DTLS; клиент OpenSSL сообщает о неподдерживаемой версии
+при формировании ClientHello с ECH для DTLS, а сервер OpenSSL с настроенным ECH
+отвечает `illegal_parameter` на предложение Go. Это не успешное принятие ECH;
+сценарии принятия ECH неизменённым wolfSSL по-прежнему пропускаются по умолчанию.
 
 Для клиентского 0-RTT NSS задаётся `SSL_SUPPRESS_END_OF_EARLY_DATA`: RFC 9147 §5
 исключает EndOfEarlyData. Без этой настройки NSS отправляет запрещённое

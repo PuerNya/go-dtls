@@ -3,6 +3,8 @@ package dtls13
 import (
 	"bytes"
 	"context"
+	"crypto"
+	"crypto/ecdh"
 	"crypto/ecdsa"
 	"crypto/elliptic"
 	"crypto/rand"
@@ -40,7 +42,12 @@ func TestInteropDTLS13Peers(t *testing.T) {
 				if peer == "OPENSSL" && role == "server" {
 					roleName = "server-ACKLoss"
 				}
-				for _, mode := range []string{"basic", "resume", "early", "early-io", "sha384", "chacha", "p256", "p384", "hrr", "fragmented", "mutual", "pha", "ocsp", "alpn", "grease", "compression-fallback", "cached-fallback", "keyupdate", "dc", "dc-resume", "dc-early", "dc-fragmented", "dc-sha384", "dc-fallback", "dc-bad-signature", "dc-expired"} {
+				for _, mode := range []string{"basic", "resume", "early", "early-io", "sha384", "chacha", "ccm-fallback", "hybrid", "rpk-fallback", "cid-rrc-fallback", "external-psk-fallback", "p256", "p384", "hrr", "fragmented", "mutual", "pha", "ocsp", "alpn", "grease", "compression-fallback", "cached-fallback", "keyupdate", "dc", "dc-resume", "dc-early", "dc-fragmented", "dc-sha384", "dc-fallback", "dc-bad-signature", "dc-expired"} {
+					if (mode == "ccm-fallback" && peer == "OPENSSL") ||
+						(mode == "rpk-fallback" && peer != "NSS") ||
+						(mode == "external-psk-fallback" && peer != "BORINGSSL") {
+						continue
+					}
 					if (strings.HasSuffix(mode, "early") || mode == "early-io") && (peer == "BORINGSSL" || role == "server") {
 						continue
 					}
@@ -54,6 +61,33 @@ func TestInteropDTLS13Peers(t *testing.T) {
 						continue
 					}
 					t.Run(roleName+"/"+mode, func(t *testing.T) { testDTLS13Peer(t, peer, binary, role, mode) })
+				}
+				if peer == "OPENSSL" {
+					t.Run(roleName+"/ccm", func(t *testing.T) { testDTLS13Peer(t, peer, binary, role, "ccm") })
+				}
+				if peer != "NSS" {
+					t.Run(roleName+"/rpk", func(t *testing.T) { testDTLS13Peer(t, peer, binary, role, "rpk") })
+				}
+				if peer == "BORINGSSL" {
+					t.Run(roleName+"/ech", func(t *testing.T) { testDTLS13Peer(t, peer, binary, role, "ech") })
+				}
+				if peer == "OPENSSL" && role == "server" {
+					t.Run(roleName+"/ech-server-rejection", func(t *testing.T) { testDTLS13Peer(t, peer, binary, role, "ech-server-rejection") })
+				}
+				if peer == "OPENSSL" && role == "client" {
+					t.Run(roleName+"/ech-client-unavailable", func(t *testing.T) { testDTLS13Peer(t, peer, binary, role, "ech-client-unavailable") })
+				}
+				if peer == "NSS" {
+					t.Run(roleName+"/ech-unavailable", func(t *testing.T) { testDTLS13Peer(t, peer, binary, role, "ech-unavailable") })
+				}
+				if peer == "NSS" || peer == "OPENSSL" {
+					t.Run(roleName+"/external-psk", func(t *testing.T) { testDTLS13Peer(t, peer, binary, role, "external-psk") })
+				}
+				if peer == "BORINGSSL" {
+					t.Run(roleName+"/imported-psk", func(t *testing.T) { testDTLS13Peer(t, peer, binary, role, "imported-psk") })
+				}
+				if role == "server" {
+					t.Run(roleName+"/ticket-request-fallback", func(t *testing.T) { testDTLS13Peer(t, peer, binary, role, "ticket-request-fallback") })
 				}
 				metadataMode := "metadata-unoffered"
 				if role == "server" {
@@ -143,6 +177,18 @@ func testDTLS13Peer(t *testing.T, peer, binary, role, mode string) {
 	if goServer {
 		config.Certificates = []tls.Certificate{serverCert}
 	}
+	var echList []byte
+	var echKey EncryptedClientHelloKey
+	if mode == "ech" || mode == "ech-server-rejection" || mode == "ech-client-unavailable" {
+		echList, echKey = testECHConfig(t, "public.test", 17)
+		if mode != "ech-client-unavailable" {
+			if goServer {
+				config.EncryptedClientHelloKeys = []EncryptedClientHelloKey{echKey}
+			} else {
+				config.EncryptedClientHelloConfigList = echList
+			}
+		}
+	}
 	if mode == "metadata-ech-rejected" {
 		config.EncryptedClientHelloConfigList, _ = testECHConfig(t, "server.test", 23)
 		config.HandshakeMetadata = []byte("private handshake metadata")
@@ -157,6 +203,53 @@ func testDTLS13Peer(t *testing.T, peer, binary, role, mode string) {
 	}
 	if mode == "chacha" {
 		config.CipherSuites = []uint16{TLS_CHACHA20_POLY1305_SHA256}
+	}
+	if mode == "ccm" || mode == "ccm-fallback" {
+		config.CipherSuites = []uint16{TLS_AES_128_CCM_SHA256}
+		if mode == "ccm-fallback" {
+			config.CipherSuites = append(config.CipherSuites, TLS_AES_128_GCM_SHA256)
+		}
+	}
+	if mode == "hybrid" {
+		config.CurvePreferences = []tls.CurveID{tls.X25519MLKEM768}
+	}
+	var verifiedRPK atomic.Bool
+	if mode == "rpk" || mode == "rpk-fallback" {
+		config.ServerCertificateTypes = []CertificateType{CertificateTypeRawPublicKey}
+		config.ClientCertificateTypes = []CertificateType{CertificateTypeRawPublicKey}
+		if mode == "rpk-fallback" {
+			config.ServerCertificateTypes = append(config.ServerCertificateTypes, CertificateTypeX509)
+			config.ClientCertificateTypes = append(config.ClientCertificateTypes, CertificateTypeX509)
+		}
+		config.RawPublicKeySigner = config.Certificates[0].PrivateKey.(crypto.Signer)
+		peerCert := serverCert
+		if goServer {
+			peerCert = clientCert
+		}
+		verify := pinRawPublicKey(rawPublicKeyDER(t, peerCert.PrivateKey.(crypto.Signer)))
+		config.VerifyPeerRawPublicKey = func(raw []byte) error {
+			verifiedRPK.Store(true)
+			return verify(raw)
+		}
+	}
+	if mode == "cid-rrc-fallback" {
+		config.ConnectionID = []byte("go-peer")
+	}
+	if mode == "external-psk" || mode == "external-psk-fallback" || mode == "imported-psk" {
+		var psk *ExternalPSK
+		var err error
+		if mode == "imported-psk" {
+			psk, err = ImportExternalPSK([]byte("interop-psk"), bytes.Repeat([]byte{0x42}, 32), []byte("interop-context"), crypto.SHA256)
+		} else {
+			psk, err = NewDirectExternalPSK([]byte("interop-psk"), bytes.Repeat([]byte{0x42}, 32), crypto.SHA256)
+		}
+		if err != nil {
+			t.Fatal(err)
+		}
+		config.ExternalPSKs = []*ExternalPSK{psk}
+	}
+	if mode == "ticket-request-fallback" {
+		config.SessionTicketRequest = SessionTicketRequest{Enabled: true}
 	}
 	if mode == "p256" || (mode == "hrr" && goServer) {
 		config.CurvePreferences = []tls.CurveID{tls.CurveP256}
@@ -206,7 +299,7 @@ func testDTLS13Peer(t *testing.T, peer, binary, role, mode string) {
 	rounds := 1
 	earlyIO := mode == "early-io"
 	early := strings.HasSuffix(mode, "early") || earlyIO
-	if mode == "resume" || mode == "dc-resume" || early {
+	if mode == "resume" || mode == "dc-resume" || mode == "ticket-request-fallback" || early {
 		rounds = 2
 		config.SessionTicketsDisabled = false
 		config.ClientSessionCache = NewLRUClientSessionCache(2)
@@ -247,6 +340,32 @@ func testDTLS13Peer(t *testing.T, peer, binary, role, mode string) {
 	dcPath := filepath.Join(directory, "dc.bin")
 	if err := os.WriteFile(dcPath, dc.Credential, 0600); err != nil {
 		t.Fatal(err)
+	}
+	if mode == "ech" || mode == "ech-server-rejection" || mode == "ech-client-unavailable" {
+		data := echKey.Config
+		if goServer || mode == "ech-client-unavailable" {
+			data = echList
+		}
+		if err := os.WriteFile(dcPath, data, 0600); err != nil {
+			t.Fatal(err)
+		}
+		if !goServer && mode != "ech-client-unavailable" {
+			private := echKey.PrivateKey
+			if peer == "OPENSSL" {
+				key, err := ecdh.X25519().NewPrivateKey(private)
+				if err != nil {
+					t.Fatal(err)
+				}
+				der, err := x509.MarshalPKCS8PrivateKey(key)
+				if err != nil {
+					t.Fatal(err)
+				}
+				private = append(pem.EncodeToMemory(&pem.Block{Type: "PRIVATE KEY", Bytes: der}), pem.EncodeToMemory(&pem.Block{Type: "ECHCONFIG", Bytes: echList})...)
+			}
+			if err := os.WriteFile(delegatedPEM, private, 0600); err != nil {
+				t.Fatal(err)
+			}
+		}
 	}
 	trustCert := clientCert
 	if goServer {
@@ -353,6 +472,9 @@ func testDTLS13Peer(t *testing.T, peer, binary, role, mode string) {
 			}
 		}
 		if err = conn.HandshakeContext(ctx); err != nil {
+			if mode == "ech-server-rejection" && errors.Is(err, AlertError(alertIllegalParameter)) && !conn.ConnectionState().ECHAccepted {
+				return
+			}
 			if mode == "metadata-ech-rejected" {
 				if _, ok := errors.AsType[*ECHRejectionError](err); ok && conn.ConnectionState().HandshakeMetadata == nil {
 					return
@@ -382,7 +504,7 @@ func testDTLS13Peer(t *testing.T, peer, binary, role, mode string) {
 			}
 			t.Fatalf("%s %s %s handshake: %v\n%s", peer, role, mode, err, output.String())
 		}
-		if mode == "initial-ACK-rejection" || mode == "DC-CR-rejection" || mode == "metadata-ech-rejected" {
+		if mode == "initial-ACK-rejection" || mode == "DC-CR-rejection" || mode == "metadata-ech-rejected" || mode == "ech-server-rejection" {
 			t.Fatal("peer limitation no longer reproduces; update the supported matrix")
 		}
 		if mode == "hrr" && !observedHRR.Load() {
@@ -404,8 +526,33 @@ func testDTLS13Peer(t *testing.T, peer, binary, role, mode string) {
 		if state.DidResume != (round != 0) {
 			t.Fatal("session was not resumed")
 		}
-		if state.Version != VersionDTLS13 || state.CipherSuite != config.CipherSuites[0] {
+		wantCipher := config.CipherSuites[0]
+		if mode == "ccm-fallback" {
+			wantCipher = TLS_AES_128_GCM_SHA256
+		}
+		if state.Version != VersionDTLS13 || state.CipherSuite != wantCipher {
 			t.Fatalf("negotiated %#v", state)
+		}
+		if mode == "rpk-fallback" && (state.ServerCertificateType != CertificateTypeX509 || state.ClientCertificateType != CertificateTypeX509 || len(state.PeerRawPublicKey) != 0) {
+			t.Fatalf("RPK fallback negotiated unexpected credential: %#v", state)
+		}
+		if mode == "rpk" && (state.ServerCertificateType != CertificateTypeRawPublicKey || (!goServer && len(state.PeerRawPublicKey) == 0)) {
+			t.Fatalf("RPK not negotiated: %#v", state)
+		}
+		if mode == "rpk" && !goServer && !verifiedRPK.Load() {
+			t.Fatal("RPK verification callback was not invoked")
+		}
+		if mode == "cid-rrc-fallback" && (len(state.LocalConnectionID) != 0 || len(state.PeerConnectionID) != 0 || state.ReturnRoutabilityCheck) {
+			t.Fatalf("CID/RRC fallback negotiated unexpected feature: %#v", state)
+		}
+		if mode == "external-psk-fallback" && len(state.ExternalPSKIdentity()) != 0 {
+			t.Fatalf("external PSK fallback negotiated unexpected PSK: %#v", state)
+		}
+		if (mode == "external-psk" || mode == "imported-psk") && !bytes.Equal(state.ExternalPSKIdentity(), []byte("interop-psk")) {
+			t.Fatalf("external PSK identity = %x", state.ExternalPSKIdentity())
+		}
+		if mode == "ech" && !state.ECHAccepted {
+			t.Fatal("ECH not accepted")
 		}
 		if !goServer {
 			want := []byte(nil)

@@ -629,6 +629,34 @@ func TestInteropWolfSSLServerConnectionID(t *testing.T) {
 	})
 }
 
+func TestInteropWolfSSLReturnRoutabilityFallback(t *testing.T) {
+	for _, role := range []string{"server", "client"} {
+		t.Run(role, func(t *testing.T) {
+			options := wolfSSLInteropOptions{
+				args: []string{"--cid", "wolf-rrc"},
+				configure: func(_ *testing.T, _ string, config *Config) {
+					config.ConnectionID = []byte("go-rrc")
+				},
+				exchanged: func(t *testing.T, conn *Conn, _ int) {
+					state := conn.ConnectionState()
+					if !bytes.Equal(state.LocalConnectionID, []byte("go-rrc")) || !bytes.Equal(state.PeerConnectionID, []byte("wolf-rrc")) {
+						t.Fatalf("CID negotiation: local=%q peer=%q", state.LocalConnectionID, state.PeerConnectionID)
+					}
+					if state.ReturnRoutabilityCheck {
+						t.Fatal("RRC unexpectedly negotiated")
+					}
+				},
+			}
+			if role == "server" {
+				testInteropWolfSSLServerOptions(t, options)
+			} else {
+				options.outputContains = []string{"CID extension was negotiated"}
+				testInteropWolfSSLClientOptions(t, options)
+			}
+		})
+	}
+}
+
 func TestInteropWolfSSLServerKeyUpdate(t *testing.T) {
 	testInteropWolfSSLServerOptions(t, wolfSSLInteropOptions{
 		args:              []string{"-U"},
@@ -695,7 +723,7 @@ func TestInteropWolfSSLServerTicketRequestFallback(t *testing.T) {
 		connections: 2,
 		configure: func(_ *testing.T, _ string, config *Config) {
 			config.ClientSessionCache = NewLRUClientSessionCache(2)
-			config.SessionTicketRequest = SessionTicketRequest{Enabled: true, NewSessionCount: 2, ResumptionCount: 1}
+			config.SessionTicketRequest = SessionTicketRequest{Enabled: true}
 		},
 		connected: requireResumptionOnSecondConnection,
 	})

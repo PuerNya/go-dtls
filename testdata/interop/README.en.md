@@ -84,7 +84,7 @@ an epoch-1 request plus an epoch-3 response before releasing it. NSS uses a
 nonblocking initial send so its socket API cannot finish the handshake before
 writing the request. Ordinary early-data cases also check `DatagramInfo.EarlyData`.
 The wolfSSL RPK matrix covers `early-io` in both roles against upstream
-`23f245c02c4319bb80baf7f3ae0c1de40e3fb68e`, built with MSVC on Windows and the
+`799bd17483efd76f30bd0f17cb080a0fc0ea92da`, built with MSVC on Windows and the
 native toolchain on Linux. Its client handles `APP_DATA_READY` while connecting.
 BoringSSL's lack of native DTLS 0-RTT and the server limitations below still apply.
 The wolfSSL server HRR case verifies rejection of the 0-RTT offer without sending
@@ -98,6 +98,23 @@ payload behavior.
 | NSS | Server DC presentation; client verification of Go server DC; client 0-RTT including a DC-authenticated session | Rejects DC in CertificateRequest (`tls13con.c`, `KnownExtensions`), contrary to RFC 9345 §4.1.2. Ordinary mTLS disables that Go offer. Native DTLS PHA is unsupported. |
 | BoringSSL | Server DC presentation | Client DC verification, PHA and DTLS 0-RTT are unavailable. `tls13_client.cc` explicitly excludes DTLS 0-RTT. |
 | OpenSSL | Both PHA directions; client 0-RTT | No DC. Its server rejects a valid initial ACK with `unexpected_message`; positive server cases deliberately drop epoch-2 ACKs and are named `server-ACKLoss`. `server/initial-ACK-rejection` preserves the unmodified failure. |
+
+Focused cases exercise both peer roles with `hybrid` (X25519MLKEM768 as the
+only group), `ccm`, `rpk` (server RPK with an independent key pin),
+`external-psk`, `imported-psk`, and `ech`, comparing exporters and application
+data. CCM with OpenSSL, RPK with BoringSSL/OpenSSL, direct PSK with NSS/OpenSSL,
+importer PSK with BoringSSL, and ECH acceptance with BoringSSL all negotiated.
+The NSS/BoringSSL cipher APIs omit `0x1304`, so `ccm-fallback` negotiates only
+GCM. `cid-rrc-fallback` offers a Go CID but negotiates neither CID nor RRC
+with these three peers; wolfSSL negotiates CID but not RRC. In
+`ticket-request-fallback`, a zero-ticket request is followed by an ordinary
+ticket and a resumed connection, proving the requested count was ignored.
+
+The ECH negative probes are separate: NSS's public client and server
+configuration APIs reject native DTLS; OpenSSL's client reports an unsupported
+version while constructing a DTLS ECH ClientHello, and its ECH-configured server
+responds to a Go ECH offer with `illegal_parameter`. These are not ECH
+acceptance. The unmodified wolfSSL accepted-ECH cases remain skipped by default.
 
 NSS client 0-RTT sets `SSL_SUPPRESS_END_OF_EARLY_DATA`: RFC 9147 §5 omits
 EndOfEarlyData. Without it, NSS sends that forbidden message. NSS documents

@@ -26,6 +26,31 @@ DTLS 是不可靠报文协议，不是 TLS 字节流：
 - RFC 9849 ECH 可加密真实 ClientHello；拒绝、HRR、恢复和 0-RTT 均保持 fail-closed。
 - `Listener` 从 UDP socket 接受经过认证的 DTLS association，并返回强类型 `*dtls13.Conn`。
 
+## 第三方互通矩阵
+
+下表列出本库主要已实现功能与固定版本第三方对端的原生 UDP DTLS 1.3 互通证据。“双向”表示对端分别作为客户端和服务端通过；“仅客户端/服务端”指第三方的角色。“回退”只证明未协商该功能时仍能握手，不代表对端支持该功能。测试场景、限制与复现方式见[互通指南](../testdata/interop/README.md)。
+
+| go-dtls 已支持的功能 | wolfSSL<br>[`799bd17483efd76f30bd0f17cb080a0fc0ea92da`](https://github.com/wolfSSL/wolfssl/commit/799bd17483efd76f30bd0f17cb080a0fc0ea92da) | BoringSSL<br>[`4f3b183c5d4a8f8fcaba4c0ab4435df181df6978`](https://github.com/google/boringssl/commit/4f3b183c5d4a8f8fcaba4c0ab4435df181df6978) | OpenSSL<br>[`41eecc7c7cd4069b1b29bca49b9d97825c6bf648`](https://github.com/openssl/openssl/commit/41eecc7c7cd4069b1b29bca49b9d97825c6bf648) | NSS<br>[`b9283c1e4ee232b4450d36115272af670d38ec81`](https://github.com/nss-dev/nss/commit/b9283c1e4ee232b4450d36115272af670d38ec81) |
+| --- | --- | --- | --- | --- |
+| X.509/mTLS、AES-GCM/ChaCha、HRR、分片 | 双向 | 双向 | 双向* | 双向 |
+| AES-128-CCM | 双向 | 不支持；GCM 回退 | 双向* | 不支持；GCM 回退 |
+| 普通 ticket 恢复 | 双向 | 双向 | 双向* | 双向 |
+| 0-RTT（含握手未完成时的 I/O） | 双向；early I/O 使用 RPK | 不支持原生 DTLS 0-RTT | 仅客户端 | 仅客户端 |
+| KeyUpdate、OCSP stapling | 双向 | 双向 | 双向* | 双向 |
+| 握手后客户端认证（PHA） | 双向 | 不支持 | 双向* | 不支持原生 DTLS PHA |
+| Raw Public Keys（RPK） | 双向 | 双向（服务端 RPK） | 双向*（服务端 RPK） | X.509 回退；无 RPK API |
+| CID 协商/更新 | 双向协商；本库发起更新 | 无 CID 协商（双向回退） | 无 CID 协商（双向回退*） | 无 CID 协商（双向回退） |
+| RRC 地址验证 | CID 双向协商，RRC 未协商 | 无 CID/RRC 协商 | 无 CID/RRC 协商* | 无 CID/RRC 协商 |
+| ECDHE-MLKEM 混合密钥交换 | X25519/P-256 双向；P-384 仅 wolfSSL 客户端 | X25519MLKEM768 双向 | X25519MLKEM768 双向* | X25519MLKEM768 双向 |
+| 直接外部 PSK | 双向 | 仅 importer PSK 双向；直接 PSK 回退 | 双向* | 双向 |
+| 委托凭据（DC） | 仅普通证书回退 | 仅 BoringSSL 服务端发送 | 仅普通证书回退 | NSS 服务端发送、客户端验证 |
+| 证书压缩、缓存信息 | 仅普通消息回退 | 仅普通消息回退 | 仅普通消息回退 | 仅普通消息回退 |
+| `ticket_request` | 零票据请求被忽略；普通 ticket 恢复 | 零票据请求被忽略；普通 ticket 恢复 | 零票据请求被忽略；普通 ticket 恢复* | 零票据请求被忽略；普通 ticket 恢复 |
+| ECH 接受 | 原版未通过 | 双向 | 服务端拒绝；客户端 DTLS ECH 版本错误 | DTLS ECH 配置 API 拒绝 |
+| 私有加密握手元数据 | 仅未协商回退 | 仅未协商回退 | 仅未协商回退 | 仅未协商回退 |
+
+注：OpenSSL 服务端的正向测试由夹具丢弃合法的初始 epoch-2 ACK；不丢弃时，对端以 `unexpected_message` 拒绝。NSS 客户端还会拒绝合法的 DC CertificateRequest，因此普通 mTLS 用例关闭本库的 DC 提议。wolfSSL 的 ECH 项不把默认跳过的 accepted-ECH 测试算作通过。
+
 ## 环境要求
 
 | 项目 | 要求 |
@@ -571,7 +596,6 @@ serverConfig.MaxSessionTickets = 4
 - 发送端采用一条 record 一个 UDP datagram 的合法模式，未暴露可选的多 record 聚合 API。
 - 未暴露并行多个 PHA 请求；RFC 允许但不要求该能力。
 - RRC 自动 rebind 依赖 transport 能接收不同来源并定向发送；标准 Listener 支持，connected UDP 客户端受操作系统 peer 过滤约束。空 CID 不能跨五元组唯一路由。
-- wolfSSL `799bd17483efd76f30bd0f17cb080a0fc0ea92da` 矩阵覆盖原生 UDP 双向互通，包括 OCSP、RPK、恢复、0-RTT、PHA、KeyUpdate、CID 和 hybrid group。DC 和缓存信息只有回退证据；三项 accepted-ECH 场景仍因对端缺陷排除，不算成功互通。NSS、BoringSSL 和 OpenSSL 的边界见[互通指南](../testdata/interop/README.md)。
 
 ## Benchmark
 

@@ -26,6 +26,31 @@ DTLS is an unreliable datagram protocol, not a TLS byte stream:
 - RFC 9849 ECH encrypts the real ClientHello; rejection, HRR, resumption, and 0-RTT remain fail-closed.
 - `Listener` accepts authenticated DTLS associations from a UDP socket and returns a strongly typed `*dtls13.Conn`.
 
+## Peer Interoperability Matrix
+
+This table compares selected features implemented by go-dtls with native-UDP DTLS 1.3 interoperability against fixed, unmodified upstream revisions. “Both roles” means the peer passed as both client and server; “client/server only” names the peer's role. “Fallback” proves only that a handshake works without negotiating the feature, not that the peer supports it. See the [interop guide](../testdata/interop/README.en.md) for test cases, limits, and reproduction instructions.
+
+| Feature supported by go-dtls | wolfSSL<br>[`799bd17483efd76f30bd0f17cb080a0fc0ea92da`](https://github.com/wolfSSL/wolfssl/commit/799bd17483efd76f30bd0f17cb080a0fc0ea92da) | BoringSSL<br>[`4f3b183c5d4a8f8fcaba4c0ab4435df181df6978`](https://github.com/google/boringssl/commit/4f3b183c5d4a8f8fcaba4c0ab4435df181df6978) | OpenSSL<br>[`41eecc7c7cd4069b1b29bca49b9d97825c6bf648`](https://github.com/openssl/openssl/commit/41eecc7c7cd4069b1b29bca49b9d97825c6bf648) | NSS<br>[`b9283c1e4ee232b4450d36115272af670d38ec81`](https://github.com/nss-dev/nss/commit/b9283c1e4ee232b4450d36115272af670d38ec81) |
+| --- | --- | --- | --- | --- |
+| X.509/mTLS, AES-GCM/ChaCha, HRR, fragmentation | Both roles | Both roles | Both roles* | Both roles |
+| AES-128-CCM | Both roles | Unsupported; GCM fallback | Both roles* | Unsupported; GCM fallback |
+| Ordinary ticket resumption | Both roles | Both roles | Both roles* | Both roles |
+| 0-RTT (including I/O before handshake completion) | Both roles; early I/O uses RPK | No native DTLS 0-RTT | Client only | Client only |
+| KeyUpdate, OCSP stapling | Both roles | Both roles | Both roles* | Both roles |
+| Post-handshake client authentication (PHA) | Both roles | Unsupported | Both roles* | No native DTLS PHA |
+| Raw Public Keys (RPK) | Both roles | Both roles (server RPK) | Both roles* (server RPK) | X.509 fallback; no RPK API |
+| CID negotiation/update | Both-role negotiation; go-dtls-initiated update | No CID negotiation (both-role fallback) | No CID negotiation (both-role fallback*) | No CID negotiation (both-role fallback) |
+| RRC address validation | CID in both roles; RRC not negotiated | No CID/RRC negotiation | No CID/RRC negotiation* | No CID/RRC negotiation |
+| Hybrid ECDHE-MLKEM key exchange | X25519/P-256 both roles; P-384 wolfSSL client only | X25519MLKEM768 both roles | X25519MLKEM768 both roles* | X25519MLKEM768 both roles |
+| Direct external PSK | Both roles | Importer PSK in both roles; direct PSK fallback | Both roles* | Both roles |
+| Delegated Credentials (DC) | Plain-certificate fallback only | BoringSSL server sends only | Plain-certificate fallback only | NSS server sends; client verifies |
+| Certificate compression, cached information | Plain-message fallback only | Plain-message fallback only | Plain-message fallback only | Plain-message fallback only |
+| `ticket_request` | Zero-ticket request ignored; ordinary resumption | Zero-ticket request ignored; ordinary resumption | Zero-ticket request ignored; ordinary resumption* | Zero-ticket request ignored; ordinary resumption |
+| ECH acceptance | Unmodified peer fails | Both roles | Server rejects; client reports unsupported DTLS ECH version | DTLS ECH configuration APIs reject DTLS |
+| Private encrypted handshake metadata | Unnegotiated fallback only | Unnegotiated fallback only | Unnegotiated fallback only | Unnegotiated fallback only |
+
+Note: Positive OpenSSL-server cases have the fixture drop a valid initial epoch-2 ACK; without that loss, the peer rejects it with `unexpected_message`. The NSS client also rejects a valid DC CertificateRequest, so ordinary mTLS cases disable the go-dtls DC offer. The wolfSSL ECH entry does not count default-skipped accepted-ECH cases as success.
+
 ## Requirements
 
 | Item | Requirement |
@@ -566,7 +591,6 @@ The following items do not reduce completion of mandatory RFC 9147 semantics, bu
 - The sender uses the valid one-record-per-UDP-datagram mode and exposes no optional multi-record aggregation API.
 - Concurrent multiple PHA requests are not exposed; the RFC permits but does not require this capability.
 - Automatic RRC rebinding requires a transport that receives from different sources and can send to a selected destination. The standard Listener supports this; connected UDP clients are constrained by operating-system peer filtering. An empty CID cannot uniquely route across five-tuples.
-- The wolfSSL matrix at `799bd17483efd76f30bd0f17cb080a0fc0ea92da` covers both native UDP directions, including OCSP, RPK, resumption, 0-RTT, PHA, KeyUpdate, CID and hybrid groups. DC and cached information have fallback coverage only. Three accepted-ECH cases remain excluded because of peer defects; they are not successful interoperability. NSS, BoringSSL and OpenSSL boundaries are documented in the [interop guide](../testdata/interop/README.en.md).
 
 ## Benchmark
 

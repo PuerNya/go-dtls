@@ -50,6 +50,9 @@ int main(int argc, char **argv) {
     int earlyIO = strcmp(mode, "early-io") == 0;
     int early = strcmp(mode, "early") == 0 || strcmp(mode, "dc-early") == 0 || earlyIO;
     check(NSS_NoDB_Init(NULL) == SECSuccess, "initialize NSS");
+    if (strcmp(mode, "ccm-fallback") == 0)
+        for (unsigned i = 0; i < SSL_NumImplementedCiphers; i++)
+            check(SSL_ImplementedCiphers[i] != 0x1304, "AES-128-CCM unexpectedly implemented");
     PK11SlotInfo *slot = PK11_GetInternalKeySlot(); check(slot != NULL, "key slot");
     SECItem der = read_item(argv[6]);
     struct credential c = {CERT_NewTempCertificate(CERT_GetDefaultCertDB(), &der, NULL, PR_FALSE, PR_TRUE), read_key(slot, argv[7])};
@@ -64,7 +67,7 @@ int main(int argc, char **argv) {
     SECItemArray responses = {&response, 1};
     if (server) check(SSL_ConfigServerSessionIDCache(256, 0, 0, NULL) == SECSuccess, "session cache");
     check(!early || !server, "NSS native server requires EndOfEarlyData");
-    int rounds = (strcmp(mode, "resume") == 0 || strcmp(mode, "dc-resume") == 0 || early) ? 2 : 1;
+    int rounds = (strcmp(mode, "resume") == 0 || strcmp(mode, "dc-resume") == 0 || strcmp(mode, "ticket-request-fallback") == 0 || early) ? 2 : 1;
     for (int round = 0; round < rounds; round++) {
         PRFileDesc *udp = PR_OpenUDPSocket(PR_AF_INET); check(udp != NULL, "socket");
         PRNetAddr address; check(PR_InitializeNetAddr(PR_IpAddrLoopback, (PRUint16)atoi(argv[2]), &address) == PR_SUCCESS, "address");
@@ -75,6 +78,24 @@ int main(int argc, char **argv) {
         }
         check(PR_Connect(udp, &address, timeout) == PR_SUCCESS, "connect UDP");
         PRFileDesc *fd = DTLS_ImportFD(NULL, udp); check(fd != NULL, "DTLS fd");
+        if (strcmp(mode, "ech-unavailable") == 0) {
+            static const unsigned char dummy[] = { 0 };
+            if (server) {
+                SECKEYPublicKey *publicKey = SECKEY_ConvertToPublicKey(c.key);
+                check(publicKey != NULL && SSL_SetServerEchConfigs(fd, publicKey, c.key, dummy, sizeof(dummy)) == SECFailure, "DTLS server ECH rejection");
+                SECKEY_DestroyPublicKey(publicKey);
+            } else {
+                check(SSL_SetClientEchConfigs(fd, dummy, sizeof(dummy)) == SECFailure, "DTLS client ECH rejection");
+            }
+        }
+        if (strcmp(mode, "external-psk") == 0) {
+            unsigned char key[32]; memset(key, 0x42, sizeof(key));
+            SECItem material = {siBuffer, key, sizeof(key)};
+            PK11SymKey *psk = PK11_ImportSymKey(slot, CKM_HKDF_KEY_GEN, PK11_OriginUnwrap, CKA_DERIVE, &material, NULL);
+            static const unsigned char identity[] = "interop-psk";
+            check(psk != NULL && SSL_AddExternalPsk(fd, psk, identity, sizeof(identity) - 1, ssl_hash_sha256) == SECSuccess, "external PSK");
+            PK11_FreeSymKey(psk);
+        }
         SSLVersionRange versions = {SSL_LIBRARY_VERSION_TLS_1_3, SSL_LIBRARY_VERSION_TLS_1_3};
         check(SSL_VersionRangeSet(fd, &versions) == SECSuccess, "DTLS 1.3 version");
         check(SSL_OptionSet(fd, SSL_ENABLE_SESSION_TICKETS, PR_TRUE) == SECSuccess, "session tickets");
@@ -86,7 +107,7 @@ int main(int argc, char **argv) {
         check(SSL_OptionSet(fd, SSL_ENABLE_OCSP_STAPLING, PR_TRUE) == SECSuccess, "enable OCSP");
         check(SSL_OptionSet(fd, SSL_ENABLE_DELEGATED_CREDENTIALS, !server && strcmp(mode, "dc-fallback") == 0 ? PR_FALSE : PR_TRUE) == SECSuccess, "enable DC");
         check(SSL_AuthCertificateHook(fd, auth, &trust) == SECSuccess, "pinned certificate hook");
-        SSLNamedGroup group = strcmp(mode, "p256") == 0 || strcmp(mode, "hrr") == 0 ? ssl_grp_ec_secp256r1 : strcmp(mode, "p384") == 0 ? ssl_grp_ec_secp384r1 : ssl_grp_ec_curve25519;
+        SSLNamedGroup group = strcmp(mode, "p256") == 0 || strcmp(mode, "hrr") == 0 ? ssl_grp_ec_secp256r1 : strcmp(mode, "p384") == 0 ? ssl_grp_ec_secp384r1 : strcmp(mode, "hybrid") == 0 ? ssl_grp_kem_mlkem768x25519 : ssl_grp_ec_curve25519;
         SSLNamedGroup groups[] = {ssl_grp_ec_curve25519, ssl_grp_ec_secp256r1};
         check(SSL_NamedGroupConfig(fd, !server && strcmp(mode, "hrr") == 0 ? groups : &group, !server && strcmp(mode, "hrr") == 0 ? 2 : 1) == SECSuccess, "group");
         PRUint16 suite = (strcmp(mode, "sha384") == 0 || strcmp(mode, "dc-sha384") == 0) ? TLS_AES_256_GCM_SHA384 : strcmp(mode, "chacha") == 0 ? TLS_CHACHA20_POLY1305_SHA256 : TLS_AES_128_GCM_SHA256;
@@ -122,6 +143,7 @@ int main(int argc, char **argv) {
         }
         check(SSL_ForceHandshakeWithTimeout(fd, timeout) == SECSuccess, "handshake");
         SSLChannelInfo info = {0}; check(SSL_GetChannelInfo(fd, &info, sizeof(info)) == SECSuccess && info.protocolVersion == SSL_LIBRARY_VERSION_TLS_1_3, "negotiated version");
+        if (strcmp(mode, "ech-unavailable") == 0) check(!info.echAccepted, "ECH unexpectedly accepted");
         check(info.resumed == (round != 0), "session reuse");
         if (early && round != 0) check(info.earlyDataAccepted, "early data accepted");
         if (!server && strcmp(mode, "ocsp") == 0) {

@@ -80,7 +80,7 @@ NSS 和 OpenSSL 的 `client/early-io` 场景扣留客户端 Finished，要求释
 已收到 epoch-1 请求并发出 epoch-3 响应。NSS 首次发送使用非阻塞模式，避免
 socket API 在写入请求前完成握手。普通 early-data 场景也检查
 `DatagramInfo.EarlyData`。wolfSSL RPK 矩阵在两个角色覆盖 `early-io`，使用
-未修改的上游 `23f245c02c4319bb80baf7f3ae0c1de40e3fb68e`，分别经 Windows
+未修改的上游 `799bd17483efd76f30bd0f17cb080a0fc0ea92da`，分别经 Windows
 MSVC 和 Linux 原生工具链构建；客户端正确处理连接期间的 `APP_DATA_READY`。
 BoringSSL 不支持原生 DTLS 0-RTT，以及下述服务端限制仍然适用。
 wolfSSL 服务端的 HRR 用例只验证拒绝 0-RTT 提议，不发送 epoch-1 数据：
@@ -92,6 +92,21 @@ HRR 已拒绝早期数据后，仍会回显该数据；当前用例不重新探�
 | NSS | 服务端发送 DC；客户端验证 Go 服务端的 DC；客户端 0-RTT，包括经 DC 认证的会话 | 拒绝 CertificateRequest 中的 DC（`tls13con.c`、`KnownExtensions`），违反 RFC 9345 §4.1.2。普通 mTLS 场景关闭 Go 端的这项扩展声明。原生 DTLS 不支持 PHA。 |
 | BoringSSL | 服务端发送 DC | 不支持客户端 DC 验证、PHA 和 DTLS 0-RTT。`tls13_client.cc` 明确排除 DTLS 0-RTT。 |
 | OpenSSL | 双向 PHA；客户端 0-RTT | 不支持 DC。其服务端以 `unexpected_message` 拒绝合法的初始 ACK；服务端正向场景有意丢弃 epoch-2 ACK，并命名为 `server-ACKLoss`。`server/initial-ACK-rejection` 保留未修改报文时的失败探测。 |
+
+新增专项以两种角色分别验证 `hybrid`（只允许 X25519MLKEM768）、
+`ccm`、`rpk`（服务端 RPK 和独立公钥 pin）、`external-psk`、
+`imported-psk`、`ech`，并比较 exporter 与应用数据。OpenSSL 的 CCM、
+BoringSSL/OpenSSL 的 RPK、NSS/OpenSSL 的直接 PSK、BoringSSL 的 importer
+PSK 和 BoringSSL 的 ECH 均实际协商成功；NSS/BoringSSL 的 CCM API 不包含
+`0x1304`，`ccm-fallback` 只能协商 GCM。三对端的 `cid-rrc-fallback`
+在 Go 明确提供 CID 后仍未协商 CID/RRC；wolfSSL 可协商 CID，但未协商 RRC。
+`ticket-request-fallback` 请求零票据，服务端仍签发普通票据且第二次连接恢复，
+证明它们未执行该请求，而不是支持 RFC 9149 的计数语义。
+
+ECH 的负向测试单列：NSS 的公开客户端和服务端配置 API 均拒绝原生 DTLS；
+OpenSSL 客户端在构造 DTLS ECH ClientHello 时报告不支持该版本，服务端配置
+ECH key 后收到 Go 的 ECH 提议则返回 `illegal_parameter`。这些用例不算 ECH
+接受成功；wolfSSL 原版 ECH 接受用例仍默认跳过。
 
 NSS 客户端 0-RTT 设置 `SSL_SUPPRESS_END_OF_EARLY_DATA`：RFC 9147 §5
 省略 EndOfEarlyData；未设置该选项时，NSS 会发送这一被禁止的消息。
