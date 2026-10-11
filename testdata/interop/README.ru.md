@@ -41,7 +41,7 @@ git -C "$work/openssl" checkout 41eecc7c7cd4069b1b29bca49b9d97825c6bf648
 (cd "$work/openssl" && ./Configure no-tests && make -j2)
 cmake -S "$work/bssl" -B "$work/bssl-build" -DCMAKE_BUILD_TYPE=Release -DBUILD_TESTING=OFF
 cmake --build "$work/bssl-build" -j2
-make -C "$work/nss" -j2 all USE_64=1 BUILD_OPT=1 NSS_DISABLE_GTESTS=1 \
+make -C "$work/nss" -j1 all USE_64=1 BUILD_OPT=1 NSS_DISABLE_GTESTS=1 \
   NSPR_INCLUDE_DIR="$(pkg-config --variable=includedir nspr)" \
   NSPR_LIB_DIR="$(pkg-config --variable=libdir nspr)"
 make -C "$work/nss" latest USE_64=1 BUILD_OPT=1

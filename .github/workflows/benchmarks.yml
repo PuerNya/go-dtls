@@ -203,7 +203,7 @@ jobs:
             (cd "$PEER_WORK/openssl" && ./Configure no-tests && make -j2)
             cmake -S "$PEER_WORK/bssl" -B "$PEER_WORK/bssl-build" -DCMAKE_BUILD_TYPE=Release -DBUILD_TESTING=OFF
             cmake --build "$PEER_WORK/bssl-build" --parallel 2
-            make -C "$PEER_WORK/nss" -j2 all USE_64=1 BUILD_OPT=1 NSS_DISABLE_GTESTS=1 \
+            make -C "$PEER_WORK/nss" -j1 all USE_64=1 BUILD_OPT=1 NSS_DISABLE_GTESTS=1 \
               NSPR_INCLUDE_DIR="$(pkg-config --variable=includedir nspr)" \
               NSPR_LIB_DIR="$(pkg-config --variable=libdir nspr)"
             make -C "$PEER_WORK/nss" latest USE_64=1 BUILD_OPT=1
