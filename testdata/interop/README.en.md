@@ -50,7 +50,7 @@ cc -O2 -Wall -Wextra -Werror -I"$work/openssl/include" \
 cc -O2 -Wall -Wextra -Werror -I"$work/bssl/include" \
   "$repo/testdata/interop/openssl.c" "$work/bssl-build/libssl.a" \
   "$work/bssl-build/libcrypto.a" -lstdc++ -pthread -o "$work/bssl-peer"
-nsslib="$(find "$work/dist" -name libnss3.so -printf '%h\n' | head -n1)"
+nsslib="$(find "$work/dist" -name libnss3.so -printf '%h\n' -quit)"
 cc -O2 -Wall -Wextra -Werror -I"$work/dist/public/nss" \
   $(pkg-config --cflags nspr) "$repo/testdata/interop/nss.c" \
   -L"$nsslib" -Wl,-rpath,"$nsslib" -lssl3 -lnss3 -lnssutil3 -lsmime3 \
@@ -63,6 +63,41 @@ export LD_LIBRARY_PATH="$nsslib:$work/openssl"
 cd "$repo"
 go test . -run '^TestInteropDTLS13Peers$' -count=1 -timeout=3m -v
 ```
+
+For the four-direction real-UDP benchmarks, reuse the built peers and environment
+above. The report rejects missing directions, incomplete samples, unexpected
+skips, and peer revisions different from the pinned commits:
+
+```sh
+export GOPROXY=off GOSUMDB=off GOTOOLCHAIN=local
+go list -mod=readonly -deps ./... >/dev/null
+input="$work/peer-benchmark.jsonl"
+printf 'commit: %s\n' "$(git rev-parse HEAD)" > "$input"
+go version >> "$input"
+printf 'nss: %s (Linux Release)\n' b9283c1e4ee232b4450d36115272af670d38ec81 >> "$input"
+printf 'boringssl: %s (Linux Release)\n' 4f3b183c5d4a8f8fcaba4c0ab4435df181df6978 >> "$input"
+printf 'openssl: %s (Linux Release)\n' 41eecc7c7cd4069b1b29bca49b9d97825c6bf648 >> "$input"
+go test . -run '^$' -bench '^BenchmarkDTLS13PeerRealUDP$' \
+  -benchmem -benchtime=1x -count=5 -cpu=1 -timeout=45m -json >> "$input"
+go run ./tools/benchmark-report -input "$input" -output "$work/peer-benchmark.md" \
+  -language en -language-links=false
+```
+
+Each sample performs four fresh connections or four full-plus-resumed pairs per
+supported direction. Go-client time excludes server-readiness waits. The peer
+client metric includes process startup but excludes the benchmark-only wait for
+a peer server to rebind; these two timing sources are not directly comparable.
+The NSS-client 0-RTT case confirms its early record was sent before the Go
+server starts the resumed handshake, so a fast local response cannot turn the
+first write into 1-RTT. This synchronization is included in the peer-client
+metric.
+The go-dtls-client to OpenSSL-server direction deliberately drops the client's
+epoch-2 ACK, as in the positive interoperability test, so its timing includes
+that loss.
+Both fragmented-handshake directions with an NSS server are skipped because the
+NSS fixture cannot enforce an MTU and the Go ClientHello remains unfragmented at
+MTU 256; early-data server directions and BoringSSL-client DC
+directions retain their verified capability skips.
 
 Finish downloads before running tests and clear inherited proxy settings for
 the test processes. The test itself neither downloads nor compiles peers.

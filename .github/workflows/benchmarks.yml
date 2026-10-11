@@ -24,7 +24,7 @@ jobs:
   benchmark:
     name: retained benchmarks
     runs-on: ubuntu-latest
-    timeout-minutes: 90
+    timeout-minutes: 180
     outputs:
       complete: ${{ steps.status.outputs.complete }}
     steps:
@@ -160,6 +160,117 @@ jobs:
             go test . -run '^$' \
               -bench '^(BenchmarkWolfSSLFeatureRealUDP|BenchmarkHybridKeyExchangeRealUDP)$' \
               -benchmem -benchtime=1x -count=5 -cpu=1 -timeout=45m -json | tee -a "$output"
+      - name: Restore DTLS 1.3 peer build cache
+        id: cache-dtls-peers
+        continue-on-error: true
+        uses: actions/cache/restore@v6
+        with:
+          path: ${{ runner.temp }}/dtls13-peers
+          key: dtls13-peers-${{ runner.os }}-${{ runner.arch }}-b9283c1e-4f3b183c-41eecc7c-v1
+      - name: Build pinned NSS, BoringSSL, and OpenSSL peers
+        id: build_dtls_peers
+        continue-on-error: true
+        env:
+          PEER_WORK: ${{ runner.temp }}/dtls13-peers
+          PEER_CACHE_HIT: ${{ steps.cache-dtls-peers.outputs.cache-hit }}
+        shell: bash
+        run: |
+          set -euo pipefail
+          sudo apt-get update
+          sudo apt-get install -y libnspr4-dev pkg-config
+          nss_sha=b9283c1e4ee232b4450d36115272af670d38ec81
+          bssl_sha=4f3b183c5d4a8f8fcaba4c0ab4435df181df6978
+          openssl_sha=41eecc7c7cd4069b1b29bca49b9d97825c6bf648
+          if [[ "$PEER_CACHE_HIT" != true ]] ||
+             [[ "$(git -C "$PEER_WORK/nss" rev-parse HEAD 2>/dev/null || true)" != "$nss_sha" ]] ||
+             [[ "$(git -C "$PEER_WORK/bssl" rev-parse HEAD 2>/dev/null || true)" != "$bssl_sha" ]] ||
+             [[ "$(git -C "$PEER_WORK/openssl" rev-parse HEAD 2>/dev/null || true)" != "$openssl_sha" ]] ||
+             [[ ! -f "$PEER_WORK/bssl-build/libssl.a" ]] ||
+             [[ ! -f "$PEER_WORK/openssl/libssl.so" ]] ||
+             [[ -z "$(find "$PEER_WORK/dist" -name libnss3.so -print -quit 2>/dev/null)" ]]; then
+            rm -rf "$PEER_WORK"
+            mkdir -p "$PEER_WORK"
+            for entry in \
+              "nss https://github.com/nss-dev/nss $nss_sha" \
+              "bssl https://github.com/google/boringssl $bssl_sha" \
+              "openssl https://github.com/openssl/openssl $openssl_sha"; do
+              read -r name url sha <<< "$entry"
+              git init "$PEER_WORK/$name"
+              git -C "$PEER_WORK/$name" remote add origin "$url"
+              git -C "$PEER_WORK/$name" fetch --depth 1 origin "$sha"
+              git -C "$PEER_WORK/$name" checkout --detach FETCH_HEAD
+            done
+            (cd "$PEER_WORK/openssl" && ./Configure no-tests && make -j2)
+            cmake -S "$PEER_WORK/bssl" -B "$PEER_WORK/bssl-build" -DCMAKE_BUILD_TYPE=Release -DBUILD_TESTING=OFF
+            cmake --build "$PEER_WORK/bssl-build" --parallel 2
+            make -C "$PEER_WORK/nss" -j2 all USE_64=1 BUILD_OPT=1 NSS_DISABLE_GTESTS=1 \
+              NSPR_INCLUDE_DIR="$(pkg-config --variable=includedir nspr)" \
+              NSPR_LIB_DIR="$(pkg-config --variable=libdir nspr)"
+            make -C "$PEER_WORK/nss" latest USE_64=1 BUILD_OPT=1
+          fi
+          test "$(git -C "$PEER_WORK/nss" rev-parse HEAD)" = "$nss_sha"
+          test "$(git -C "$PEER_WORK/bssl" rev-parse HEAD)" = "$bssl_sha"
+          test "$(git -C "$PEER_WORK/openssl" rev-parse HEAD)" = "$openssl_sha"
+          nsslib="$(find "$PEER_WORK/dist" -name libnss3.so -printf '%h\n' -quit)"
+          test -n "$nsslib"
+          cc -O2 -Wall -Wextra -Werror -I"$PEER_WORK/openssl/include" \
+            testdata/interop/openssl.c -L"$PEER_WORK/openssl" \
+            -Wl,-rpath,"$PEER_WORK/openssl" -lssl -lcrypto -o "$PEER_WORK/openssl-peer"
+          cc -O2 -Wall -Wextra -Werror -I"$PEER_WORK/bssl/include" \
+            testdata/interop/openssl.c "$PEER_WORK/bssl-build/libssl.a" \
+            "$PEER_WORK/bssl-build/libcrypto.a" -lstdc++ -pthread -o "$PEER_WORK/bssl-peer"
+          cc -O2 -Wall -Wextra -Werror -I"$PEER_WORK/dist/public/nss" \
+            $(pkg-config --cflags nspr) testdata/interop/nss.c \
+            -L"$nsslib" -Wl,-rpath,"$nsslib" -lssl3 -lnss3 -lnssutil3 -lsmime3 \
+            $(pkg-config --libs nspr) -o "$PEER_WORK/nss-peer"
+          echo "nsslib=$nsslib" >> "$GITHUB_OUTPUT"
+      - name: Save DTLS 1.3 peer build cache
+        if: steps.build_dtls_peers.outcome == 'success' && steps.cache-dtls-peers.outcome == 'success' && steps.cache-dtls-peers.outputs.cache-hit != 'true'
+        continue-on-error: true
+        uses: actions/cache/save@v6
+        with:
+          path: ${{ runner.temp }}/dtls13-peers
+          key: ${{ steps.cache-dtls-peers.outputs.cache-primary-key }}
+      - name: Run NSS, BoringSSL, and OpenSSL four-direction benchmarks
+        id: dtls_peer_bench
+        if: steps.build_dtls_peers.outcome == 'success'
+        continue-on-error: true
+        env:
+          PEER_WORK: ${{ runner.temp }}/dtls13-peers
+          NSS_LIB: ${{ steps.build_dtls_peers.outputs.nsslib }}
+        shell: bash
+        run: |
+          set -euo pipefail
+          export GOPROXY=off GOSUMDB=off GOTOOLCHAIN=local
+          go list -mod=readonly -deps ./... >/dev/null
+          test "$(git -C "$PEER_WORK/nss" rev-parse HEAD)" = b9283c1e4ee232b4450d36115272af670d38ec81
+          test "$(git -C "$PEER_WORK/bssl" rev-parse HEAD)" = 4f3b183c5d4a8f8fcaba4c0ab4435df181df6978
+          test "$(git -C "$PEER_WORK/openssl" rev-parse HEAD)" = 41eecc7c7cd4069b1b29bca49b9d97825c6bf648
+          test -x "$PEER_WORK/nss-peer" && test -x "$PEER_WORK/bssl-peer" && test -x "$PEER_WORK/openssl-peer"
+          export DTLS13_NSS_PEER="$PEER_WORK/nss-peer"
+          export DTLS13_BORINGSSL_PEER="$PEER_WORK/bssl-peer"
+          export DTLS13_OPENSSL_PEER="$PEER_WORK/openssl-peer"
+          export LD_LIBRARY_PATH="$NSS_LIB:$PEER_WORK/openssl"
+          output="$RUNNER_TEMP/benchmark-output/benchmark.txt"
+          printf 'nss: %s (Linux Release)\n' b9283c1e4ee232b4450d36115272af670d38ec81 >> "$output"
+          printf 'boringssl: %s (Linux Release)\n' 4f3b183c5d4a8f8fcaba4c0ab4435df181df6978 >> "$output"
+          printf 'openssl: %s (Linux Release)\n' 41eecc7c7cd4069b1b29bca49b9d97825c6bf648 >> "$output"
+          go test . -run '^$' -bench '^BenchmarkDTLS13PeerRealUDP$' \
+            -benchmem -benchtime=1x -count=5 -cpu=1 -timeout=45m -json | tee -a "$output"
+      - name: Validate complete real UDP benchmark matrices
+        id: matrix_validation
+        if: steps.peer_bench.outcome == 'success' && steps.dtls_peer_bench.outcome == 'success'
+        continue-on-error: true
+        shell: bash
+        run: |
+          set -euo pipefail
+          export GOPROXY=off GOSUMDB=off GOTOOLCHAIN=local
+          go list -mod=readonly -deps ./... >/dev/null
+          go run ./tools/benchmark-report \
+            -input "$RUNNER_TEMP/benchmark-output/benchmark.txt" \
+            -output "$RUNNER_TEMP/benchmark-output/validated.md" \
+            -language en -language-links=false
+          rm "$RUNNER_TEMP/benchmark-output/validated.md"
       - name: Format and sort benchmark report
         id: report
         if: always()
@@ -193,6 +304,9 @@ jobs:
                 "${{ steps.wolfssl.outcome }}" == success &&
                 "${{ steps.build_wolfssl.outcome }}" == success &&
                 "${{ steps.peer_bench.outcome }}" == success &&
+                "${{ steps.build_dtls_peers.outcome }}" == success &&
+                "${{ steps.dtls_peer_bench.outcome }}" == success &&
+                "${{ steps.matrix_validation.outcome }}" == success &&
                 "${{ steps.report.outcome }}" == success ]]; then
             echo complete > "$output_dir/benchmark-status.txt"
             echo 'complete=true' >> "$GITHUB_OUTPUT"

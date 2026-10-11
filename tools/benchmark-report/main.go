@@ -35,6 +35,7 @@ type report struct {
 	goarch           string
 	cpu              string
 	wolfSSL          string
+	peerCommits      map[string]string
 	commit           string
 	workloadChanged  bool
 	benchmarks       []*benchmark
@@ -80,7 +81,9 @@ type reportLanguage struct {
 	metadata        [5]string
 	sections        [4]string
 	realUDP         [4]string
-	realUDPTiming   [2]string
+	peerUDP         [4]string
+	peerMetadata    [3]string
+	realUDPTiming   [4]string
 	columns         [6]string
 	unsupported     string
 }
@@ -106,6 +109,18 @@ var realUDPDirectionPaths = [...]string{
 	"WolfSSLClient/WolfSSLServer",
 }
 
+var peerRealUDPWorkloads = map[string][]string{
+	"NSS":       {"CertificateAES128GCM", "AES256GCM", "ChaCha20Poly1305", "P256", "P384", "HelloRetryRequest", "X25519MLKEM768", "FragmentedHandshake", "MutualTLS", "ALPN", "KeyUpdate", "OCSPStapling", "ExternalPSK", "SessionResumption", "MutualTLSSessionResumption", "EarlyData", "DelegatedCredential", "DelegatedCredentialResumption"},
+	"BORINGSSL": {"CertificateAES128GCM", "AES256GCM", "ChaCha20Poly1305", "P256", "P384", "HelloRetryRequest", "X25519MLKEM768", "FragmentedHandshake", "MutualTLS", "ALPN", "KeyUpdate", "OCSPStapling", "RawPublicKey", "ImportedPSK", "SessionResumption", "MutualTLSSessionResumption", "ECH", "DelegatedCredential", "DelegatedCredentialResumption"},
+	"OPENSSL":   {"CertificateAES128GCM", "AES256GCM", "ChaCha20Poly1305", "AES128CCM", "P256", "P384", "HelloRetryRequest", "X25519MLKEM768", "FragmentedHandshake", "MutualTLS", "ALPN", "KeyUpdate", "OCSPStapling", "RawPublicKey", "ExternalPSK", "SessionResumption", "MutualTLSSessionResumption", "EarlyData", "PostHandshakeAuthentication"},
+}
+
+var peerRealUDPCommits = map[string]string{
+	"NSS":       "b9283c1e4ee232b4450d36115272af670d38ec81",
+	"BORINGSSL": "4f3b183c5d4a8f8fcaba4c0ab4435df181df6978",
+	"OPENSSL":   "41eecc7c7cd4069b1b29bca49b9d97825c6bf648",
+}
+
 const (
 	realUDPMatrixSamples  = 5
 	realUDPSkipSamples    = 1
@@ -117,9 +132,60 @@ type realUDPSkipAllowance struct {
 	reason         [3]string
 	evidence       string
 	verifiedCommit string
+	verifiedPeer   string
 }
 
 var realUDPSkipAllowances = map[string]realUDPSkipAllowance{
+	"BenchmarkDTLS13PeerRealUDP/NSS/FragmentedHandshake/GoClient/NSSServer": {
+		output:   "NSS fixture cannot enforce a fragmented handshake without a configurable DTLS MTU",
+		reason:   [3]string{"NSS fixture cannot force handshake fragmentation with an NSS server", "NSS 夹具无法强制 NSS 服务端的握手分片", "Стенд NSS не может принудительно фрагментировать рукопожатие с сервером NSS"},
+		evidence: "Go ClientHello at MTU 256 is unfragmented and NSS exposes no public DTLS MTU setter", verifiedCommit: peerRealUDPCommits["NSS"], verifiedPeer: "NSS",
+	},
+	"BenchmarkDTLS13PeerRealUDP/NSS/FragmentedHandshake/NSSClient/NSSServer": {
+		output:   "NSS fixture cannot enforce a fragmented handshake without a configurable DTLS MTU",
+		reason:   [3]string{"NSS fixture cannot force handshake fragmentation for two NSS peers", "NSS 夹具无法强制两个 NSS 对端的握手分片", "Стенд NSS не может принудительно фрагментировать рукопожатие двух узлов NSS"},
+		evidence: "NSS exposes no DTLS MTU setter in the pinned public API", verifiedCommit: peerRealUDPCommits["NSS"], verifiedPeer: "NSS",
+	},
+	"BenchmarkDTLS13PeerRealUDP/NSS/EarlyData/GoClient/NSSServer": {
+		output:   "NSS server does not support DTLS 1.3 early data in this fixture",
+		reason:   [3]string{"NSS server cannot accept DTLS 1.3 early data in this fixture", "此夹具中的 NSS 服务端无法接收 DTLS 1.3 早期数据", "Сервер NSS в этом стенде не принимает ранние данные DTLS 1.3"},
+		evidence: "testdata/interop/nss.c rejects native server early data", verifiedCommit: peerRealUDPCommits["NSS"], verifiedPeer: "NSS",
+	},
+	"BenchmarkDTLS13PeerRealUDP/NSS/EarlyData/NSSClient/NSSServer": {
+		output:   "NSS server does not support DTLS 1.3 early data in this fixture",
+		reason:   [3]string{"NSS server cannot accept DTLS 1.3 early data in this fixture", "此夹具中的 NSS 服务端无法接收 DTLS 1.3 早期数据", "Сервер NSS в этом стенде не принимает ранние данные DTLS 1.3"},
+		evidence: "testdata/interop/nss.c rejects native server early data", verifiedCommit: peerRealUDPCommits["NSS"], verifiedPeer: "NSS",
+	},
+	"BenchmarkDTLS13PeerRealUDP/OPENSSL/EarlyData/GoClient/OPENSSLServer": {
+		output:   "OPENSSL server does not support DTLS 1.3 early data in this fixture",
+		reason:   [3]string{"OpenSSL listener cannot enter the DTLS early-data read state", "OpenSSL 监听器无法进入 DTLS 早期数据读取状态", "Слушатель OpenSSL не может перейти к чтению ранних данных DTLS"},
+		evidence: "testdata/interop/openssl.c rejects native server early data", verifiedCommit: peerRealUDPCommits["OPENSSL"], verifiedPeer: "OPENSSL",
+	},
+	"BenchmarkDTLS13PeerRealUDP/OPENSSL/EarlyData/OPENSSLClient/OPENSSLServer": {
+		output:   "OPENSSL server does not support DTLS 1.3 early data in this fixture",
+		reason:   [3]string{"OpenSSL listener cannot enter the DTLS early-data read state", "OpenSSL 监听器无法进入 DTLS 早期数据读取状态", "Слушатель OpenSSL не может перейти к чтению ранних данных DTLS"},
+		evidence: "testdata/interop/openssl.c rejects native server early data", verifiedCommit: peerRealUDPCommits["OPENSSL"], verifiedPeer: "OPENSSL",
+	},
+	"BenchmarkDTLS13PeerRealUDP/BORINGSSL/DelegatedCredential/BORINGSSLClient/GoServer": {
+		output:   "BoringSSL client does not authenticate delegated credentials in DTLS 1.3",
+		reason:   [3]string{"BoringSSL client does not authenticate delegated credentials in DTLS 1.3", "BoringSSL 客户端不认证 DTLS 1.3 委派凭证", "Клиент BoringSSL не проверяет делегированные учётные данные в DTLS 1.3"},
+		evidence: "TestInteropDTLS13Peers excludes BoringSSL client delegated-credential mode", verifiedCommit: peerRealUDPCommits["BORINGSSL"], verifiedPeer: "BORINGSSL",
+	},
+	"BenchmarkDTLS13PeerRealUDP/BORINGSSL/DelegatedCredential/BORINGSSLClient/BORINGSSLServer": {
+		output:   "BoringSSL client does not authenticate delegated credentials in DTLS 1.3",
+		reason:   [3]string{"BoringSSL client does not authenticate delegated credentials in DTLS 1.3", "BoringSSL 客户端不认证 DTLS 1.3 委派凭证", "Клиент BoringSSL не проверяет делегированные учётные данные в DTLS 1.3"},
+		evidence: "TestInteropDTLS13Peers excludes BoringSSL client delegated-credential mode", verifiedCommit: peerRealUDPCommits["BORINGSSL"], verifiedPeer: "BORINGSSL",
+	},
+	"BenchmarkDTLS13PeerRealUDP/BORINGSSL/DelegatedCredentialResumption/BORINGSSLClient/GoServer": {
+		output:   "BoringSSL client does not authenticate delegated credentials in DTLS 1.3",
+		reason:   [3]string{"BoringSSL client does not authenticate delegated credentials in DTLS 1.3", "BoringSSL 客户端不认证 DTLS 1.3 委派凭证", "Клиент BoringSSL не проверяет делегированные учётные данные в DTLS 1.3"},
+		evidence: "TestInteropDTLS13Peers excludes BoringSSL client delegated-credential mode", verifiedCommit: peerRealUDPCommits["BORINGSSL"], verifiedPeer: "BORINGSSL",
+	},
+	"BenchmarkDTLS13PeerRealUDP/BORINGSSL/DelegatedCredentialResumption/BORINGSSLClient/BORINGSSLServer": {
+		output:   "BoringSSL client does not authenticate delegated credentials in DTLS 1.3",
+		reason:   [3]string{"BoringSSL client does not authenticate delegated credentials in DTLS 1.3", "BoringSSL 客户端不认证 DTLS 1.3 委派凭证", "Клиент BoringSSL не проверяет делегированные учётные данные в DTLS 1.3"},
+		evidence: "TestInteropDTLS13Peers excludes BoringSSL client delegated-credential mode", verifiedCommit: peerRealUDPCommits["BORINGSSL"], verifiedPeer: "BORINGSSL",
+	},
 	"BenchmarkWolfSSLFeatureRealUDP/MutualTLSSessionResumption/WolfSSLClient/GoServer": {
 		output: "wolfSSL client refuses to fragment the first ClientHello containing the mTLS ticket",
 		reason: [3]string{
@@ -182,9 +248,13 @@ var reportLanguages = map[string]reportLanguage{
 			"wolfSSL client -> go-dtls server",
 			"wolfSSL client -> wolfSSL server",
 		},
-		realUDPTiming: [2]string{
+		peerUDP:      [4]string{"go-dtls client -> go-dtls server", "go-dtls client -> %s server", "%s client -> go-dtls server", "%s client -> %s server"},
+		peerMetadata: [3]string{"NSS", "BoringSSL", "OpenSSL"},
+		realUDPTiming: [4]string{
 			"Median time is measured by the go-dtls client; `ms/conn` means one complete connection workload.",
 			"Median time is measured by the wolfSSL client; `ms/conn` means one connection, while `ms/pair` means a full-plus-resumed connection pair and includes the client's built-in wait.",
+			"Median time includes the peer client process startup and authenticated datagram exchange; `ms/pair` includes both full and resumed connections. These process metrics are not directly comparable with client-only timings.",
+			"Median time is measured by the go-dtls client and includes the authenticated datagram exchange; `ms/pair` includes the full connection that obtains the ticket. Runs with an OpenSSL server deliberately drop the client's epoch-2 ACK.",
 		},
 		columns:     [6]string{"Benchmark", "Samples", "Median time", "Throughput", "Harness memory", "Harness allocations"},
 		unsupported: "Skipped",
@@ -208,9 +278,13 @@ var reportLanguages = map[string]reportLanguage{
 			"wolfSSL 客户端 -> go-dtls 服务端",
 			"wolfSSL 客户端 -> wolfSSL 服务端",
 		},
-		realUDPTiming: [2]string{
+		peerUDP:      [4]string{"go-dtls 客户端 -> go-dtls 服务端", "go-dtls 客户端 -> %s 服务端", "%s 客户端 -> go-dtls 服务端", "%s 客户端 -> %s 服务端"},
+		peerMetadata: [3]string{"NSS", "BoringSSL", "OpenSSL"},
+		realUDPTiming: [4]string{
 			"中位耗时由 go-dtls 客户端计时；`ms/conn` 表示一次完整连接工作负载。",
 			"中位耗时由 wolfSSL 客户端计时；`ms/conn` 表示单个连接，`ms/pair` 表示由完整连接和恢复连接组成的一组，并包含客户端内置等待。",
+			"中位耗时包含对端客户端进程启动和认证数据报交换；`ms/pair` 包含完整连接及恢复连接。进程耗时不能直接与仅客户端计时比较。",
+			"中位耗时由 go-dtls 客户端计时并包含认证数据报交换；`ms/pair` 包含获取票据的完整连接。OpenSSL 服务端方向有意丢弃客户端的 epoch-2 ACK。",
 		},
 		columns:     [6]string{"基准测试", "样本数", "中位耗时", "吞吐量", "测试框架内存", "测试框架分配次数"},
 		unsupported: "跳过",
@@ -234,9 +308,13 @@ var reportLanguages = map[string]reportLanguage{
 			"Клиент wolfSSL -> сервер go-dtls",
 			"Клиент wolfSSL -> сервер wolfSSL",
 		},
-		realUDPTiming: [2]string{
+		peerUDP:      [4]string{"Клиент go-dtls -> сервер go-dtls", "Клиент go-dtls -> сервер %s", "Клиент %s -> сервер go-dtls", "Клиент %s -> сервер %s"},
+		peerMetadata: [3]string{"NSS", "BoringSSL", "OpenSSL"},
+		realUDPTiming: [4]string{
 			"Медианное время измеряет клиент go-dtls; `ms/conn` означает одну полную операцию соединения.",
 			"Медианное время измеряет клиент wolfSSL; `ms/conn` означает одно соединение, а `ms/pair` означает пару из полного и возобновленного соединений с учетом встроенного ожидания клиента.",
+			"Медианное время включает запуск процесса стороннего клиента и обмен аутентифицированными датаграммами; `ms/pair` включает полное и возобновленное соединения. Это время нельзя напрямую сравнивать со временем только клиента.",
+			"Медианное время измеряет клиент go-dtls и включает обмен аутентифицированными датаграммами; `ms/pair` включает полное соединение для получения билета. При сервере OpenSSL ACK клиента эпохи 2 намеренно отбрасывается.",
 		},
 		columns:     [6]string{"Бенчмарк", "Замеры", "Медианное время", "Пропускная способность", "Память стенда", "Аллокации стенда"},
 		unsupported: "Пропущено",
@@ -248,9 +326,12 @@ var workloadMetrics = [...]struct {
 	label string
 }{
 	{"go_ms/conn", "ms/conn"},
+	{"go_ms/pair", "ms/pair"},
 	{"wolfssl_ms/conn", "ms/conn"},
 	{"wolf_process_ms/conn", "ms/conn"},
 	{"wolf_process_ms/pair", "ms/pair"},
+	{"peer_process_ms/conn", "ms/conn"},
+	{"peer_process_ms/pair", "ms/pair"},
 }
 
 var benchmarkPartLabels = map[string]string{
@@ -266,6 +347,7 @@ var benchmarkPartLabels = map[string]string{
 	"ChaCha20Poly1305":            "ChaCha20-Poly1305",
 	"ConnectionID":                "CID",
 	"EarlyData":                   "0-RTT",
+	"HelloRetryRequest":           "HRR",
 	"HybridKeyExchange":           "Hybrid KEX",
 	"MutualTLS":                   "mTLS",
 	"MutualTLSSessionResumption":  "mTLS resumption",
@@ -280,6 +362,21 @@ var benchmarkPartLabels = map[string]string{
 }
 
 var benchmarkFeatureLabels = map[string][3]string{
+	"ALPN":                          {"ALPN-negotiated connection + datagram exchange", "协商 ALPN 的连接 + 数据报交换", "Соединение с ALPN и обмен датаграммами"},
+	"HelloRetryRequest":             {"HelloRetryRequest handshake + datagram exchange", "HelloRetryRequest 握手 + 数据报交换", "Рукопожатие с HelloRetryRequest и обмен датаграммами"},
+	"ImportedPSK":                   {"Imported external PSK handshake + datagram exchange", "导入式外部 PSK 握手 + 数据报交换", "Рукопожатие с импортированным внешним PSK и обмен датаграммами"},
+	"DelegatedCredentialResumption": {"Delegated-credential handshake + session resumption", "委派凭证握手 + 会话恢复", "Рукопожатие с делегированными учётными данными и возобновление сеанса"},
+	"AES256GCM":                     {"AES-256-GCM/SHA-384 connection + datagram exchange", "AES-256-GCM/SHA-384 连接 + 数据报交换", "Соединение AES-256-GCM/SHA-384 и обмен датаграммами"},
+	"ChaCha20Poly1305":              {"ChaCha20-Poly1305 connection + datagram exchange", "ChaCha20-Poly1305 连接 + 数据报交换", "Соединение ChaCha20-Poly1305 и обмен датаграммами"},
+	"P256":                          {"P-256 key exchange + datagram exchange", "P-256 密钥交换 + 数据报交换", "Обмен ключами P-256 и датаграммами"},
+	"P384":                          {"P-384 key exchange + datagram exchange", "P-384 密钥交换 + 数据报交换", "Обмен ключами P-384 и датаграммами"},
+	"X25519MLKEM768":                {"X25519MLKEM768 hybrid handshake + datagram exchange", "X25519MLKEM768 混合握手 + 数据报交换", "Гибридное рукопожатие X25519MLKEM768 и обмен датаграммами"},
+	"FragmentedHandshake":           {"MTU-256 fragmented handshake + datagram exchange", "MTU 256 分片握手 + 数据报交换", "Фрагментированное рукопожатие при MTU 256 и обмен датаграммами"},
+	"OCSPStapling":                  {"OCSP-stapled handshake + datagram exchange", "OCSP 装订握手 + 数据报交换", "Рукопожатие с OCSP-ответом и обмен датаграммами"},
+	"RawPublicKey":                  {"Raw-public-key handshake + datagram exchange", "原始公钥握手 + 数据报交换", "Рукопожатие с открытым ключом и обмен датаграммами"},
+	"ECH":                           {"ECH-accepted handshake + datagram exchange", "ECH 接受握手 + 数据报交换", "Рукопожатие с принятым ECH и обмен датаграммами"},
+	"DelegatedCredential":           {"Delegated-credential handshake + datagram exchange", "委派凭证握手 + 数据报交换", "Рукопожатие с делегированными данными и обмен датаграммами"},
+	"PeerCertificateAES128GCM":      {"Certificate-authenticated AES-128-GCM connection + datagram exchange", "证书认证 AES-128-GCM 连接 + 数据报交换", "Соединение AES-128-GCM с сертификатом и обмен датаграммами"},
 	"AES128CCM": {
 		"Certificate-authenticated full handshake / AES-128-CCM",
 		"证书认证完整握手 / AES-128-CCM",
@@ -629,6 +726,9 @@ func readReportFile(path, wolfSSL string, allowPartial bool) (*report, error) {
 		if err := result.validateRealUDPMatrix(); err != nil {
 			return nil, err
 		}
+		if err := result.validatePeerRealUDPMatrix(); err != nil {
+			return nil, err
+		}
 	}
 	return result, nil
 }
@@ -676,6 +776,18 @@ func parseReport(reader io.Reader) (*report, error) {
 			result.cpu = strings.TrimSpace(strings.TrimPrefix(line, "cpu: "))
 		case strings.HasPrefix(line, "wolfssl: ") && result.wolfSSL == "":
 			result.wolfSSL = strings.TrimSpace(strings.TrimPrefix(line, "wolfssl: "))
+		case strings.HasPrefix(line, "nss: "):
+			if err := result.setPeerCommit("NSS", strings.TrimSpace(strings.TrimPrefix(line, "nss: "))); err != nil {
+				return nil, fmt.Errorf("line %d: %w", lineNumber, err)
+			}
+		case strings.HasPrefix(line, "boringssl: "):
+			if err := result.setPeerCommit("BORINGSSL", strings.TrimSpace(strings.TrimPrefix(line, "boringssl: "))); err != nil {
+				return nil, fmt.Errorf("line %d: %w", lineNumber, err)
+			}
+		case strings.HasPrefix(line, "openssl: "):
+			if err := result.setPeerCommit("OPENSSL", strings.TrimSpace(strings.TrimPrefix(line, "openssl: "))); err != nil {
+				return nil, fmt.Errorf("line %d: %w", lineNumber, err)
+			}
 		case strings.HasPrefix(line, "{"):
 			if err := result.addGoTestJSONLine(lineNumber, line); err != nil {
 				return nil, err
@@ -696,6 +808,17 @@ func parseReport(reader io.Reader) (*report, error) {
 		return nil, errors.New("benchmark output contains no results")
 	}
 	return result, nil
+}
+
+func (r *report) setPeerCommit(peer, value string) error {
+	if r.peerCommits == nil {
+		r.peerCommits = make(map[string]string)
+	}
+	if old := r.peerCommits[peer]; old != "" && old != value {
+		return fmt.Errorf("%s metadata %q conflicts with %q", peer, old, value)
+	}
+	r.peerCommits[peer] = value
+	return nil
 }
 
 type goTestEvent struct {
@@ -789,12 +912,19 @@ func goTestSkipReason(output string) (string, bool) {
 }
 
 func isRealUDPBenchmark(name string) bool {
-	return strings.HasPrefix(name, "BenchmarkWolfSSLFeatureRealUDP") || strings.HasPrefix(name, "BenchmarkHybridKeyExchangeRealUDP")
+	return strings.HasPrefix(name, "BenchmarkWolfSSLFeatureRealUDP") || strings.HasPrefix(name, "BenchmarkHybridKeyExchangeRealUDP") || strings.HasPrefix(name, "BenchmarkDTLS13PeerRealUDP/")
 }
 
 func (r *report) validateRealUDPMatrix() error {
 	if r.wolfSSL == "" {
-		if r.realUDPJSON {
+		wolfResult := false
+		for _, item := range r.benchmarks {
+			wolfResult = wolfResult || isWolfSSLRealUDP(item.name)
+		}
+		for name := range r.realUDPSkips {
+			wolfResult = wolfResult || isWolfSSLRealUDP(name)
+		}
+		if wolfResult {
 			return errors.New("structured real UDP matrix has no wolfSSL metadata")
 		}
 		return nil
@@ -818,6 +948,9 @@ func (r *report) validateRealUDPMatrix() error {
 		}
 	}
 	for name, allowance := range realUDPSkipAllowances {
+		if allowance.verifiedPeer != "" {
+			continue
+		}
 		if _, ok := expected[name]; !ok {
 			return fmt.Errorf("real UDP skip allowlist contains unknown direction %q", name)
 		}
@@ -829,7 +962,7 @@ func (r *report) validateRealUDPMatrix() error {
 	results := make(map[string]*benchmark)
 	for _, item := range r.benchmarks {
 		name := realUDPBenchmarkName(item.name)
-		if !isRealUDPBenchmark(name) {
+		if !isWolfSSLRealUDP(name) {
 			continue
 		}
 		if _, ok := expected[name]; !ok {
@@ -841,6 +974,9 @@ func (r *report) validateRealUDPMatrix() error {
 		results[name] = item
 	}
 	for name := range r.realUDPSkips {
+		if !isWolfSSLRealUDP(name) {
+			continue
+		}
 		if _, ok := expected[name]; !ok {
 			return fmt.Errorf("real UDP matrix skipped unknown direction %q", name)
 		}
@@ -885,12 +1021,98 @@ func (r *report) validateRealUDPMatrix() error {
 	return nil
 }
 
+func isWolfSSLRealUDP(name string) bool {
+	return strings.HasPrefix(name, "BenchmarkWolfSSLFeatureRealUDP") || strings.HasPrefix(name, "BenchmarkHybridKeyExchangeRealUDP")
+}
+
+func (r *report) validatePeerRealUDPMatrix() error {
+	results := make(map[string]*benchmark)
+	for _, item := range r.benchmarks {
+		name := realUDPBenchmarkName(item.name)
+		if strings.HasPrefix(name, "BenchmarkDTLS13PeerRealUDP/") {
+			if results[name] != nil {
+				return fmt.Errorf("peer real UDP matrix produced duplicate direction %q", name)
+			}
+			results[name] = item
+		}
+	}
+	if len(results) == 0 && len(r.peerCommits) == 0 {
+		for name := range r.realUDPSkips {
+			if strings.HasPrefix(name, "BenchmarkDTLS13PeerRealUDP/") {
+				return errors.New("peer real UDP matrix has no peer metadata")
+			}
+		}
+		return nil
+	}
+	for _, peer := range []string{"NSS", "BORINGSSL", "OPENSSL"} {
+		fields := strings.Fields(r.peerCommits[peer])
+		if len(fields) == 0 || !isFullCommit(fields[0]) {
+			return fmt.Errorf("%s metadata has no full commit SHA", peer)
+		}
+		if fields[0] != peerRealUDPCommits[peer] {
+			return fmt.Errorf("%s benchmark commit %q differs from pinned %q", peer, fields[0], peerRealUDPCommits[peer])
+		}
+	}
+	expected := make(map[string]struct{})
+	for _, peer := range []string{"NSS", "BORINGSSL", "OPENSSL"} {
+		for _, workload := range peerRealUDPWorkloads[peer] {
+			for _, direction := range []string{"GoClient/GoServer", "GoClient/" + peer + "Server", peer + "Client/GoServer", peer + "Client/" + peer + "Server"} {
+				expected["BenchmarkDTLS13PeerRealUDP/"+peer+"/"+workload+"/"+direction] = struct{}{}
+			}
+		}
+	}
+	for name, allowance := range realUDPSkipAllowances {
+		if allowance.verifiedPeer == "" {
+			continue
+		}
+		if _, ok := expected[name]; !ok {
+			return fmt.Errorf("peer real UDP skip allowlist contains unknown direction %q", name)
+		}
+		if allowance.output == "" || allowance.evidence == "" || allowance.verifiedCommit != peerRealUDPCommits[allowance.verifiedPeer] || allowance.reason[0] == "" || allowance.reason[1] == "" || allowance.reason[2] == "" {
+			return fmt.Errorf("peer real UDP skip allowlist entry %q is incomplete", name)
+		}
+	}
+	for name := range results {
+		if _, ok := expected[name]; !ok {
+			return fmt.Errorf("peer real UDP matrix produced unknown direction %q", name)
+		}
+	}
+	for name := range r.realUDPSkips {
+		if !strings.HasPrefix(name, "BenchmarkDTLS13PeerRealUDP/") {
+			continue
+		}
+		if _, ok := expected[name]; !ok {
+			return fmt.Errorf("peer real UDP matrix skipped unknown direction %q", name)
+		}
+	}
+	for name := range expected {
+		item, hasResult := results[name]
+		reason, skipped := r.realUDPSkips[name]
+		allowance, allowed := realUDPSkipAllowances[name]
+		if hasResult && skipped {
+			return fmt.Errorf("peer real UDP direction %q produced both a result and a skip", name)
+		}
+		if allowed {
+			if hasResult || !skipped || reason != allowance.output || r.realUDPSamples[name] != realUDPSkipSamples {
+				return fmt.Errorf("peer real UDP direction %q does not match its verified skip", name)
+			}
+			r.addUnsupportedRealUDP(name, allowance)
+		} else if skipped || !hasResult || item.samples != realUDPMatrixSamples {
+			return fmt.Errorf("peer real UDP direction %q is missing %d result samples or has an unregistered skip", name, realUDPMatrixSamples)
+		}
+	}
+	return nil
+}
+
 func (r *report) validateCurrentWolfSSLSkipVerification() error {
 	fields := strings.Fields(r.wolfSSL)
 	if len(fields) == 0 {
 		return errors.New("wolfSSL metadata has no commit")
 	}
 	for name, allowance := range realUDPSkipAllowances {
+		if allowance.verifiedPeer != "" {
+			continue
+		}
 		if allowance.verifiedCommit != fields[0] {
 			return fmt.Errorf("real UDP skip allowance %q was last verified against wolfSSL commit %q, want current commit %q", name, allowance.verifiedCommit, fields[0])
 		}
@@ -931,9 +1153,19 @@ func expectedRealUDPWorkloads() []string {
 func (r *report) addUnsupportedRealUDP(name string, allowance realUDPSkipAllowance) {
 	reason := allowance.reason
 	if allowance.verifiedCommit != "" {
-		reason[0] += "; last verified against wolfSSL commit " + allowance.verifiedCommit
-		reason[1] += "；该限制最后验证于 wolfSSL commit " + allowance.verifiedCommit
-		reason[2] += "; последнее подтверждение для wolfSSL commit " + allowance.verifiedCommit
+		peer := allowance.verifiedPeer
+		if peer == "" {
+			peer = "wolfSSL"
+		}
+		switch peer {
+		case "BORINGSSL":
+			peer = "BoringSSL"
+		case "OPENSSL":
+			peer = "OpenSSL"
+		}
+		reason[0] += "; last verified against " + peer + " commit " + allowance.verifiedCommit
+		reason[1] += "；该限制最后验证于 " + peer + " commit " + allowance.verifiedCommit
+		reason[2] += "; последнее подтверждение для " + peer + " commit " + allowance.verifiedCommit
 	}
 	item := &benchmark{name: name, samples: r.realUDPSamples[name], byUnit: make(map[string]*metric), unsupported: reason}
 	r.byName[name] = item
@@ -1240,6 +1472,9 @@ func writeReport(writer io.Writer, result *report, commit, wolfSSL, generated st
 		{text.metadata[3], platform},
 		{text.metadata[4], wolfSSL},
 	}
+	for index, peer := range []string{"NSS", "BORINGSSL", "OPENSSL"} {
+		metadata = append(metadata, [2]string{text.peerMetadata[index], result.peerCommits[peer]})
+	}
 	for _, item := range metadata {
 		if item[1] == "" {
 			continue
@@ -1279,7 +1514,7 @@ func writeReport(writer io.Writer, result *report, commit, wolfSSL, generated st
 				if len(group) == 0 {
 					continue
 				}
-				if _, err := fmt.Fprintf(writer, "\n  - [%s (%d)](#%s)", text.realUDP[direction], len(group), realUDPAnchors[direction]); err != nil {
+				if _, err := fmt.Fprintf(writer, "\n  - [%s (%d)](#%s)", realUDPDirectionLabel(text, direction), len(group), realUDPAnchor(direction)); err != nil {
 					return err
 				}
 			}
@@ -1345,7 +1580,17 @@ func writeRealUDPTables(writer io.Writer, items []*benchmark, text reportLanguag
 			separator = "\n"
 		}
 		first = false
-		if _, err := fmt.Fprintf(writer, "%s<a id=\"%s\"></a>\n### %s\n\n%s\n\n", separator, realUDPAnchors[index], text.realUDP[index], text.realUDPTiming[index/2]); err != nil {
+		timing := 0
+		if index == 2 || index == 3 {
+			timing = 1
+		}
+		if index >= 4 && index%4 >= 2 {
+			timing = 2
+		}
+		if index >= 4 && index%4 < 2 {
+			timing = 3
+		}
+		if _, err := fmt.Fprintf(writer, "%s<a id=\"%s\"></a>\n### %s\n\n%s\n\n", separator, realUDPAnchor(index), realUDPDirectionLabel(text, index), text.realUDPTiming[timing]); err != nil {
 			return err
 		}
 		if err := writeBenchmarkTable(writer, group, text); err != nil {
@@ -1355,8 +1600,8 @@ func writeRealUDPTables(writer io.Writer, items []*benchmark, text reportLanguag
 	return nil
 }
 
-func groupRealUDP(items []*benchmark) ([4][]*benchmark, error) {
-	var groups [4][]*benchmark
+func groupRealUDP(items []*benchmark) ([16][]*benchmark, error) {
+	var groups [16][]*benchmark
 	for _, item := range items {
 		index := realUDPDirection(item.name)
 		if index < 0 {
@@ -1368,12 +1613,53 @@ func groupRealUDP(items []*benchmark) ([4][]*benchmark, error) {
 }
 
 func realUDPDirection(name string) int {
+	if strings.HasPrefix(name, "BenchmarkDTLS13PeerRealUDP/") {
+		parts := strings.Split(realUDPBenchmarkName(name), "/")
+		if len(parts) != 5 {
+			return -1
+		}
+		for peerIndex, peer := range []string{"NSS", "BORINGSSL", "OPENSSL"} {
+			if parts[1] != peer {
+				continue
+			}
+			direction := parts[3] + "/" + parts[4]
+			for index, want := range []string{"GoClient/GoServer", "GoClient/" + peer + "Server", peer + "Client/GoServer", peer + "Client/" + peer + "Server"} {
+				if direction == want {
+					return 4 + peerIndex*4 + index
+				}
+			}
+		}
+		return -1
+	}
 	for index, direction := range realUDPDirectionPaths {
 		if strings.Contains(name, "/"+direction) {
 			return index
 		}
 	}
 	return -1
+}
+
+func realUDPAnchor(index int) string {
+	if index < len(realUDPAnchors) {
+		return realUDPAnchors[index]
+	}
+	peer := []string{"nss", "boringssl", "openssl"}[(index-4)/4]
+	return "real-udp-" + peer + "-" + []string{"go-go", "go-peer", "peer-go", "peer-peer"}[(index-4)%4]
+}
+
+func realUDPDirectionLabel(text reportLanguage, index int) string {
+	if index < len(text.realUDP) {
+		return text.realUDP[index]
+	}
+	peer := []string{"NSS", "BoringSSL", "OpenSSL"}[(index-4)/4]
+	switch (index - 4) % 4 {
+	case 1, 2:
+		return peer + " / " + fmt.Sprintf(text.peerUDP[(index-4)%4], peer)
+	case 3:
+		return peer + " / " + fmt.Sprintf(text.peerUDP[3], peer, peer)
+	default:
+		return peer + " / " + text.peerUDP[0]
+	}
 }
 
 func writeBenchmarkTable(writer io.Writer, items []*benchmark, text reportLanguage) error {
@@ -1420,6 +1706,8 @@ func benchmarkLabel(name string, text reportLanguage) string {
 	switch parts[0] {
 	case "WolfSSLFeatureRealUDP":
 		parts = parts[1:]
+	case "DTLS13PeerRealUDP":
+		parts = parts[2:]
 	case "HybridKeyExchangeRealUDP":
 		parts[0] = "HybridKeyExchange"
 	default:
@@ -1454,7 +1742,20 @@ func benchmarkNameParts(name string) []string {
 }
 
 func benchmarkDisplayOrder(name string) int {
-	if order, ok := benchmarkDisplayOrders[strings.Join(benchmarkNameParts(name), "/")]; ok {
+	parts := benchmarkNameParts(name)
+	if len(parts) == 3 && parts[0] == "DTLS13PeerRealUDP" {
+		for peerIndex, peer := range []string{"NSS", "BORINGSSL", "OPENSSL"} {
+			if parts[1] != peer {
+				continue
+			}
+			for index, feature := range peerRealUDPWorkloads[peer] {
+				if parts[2] == feature {
+					return 200 + peerIndex*200 + index*10
+				}
+			}
+		}
+	}
+	if order, ok := benchmarkDisplayOrders[strings.Join(parts, "/")]; ok {
 		return order
 	}
 	return 1000
@@ -1467,6 +1768,13 @@ func benchmarkFeatureLabel(parts []string, language int) (string, bool) {
 	key := ""
 	group := ""
 	switch parts[0] {
+	case "DTLS13PeerRealUDP":
+		if len(parts) == 3 {
+			key = parts[2]
+			if key == "CertificateAES128GCM" {
+				key = "PeerCertificateAES128GCM"
+			}
+		}
 	case "WolfSSLFeatureRealUDP":
 		if len(parts) == 2 {
 			key = parts[1]
@@ -1521,7 +1829,7 @@ func benchmarkPeer(value, role string) bool {
 	if !found {
 		return false
 	}
-	return implementation == "Go" || implementation == "WolfSSL"
+	return implementation == "Go" || implementation == "WolfSSL" || implementation == "NSS" || implementation == "BORINGSSL" || implementation == "OPENSSL"
 }
 
 func humanizeBenchmarkPart(value string) string {

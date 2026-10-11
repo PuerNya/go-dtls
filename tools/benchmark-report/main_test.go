@@ -466,17 +466,99 @@ func TestBenchmarkDisplayOrder(t *testing.T) {
 
 func TestRealUDPDirection(t *testing.T) {
 	tests := map[string]int{
-		"BenchmarkFeature/GoClient/GoServer":           0,
-		"BenchmarkFeature/GoClient/WolfSSLServer":      1,
-		"BenchmarkFeature/WolfSSLClient/GoServer":      2,
-		"BenchmarkFeature/WolfSSLClient/WolfSSLServer": 3,
-		"BenchmarkFeature":                             -1,
+		"BenchmarkFeature/GoClient/GoServer":                                         0,
+		"BenchmarkFeature/GoClient/WolfSSLServer":                                    1,
+		"BenchmarkFeature/WolfSSLClient/GoServer":                                    2,
+		"BenchmarkFeature/WolfSSLClient/WolfSSLServer":                               3,
+		"BenchmarkFeature":                                                           -1,
+		"BenchmarkDTLS13PeerRealUDP/NSS/ALPN/GoClient/GoServer-2":                    4,
+		"BenchmarkDTLS13PeerRealUDP/NSS/ALPN/NSSClient/NSSServer-2":                  7,
+		"BenchmarkDTLS13PeerRealUDP/BORINGSSL/ECH/BORINGSSLClient/GoServer-2":        10,
+		"BenchmarkDTLS13PeerRealUDP/OPENSSL/AES128CCM/OPENSSLClient/OPENSSLServer-2": 15,
 	}
 	for name, want := range tests {
 		if got := realUDPDirection(name); got != want {
 			t.Errorf("realUDPDirection(%q) = %d, want %d", name, got, want)
 		}
 	}
+}
+
+func TestValidatePeerRealUDPMatrix(t *testing.T) {
+	report := completePeerRealUDPReport()
+	if err := report.validatePeerRealUDPMatrix(); err != nil {
+		t.Fatal(err)
+	}
+	want := 0
+	for _, features := range peerRealUDPWorkloads {
+		want += len(features) * 4
+	}
+	if len(report.benchmarks) != want {
+		t.Fatalf("peer matrix entries=%d want=%d", len(report.benchmarks), want)
+	}
+	for _, item := range report.benchmarks {
+		if err := validateBenchmarkCoverage(item.name); err != nil {
+			t.Fatal(err)
+		}
+	}
+	for _, test := range []struct{ language, label, metadata, skip string }{
+		{"en", "NSS client -> NSS server", "- NSS: `" + peerRealUDPCommits["NSS"] + "`", "last verified against NSS commit "},
+		{"zh-CN", "BoringSSL 客户端 -> BoringSSL 服务端", "- BoringSSL: `" + peerRealUDPCommits["BORINGSSL"] + "`", "该限制最后验证于 BoringSSL commit "},
+		{"ru", "Клиент OpenSSL -> сервер OpenSSL", "- OpenSSL: `" + peerRealUDPCommits["OPENSSL"] + "`", "последнее подтверждение для OpenSSL commit "},
+	} {
+		var output bytes.Buffer
+		if err := writeReport(&output, report, "", "", "", reportLanguages[test.language], ""); err != nil {
+			t.Fatal(err)
+		}
+		for _, want := range []string{test.label, test.metadata, test.skip} {
+			if !strings.Contains(output.String(), want) {
+				t.Errorf("%s report missing %q", test.language, want)
+			}
+		}
+	}
+}
+
+func TestValidatePeerRealUDPMatrixRejectsIncompleteEvidence(t *testing.T) {
+	name := "BenchmarkDTLS13PeerRealUDP/NSS/CertificateAES128GCM/GoClient/GoServer"
+	for _, test := range []struct {
+		name   string
+		change func(*report)
+	}{
+		{"missing result", func(r *report) { removeRealUDPResult(r, name) }},
+		{"missing peer SHA", func(r *report) { delete(r.peerCommits, "NSS") }},
+		{"wrong peer SHA", func(r *report) { r.peerCommits["NSS"] = strings.Repeat("0", 40) }},
+		{"unregistered skip", func(r *report) {
+			removeRealUDPResult(r, name)
+			r.realUDPSkips[name], r.realUDPSamples[name] = "unsupported", 1
+		}},
+		{"recovered skip", func(r *report) { r.addBenchmarkForTest("BenchmarkDTLS13PeerRealUDP/NSS/EarlyData/GoClient/NSSServer") }},
+		{"missing sample", func(r *report) { r.byName[name+"-2"].samples-- }},
+	} {
+		t.Run(test.name, func(t *testing.T) {
+			report := completePeerRealUDPReport()
+			test.change(report)
+			if err := report.validatePeerRealUDPMatrix(); err == nil {
+				t.Fatal("accepted incomplete peer matrix")
+			}
+		})
+	}
+}
+
+func completePeerRealUDPReport() *report {
+	r := &report{byName: make(map[string]*benchmark), realUDPJSON: true, peerCommits: make(map[string]string), realUDPSkips: make(map[string]string), realUDPSamples: make(map[string]int)}
+	for _, peer := range []string{"NSS", "BORINGSSL", "OPENSSL"} {
+		r.peerCommits[peer] = peerRealUDPCommits[peer]
+		for _, feature := range peerRealUDPWorkloads[peer] {
+			for _, direction := range []string{"GoClient/GoServer", "GoClient/" + peer + "Server", peer + "Client/GoServer", peer + "Client/" + peer + "Server"} {
+				name := "BenchmarkDTLS13PeerRealUDP/" + peer + "/" + feature + "/" + direction
+				if allowance, ok := realUDPSkipAllowances[name]; ok {
+					r.realUDPSkips[name], r.realUDPSamples[name] = allowance.output, realUDPSkipSamples
+				} else {
+					r.addBenchmarkForTest(name)
+				}
+			}
+		}
+	}
+	return r
 }
 
 func TestParseRealUDPJSON(t *testing.T) {
@@ -510,8 +592,8 @@ func TestValidateRealUDPMatrix(t *testing.T) {
 	if workloads := expectedRealUDPWorkloads(); len(workloads) != 15 {
 		t.Fatalf("real UDP workloads = %d, want 15", len(workloads))
 	}
-	if len(realUDPSkipAllowances) != 4 {
-		t.Fatalf("real UDP skip allowances = %d, want 4", len(realUDPSkipAllowances))
+	if len(realUDPSkipAllowances) != 14 {
+		t.Fatalf("real UDP skip allowances = %d, want 14", len(realUDPSkipAllowances))
 	}
 	report := completeRealUDPReport()
 	if err := report.validateRealUDPMatrix(); err != nil {
@@ -596,8 +678,8 @@ func TestReadReportFileAppliesWolfSSLMetadataBeforeMatrixValidation(t *testing.T
 			}
 		}
 	}
-	if unsupported != len(realUDPSkipAllowances) {
-		t.Fatalf("unsupported entries = %d, want %d", unsupported, len(realUDPSkipAllowances))
+	if unsupported != 4 {
+		t.Fatalf("unsupported wolfSSL entries = %d, want 4", unsupported)
 	}
 }
 

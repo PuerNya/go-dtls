@@ -12,6 +12,7 @@
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
+#include <unistd.h>
 
 static void check(int ok, const char *what) {
     if (!ok) { PRErrorCode code = PR_GetError(); fprintf(stderr, "%s: %s (%d)\n", what, PR_ErrorToName(code), code); exit(1); }
@@ -45,7 +46,10 @@ static SECStatus client_auth(void *arg, PRFileDesc *fd, CERTDistNames *names, CE
     *cert = CERT_DupCertificate(c->cert); *key = SECKEY_CopyPrivateKey(c->key); return SECSuccess;
 }
 int main(int argc, char **argv) {
-    check(argc == 11, "role port mode cert.pem key.pem cert.der key.der dc.bin delegated.pem delegated.der");
+    check(argc == 11 || argc == 12, "role port mode cert.pem key.pem cert.der key.der dc.bin delegated.pem delegated.der [benchmark-count]");
+    int benchmark = argc == 12;
+    int repeats = benchmark ? atoi(argv[11]) : 1;
+    check(repeats > 0 && repeats <= 10000, "benchmark count");
     int server = strcmp(argv[1], "server") == 0; const char *mode = argv[3];
     int earlyIO = strcmp(mode, "early-io") == 0;
     int early = strcmp(mode, "early") == 0 || strcmp(mode, "dc-early") == 0 || earlyIO;
@@ -67,14 +71,26 @@ int main(int argc, char **argv) {
     SECItemArray responses = {&response, 1};
     if (server) check(SSL_ConfigServerSessionIDCache(256, 0, 0, NULL) == SECSuccess, "session cache");
     check(!early || !server, "NSS native server requires EndOfEarlyData");
-    int rounds = (strcmp(mode, "resume") == 0 || strcmp(mode, "dc-resume") == 0 || strcmp(mode, "ticket-request-fallback") == 0 || early) ? 2 : 1;
+    int pair = strcmp(mode, "resume") == 0 || strcmp(mode, "mutual-resume") == 0 || strcmp(mode, "dc-resume") == 0 || strcmp(mode, "ticket-request-fallback") == 0 || early;
+    int rounds = (pair ? 2 : 1) * repeats;
     for (int round = 0; round < rounds; round++) {
+        if (benchmark && !server && round > 0 && getenv("DTLS13_BENCH_SYNC")) {
+            unsigned char ready;
+            printf("WAIT %d\n", round); fflush(stdout);
+            check(read(STDIN_FILENO, &ready, 1) == 1 && ready == 1, "benchmark server ready");
+        }
         PRFileDesc *udp = PR_OpenUDPSocket(PR_AF_INET); check(udp != NULL, "socket");
         PRNetAddr address; check(PR_InitializeNetAddr(PR_IpAddrLoopback, (PRUint16)atoi(argv[2]), &address) == PR_SUCCESS, "address");
         PRIntervalTime timeout = PR_SecondsToInterval(8);
         if (server) {
             check(PR_Bind(udp, &address) == PR_SUCCESS, "bind"); printf("READY %d\n", round); fflush(stdout);
-            unsigned char b; check(PR_RecvFrom(udp, &b, 1, PR_MSG_PEEK, &address, timeout) > 0, "first datagram");
+            unsigned char b;
+            do {
+                check(PR_RecvFrom(udp, &b, 1, PR_MSG_PEEK, &address, timeout) > 0, "first datagram");
+                if (!benchmark || b == 22) break;
+                unsigned char discard[2048];
+                check(PR_RecvFrom(udp, discard, sizeof(discard), 0, &address, timeout) > 0, "discard previous association");
+            } while (1);
         }
         check(PR_Connect(udp, &address, timeout) == PR_SUCCESS, "connect UDP");
         PRFileDesc *fd = DTLS_ImportFD(NULL, udp); check(fd != NULL, "DTLS fd");
@@ -98,7 +114,7 @@ int main(int argc, char **argv) {
         }
         SSLVersionRange versions = {SSL_LIBRARY_VERSION_TLS_1_3, SSL_LIBRARY_VERSION_TLS_1_3};
         check(SSL_VersionRangeSet(fd, &versions) == SECSuccess, "DTLS 1.3 version");
-        check(SSL_OptionSet(fd, SSL_ENABLE_SESSION_TICKETS, PR_TRUE) == SECSuccess, "session tickets");
+        check(SSL_OptionSet(fd, SSL_ENABLE_SESSION_TICKETS, !benchmark || pair) == SECSuccess, "session tickets");
         if (early) {
             check(SSL_OptionSet(fd, SSL_ENABLE_0RTT_DATA, PR_TRUE) == SECSuccess, "enable early data");
             check(SSL_OptionSet(fd, SSL_SUPPRESS_END_OF_EARLY_DATA, PR_TRUE) == SECSuccess, "DTLS omits EndOfEarlyData");
@@ -123,7 +139,7 @@ int main(int argc, char **argv) {
                 extra.delegCred = &dc; extra.delegCredPrivKey = delegatedKey;
             }
             check(SSL_ConfigServerCert(fd, c.cert, c.key, &extra, sizeof(extra)) == SECSuccess, "server credential");
-            if (strcmp(mode, "mutual") == 0) {
+            if (strcmp(mode, "mutual") == 0 || strcmp(mode, "mutual-resume") == 0) {
                 check(SSL_OptionSet(fd, SSL_REQUEST_CERTIFICATE, PR_TRUE) == SECSuccess && SSL_OptionSet(fd, SSL_REQUIRE_CERTIFICATE, SSL_REQUIRE_ALWAYS) == SECSuccess, "client authentication");
             }
         } else {
@@ -131,41 +147,51 @@ int main(int argc, char **argv) {
             check(SSL_GetClientAuthDataHook(fd, client_auth, &c) == SECSuccess, "client credential");
         }
         check(SSL_ResetHandshake(fd, server) == SECSuccess, "reset handshake");
-        if (early && round != 0) {
+        if (early && pair && round % 2 != 0) {
             /* A blocking first send can finish the handshake before writing. */
             PRSocketOptionData option = { .option = PR_SockOpt_Nonblocking, .value.non_blocking = PR_TRUE };
             check(PR_SetSocketOption(fd, &option) == PR_SUCCESS, "nonblocking early write");
             PRInt32 sent = PR_Send(fd, "early", 5, 0, timeout);
             if (sent < 0 && PR_GetError() == PR_WOULD_BLOCK_ERROR) sent = PR_Send(fd, "early", 5, 0, timeout);
             check(sent == 5, "write early data");
+            if (benchmark) {
+                SSLPreliminaryChannelInfo preliminary = {0};
+                check(SSL_GetPreliminaryChannelInfo(fd, &preliminary, sizeof(preliminary)) == SECSuccess && preliminary.canSendEarlyData, "early record was sent before handshake completion");
+                printf("EARLY_SENT %d\n", round); fflush(stdout);
+            }
             option.value.non_blocking = PR_FALSE;
             check(PR_SetSocketOption(fd, &option) == PR_SUCCESS, "blocking handshake");
         }
         check(SSL_ForceHandshakeWithTimeout(fd, timeout) == SECSuccess, "handshake");
         SSLChannelInfo info = {0}; check(SSL_GetChannelInfo(fd, &info, sizeof(info)) == SECSuccess && info.protocolVersion == SSL_LIBRARY_VERSION_TLS_1_3, "negotiated version");
+        check(info.cipherSuite == suite, "negotiated cipher suite");
         if (strcmp(mode, "ech-unavailable") == 0) check(!info.echAccepted, "ECH unexpectedly accepted");
-        check(info.resumed == (round != 0), "session reuse");
-        if (early && round != 0) check(info.earlyDataAccepted, "early data accepted");
+        check(info.resumed == (pair && round % 2 != 0), "session reuse");
+        if (strcmp(mode, "external-psk") == 0) check(info.authType == ssl_auth_psk, "external PSK selected");
+        if (!server && strncmp(mode, "dc", 2) == 0 && strcmp(mode, "dc-fallback") != 0 && !(pair && round % 2 != 0)) check(info.peerDelegCred, "delegated credential selected");
+        if (early && pair && round % 2 != 0) check(info.earlyDataAccepted, "early data accepted");
         if (!server && strcmp(mode, "ocsp") == 0) {
             const SECItemArray *responses = SSL_PeerStapledOCSPResponses(fd);
             check(responses != NULL && responses->len == 1 && SECITEM_ItemsAreEqual(&responses->items[0], &response), "received OCSP");
         }
-        if (strcmp(mode, "keyupdate") == 0) check(SSL_KeyUpdate(fd, PR_TRUE) == SECSuccess, "KeyUpdate");
-        if (earlyIO && round != 0) {
+        if (strcmp(mode, "keyupdate") == 0 && (!benchmark || !server || getenv("DTLS13_BENCH_SERVER_KEYUPDATE"))) check(SSL_KeyUpdate(fd, PR_TRUE) == SECSuccess, "KeyUpdate");
+        if (earlyIO && pair && round % 2 != 0) {
             unsigned char reply[64];
             int n = PR_Recv(fd, reply, sizeof(reply), 0, timeout);
             check(n == 11 && memcmp(reply, "early reply", 11) == 0, "early response");
         }
         unsigned char exporter[32]; check(SSL_ExportKeyingMaterial(fd, "interop", 7, PR_FALSE, NULL, 0, exporter, sizeof(exporter)) == SECSuccess, "exporter");
-        printf("VERSION=fefc CIPHER=%04x PEER_DC=%d EXPORTER=", info.cipherSuite, info.peerDelegCred);
+        printf("ROUND=%d VERSION=fefc CIPHER=%04x PEER_DC=%d EXPORTER=", round, info.cipherSuite, info.peerDelegCred);
         for (unsigned i = 0; i < sizeof(exporter); i++) printf("%02x", exporter[i]);
         puts(""); fflush(stdout);
         unsigned char buf[64]; PRInt32 n;
         if (!server) check(PR_Send(fd, "interop", 7, 0, timeout) == 7, "write datagram");
         n = PR_Recv(fd, buf, sizeof(buf), 0, timeout); check(n == 7 && memcmp(buf, "interop", 7) == 0, "read datagram");
         if (server) check(PR_Send(fd, buf, n, 0, timeout) == n, "echo datagram");
+        if (benchmark) check(PR_Send(fd, "done", 4, 0, timeout) == 4, "benchmark completion");
         n = PR_Recv(fd, buf, sizeof(buf), 0, timeout); check(n == 4 && memcmp(buf, "done", 4) == 0, "completion datagram");
         PR_Close(fd);
+        if (benchmark && pair && round % 2 != 0 && !server) SSL_ClearSessionCache();
         if (delegatedKey) SECKEY_DestroyPrivateKey(delegatedKey);
         if (dc.data) SECITEM_FreeItem(&dc, PR_FALSE);
     }

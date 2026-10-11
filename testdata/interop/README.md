@@ -50,7 +50,7 @@ cc -O2 -Wall -Wextra -Werror -I"$work/openssl/include" \
 cc -O2 -Wall -Wextra -Werror -I"$work/bssl/include" \
   "$repo/testdata/interop/openssl.c" "$work/bssl-build/libssl.a" \
   "$work/bssl-build/libcrypto.a" -lstdc++ -pthread -o "$work/bssl-peer"
-nsslib="$(find "$work/dist" -name libnss3.so -printf '%h\n' | head -n1)"
+nsslib="$(find "$work/dist" -name libnss3.so -printf '%h\n' -quit)"
 cc -O2 -Wall -Wextra -Werror -I"$work/dist/public/nss" \
   $(pkg-config --cflags nspr) "$repo/testdata/interop/nss.c" \
   -L"$nsslib" -Wl,-rpath,"$nsslib" -lssl3 -lnss3 -lnssutil3 -lsmime3 \
@@ -63,6 +63,35 @@ export LD_LIBRARY_PATH="$nsslib:$work/openssl"
 cd "$repo"
 go test . -run '^TestInteropDTLS13Peers$' -count=1 -timeout=3m -v
 ```
+
+四向真实 UDP benchmark 复用上述编译产物和环境变量。报告器会拒绝缺失方向、
+样本不足、未登记的跳过，以及与固定源码版本不符的对端：
+
+```sh
+export GOPROXY=off GOSUMDB=off GOTOOLCHAIN=local
+go list -mod=readonly -deps ./... >/dev/null
+input="$work/peer-benchmark.jsonl"
+printf 'commit: %s\n' "$(git rev-parse HEAD)" > "$input"
+go version >> "$input"
+printf 'nss: %s (Linux Release)\n' b9283c1e4ee232b4450d36115272af670d38ec81 >> "$input"
+printf 'boringssl: %s (Linux Release)\n' 4f3b183c5d4a8f8fcaba4c0ab4435df181df6978 >> "$input"
+printf 'openssl: %s (Linux Release)\n' 41eecc7c7cd4069b1b29bca49b9d97825c6bf648 >> "$input"
+go test . -run '^$' -bench '^BenchmarkDTLS13PeerRealUDP$' \
+  -benchmem -benchtime=1x -count=5 -cpu=1 -timeout=45m -json >> "$input"
+go run ./tools/benchmark-report -input "$input" -output "$work/peer-benchmark.md" \
+  -language zh-CN -language-links=false
+```
+
+每个样本在每个支持的方向建立四条新连接，或执行四组完整连接加恢复连接。
+Go 客户端耗时不含等待服务端就绪；第三方客户端指标包含进程启动，但排除
+benchmark 中等待服务端重绑端口的时间。两类耗时不能直接比较。
+NSS 客户端 0-RTT 场景在 Go 服务端开始恢复握手前确认 early record 已发出，
+避免本机快速响应使首次写入变成 1-RTT；该同步开销计入第三方客户端指标。
+go-dtls 客户端到 OpenSSL 服务端的方向与正向互通测试一样有意丢弃客户端的
+epoch-2 ACK，耗时包含这一丢包条件。NSS 夹具无法强制设置 MTU，而 Go 的
+ClientHello 在 MTU 256 下没有分片，因此跳过以 NSS 为服务端的两个分片方向；
+early-data 服务端方向
+和 BoringSSL 客户端 DC 方向保留已核实的能力跳过。
 
 运行测试前先完成下载，并清除测试进程继承的代理设置。测试本身不会下载或
 编译对端。已有 wolfSSL 测试仍使用 `TestInteropWolfSSL*`；其构建方式见

@@ -52,7 +52,7 @@ cc -O2 -Wall -Wextra -Werror -I"$work/openssl/include" \
 cc -O2 -Wall -Wextra -Werror -I"$work/bssl/include" \
   "$repo/testdata/interop/openssl.c" "$work/bssl-build/libssl.a" \
   "$work/bssl-build/libcrypto.a" -lstdc++ -pthread -o "$work/bssl-peer"
-nsslib="$(find "$work/dist" -name libnss3.so -printf '%h\n' | head -n1)"
+nsslib="$(find "$work/dist" -name libnss3.so -printf '%h\n' -quit)"
 cc -O2 -Wall -Wextra -Werror -I"$work/dist/public/nss" \
   $(pkg-config --cflags nspr) "$repo/testdata/interop/nss.c" \
   -L"$nsslib" -Wl,-rpath,"$nsslib" -lssl3 -lnss3 -lnssutil3 -lsmime3 \
@@ -65,6 +65,42 @@ export LD_LIBRARY_PATH="$nsslib:$work/openssl"
 cd "$repo"
 go test . -run '^TestInteropDTLS13Peers$' -count=1 -timeout=3m -v
 ```
+
+Для четырёх направлений benchmark через реальный UDP используйте уже собранные
+узлы и переменные окружения выше. Генератор отчёта отклоняет отсутствующие
+направления, неполные выборки, незарегистрированные пропуски и несовпадение
+ревизий узлов с закреплёнными коммитами:
+
+```sh
+export GOPROXY=off GOSUMDB=off GOTOOLCHAIN=local
+go list -mod=readonly -deps ./... >/dev/null
+input="$work/peer-benchmark.jsonl"
+printf 'commit: %s\n' "$(git rev-parse HEAD)" > "$input"
+go version >> "$input"
+printf 'nss: %s (Linux Release)\n' b9283c1e4ee232b4450d36115272af670d38ec81 >> "$input"
+printf 'boringssl: %s (Linux Release)\n' 4f3b183c5d4a8f8fcaba4c0ab4435df181df6978 >> "$input"
+printf 'openssl: %s (Linux Release)\n' 41eecc7c7cd4069b1b29bca49b9d97825c6bf648 >> "$input"
+go test . -run '^$' -bench '^BenchmarkDTLS13PeerRealUDP$' \
+  -benchmem -benchtime=1x -count=5 -cpu=1 -timeout=45m -json >> "$input"
+go run ./tools/benchmark-report -input "$input" -output "$work/peer-benchmark.md" \
+  -language ru -language-links=false
+```
+
+Каждая выборка выполняет четыре новых соединения или четыре пары из полного и
+возобновлённого соединения для каждого поддерживаемого направления. Время
+клиента Go не включает ожидание готовности сервера. Показатель стороннего
+клиента включает запуск процесса, но исключает ожидание повторной привязки
+порта сервером; эти показатели нельзя напрямую сравнивать.
+В сценарии 0-RTT клиент NSS подтверждает отправку ранней записи до запуска
+возобновлённого рукопожатия сервером Go, чтобы быстрая локальная реакция не
+превратила первую запись в 1-RTT. Время этой синхронизации входит в показатель
+клиентского процесса.
+В направлении от клиента go-dtls к серверу OpenSSL ACK клиента эпохи 2
+намеренно отбрасывается, как и в положительном тесте совместимости; время
+включает эту потерю. Оба направления с сервером NSS для фрагментированного
+рукопожатия пропускаются: стенд NSS не может задать MTU, а ClientHello Go не
+фрагментируется при MTU 256. Для серверов с early data и клиентов BoringSSL с DC
+сохраняются проверенные ограничения возможностей.
 
 Завершите загрузки до запуска тестов и удалите унаследованные настройки прокси
 из окружения тестовых процессов. Сам тест не загружает и не собирает узлы.

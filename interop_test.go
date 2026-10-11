@@ -49,7 +49,8 @@ type wolfSSLInteropOptions struct {
 type lockedBuffer struct {
 	mu sync.Mutex
 	// Do not promote ReadFrom: io.Copy must use the locked Write method.
-	buffer bytes.Buffer
+	buffer  bytes.Buffer
+	changed chan struct{}
 }
 
 type dropFinalACKConn struct {
@@ -223,7 +224,14 @@ func (c *dropFinalACKConn) result() (dropped bool, finishedWrites int) {
 func (b *lockedBuffer) Write(p []byte) (int, error) {
 	b.mu.Lock()
 	defer b.mu.Unlock()
-	return b.buffer.Write(p)
+	n, err := b.buffer.Write(p)
+	if b.changed != nil {
+		select {
+		case b.changed <- struct{}{}:
+		default:
+		}
+	}
+	return n, err
 }
 
 func (b *lockedBuffer) String() string {

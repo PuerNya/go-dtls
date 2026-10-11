@@ -136,7 +136,10 @@ static size_t read_bytes(const char *path, unsigned char *data, size_t capacity)
 }
 
 int main(int argc, char **argv) {
-    check(argc == 11, "role port mode cert.pem key.pem cert.der key.der dc.bin delegated.pem delegated.der");
+    check(argc == 11 || argc == 12, "role port mode cert.pem key.pem cert.der key.der dc.bin delegated.pem delegated.der [benchmark-count]");
+    int benchmark = argc == 12;
+    int repeats = benchmark ? atoi(argv[11]) : 1;
+    check(repeats > 0 && repeats <= 10000, "benchmark count");
     int server = strcmp(argv[1], "server") == 0;
     const char *mode = argv[3];
     int earlyIO = strcmp(mode, "early-io") == 0;
@@ -168,7 +171,7 @@ int main(int argc, char **argv) {
           SSL_CTX_set_max_proto_version(ctx, DTLS1_3_VERSION), "DTLS 1.3 version");
     check(SSL_CTX_use_certificate_chain_file(ctx, argv[4]) == 1 &&
           SSL_CTX_use_PrivateKey_file(ctx, argv[5], SSL_FILETYPE_PEM) == 1, "X.509 credential");
-    SSL_CTX_set_verify(ctx, !server ? SSL_VERIFY_PEER : strcmp(mode, "mutual") == 0 || strcmp(mode, "pha") == 0 ? SSL_VERIFY_PEER | SSL_VERIFY_FAIL_IF_NO_PEER_CERT : SSL_VERIFY_NONE, NULL);
+    SSL_CTX_set_verify(ctx, !server ? SSL_VERIFY_PEER : strcmp(mode, "mutual") == 0 || strcmp(mode, "mutual-resume") == 0 || strcmp(mode, "pha") == 0 ? SSL_VERIFY_PEER | SSL_VERIFY_FAIL_IF_NO_PEER_CERT : SSL_VERIFY_NONE, NULL);
 #ifndef OPENSSL_IS_BORINGSSL
     if (!server && strcmp(mode, "ech-client-unavailable") == 0) {
         unsigned char config[512];
@@ -205,7 +208,7 @@ int main(int argc, char **argv) {
         if (!server) expected_rpk = read_trusted_public_key(argv[4]);
 #endif
     }
-    if (!server || strcmp(mode, "mutual") == 0 || strcmp(mode, "pha") == 0) {
+    if (!server || strcmp(mode, "mutual") == 0 || strcmp(mode, "mutual-resume") == 0 || strcmp(mode, "pha") == 0) {
         char trust[4096]; snprintf(trust, sizeof(trust), "%s.trust", argv[4]);
         check(SSL_CTX_load_verify_locations(ctx, trust, NULL) == 1, "mutual trust");
     }
@@ -251,10 +254,11 @@ int main(int argc, char **argv) {
     if (!server && strcmp(mode, "hrr") == 0) group = "X25519:P-256";
     check(SSL_CTX_set1_groups_list(ctx, group) == 1, "groups");
     const char *cipher = (strcmp(mode, "sha384") == 0 || strcmp(mode, "dc-sha384") == 0) ? "TLS_AES_256_GCM_SHA384" : strcmp(mode, "chacha") == 0 ? "TLS_CHACHA20_POLY1305_SHA256" : strcmp(mode, "ccm") == 0 ? "TLS_AES_128_CCM_SHA256" : "TLS_AES_128_GCM_SHA256";
+    uint16_t cipher_id = (strcmp(mode, "sha384") == 0 || strcmp(mode, "dc-sha384") == 0) ? 0x1302 : strcmp(mode, "chacha") == 0 ? 0x1303 : strcmp(mode, "ccm") == 0 ? 0x1304 : 0x1301;
 #ifndef OPENSSL_IS_BORINGSSL
     check(SSL_CTX_set_ciphersuites(ctx, cipher) == 1, "cipher suites");
 #else
-    /* BoringSSL's TLS 1.3 cipher list is fixed; the Go peer restricts selection. */
+    check(SSL_CTX_set1_tls13_ciphers(ctx, &cipher_id, NULL, 1), "TLS 1.3 cipher suite");
     (void)cipher;
     if (server && strncmp(mode, "dc", 2) == 0) {
         SSL_CREDENTIAL *cred = SSL_CREDENTIAL_new_delegated(); check(cred != NULL, "new DC");
@@ -267,8 +271,21 @@ int main(int argc, char **argv) {
         SSL_CREDENTIAL_free(cred); CRYPTO_BUFFER_free(cert); CRYPTO_BUFFER_free(dc); EVP_PKEY_free(key);
     }
 #endif
-    int rounds = (strcmp(mode, "resume") == 0 || strcmp(mode, "dc-resume") == 0 || strcmp(mode, "ticket-request-fallback") == 0 || early) ? 2 : 1;
+    int pair = strcmp(mode, "resume") == 0 || strcmp(mode, "mutual-resume") == 0 || strcmp(mode, "dc-resume") == 0 || strcmp(mode, "ticket-request-fallback") == 0 || early;
+    if (server && strcmp(mode, "mutual-resume") == 0) {
+        static const unsigned char context[] = "interop-mtls";
+        check(SSL_CTX_set_session_id_context(ctx, context, sizeof(context)), "mTLS session context");
+    }
+    if (benchmark && !pair) SSL_CTX_set_options(ctx, SSL_OP_NO_TICKET);
+    int rounds = (pair ? 2 : 1) * repeats;
     for (int round = 0; round < rounds; round++) {
+        if (benchmark && !server && round > 0 && getenv("DTLS13_BENCH_SYNC")) {
+            unsigned char ready;
+            printf("WAIT %d\n", round); fflush(stdout);
+            check(read(STDIN_FILENO, &ready, 1) == 1 && ready == 1, "benchmark server ready");
+        }
+        int resumed = pair && round % 2 != 0;
+        if (benchmark && pair && !resumed) { SSL_SESSION_free(session); session = NULL; }
         int fd = socket(AF_INET, SOCK_DGRAM, 0); check(fd >= 0, "socket");
         struct sockaddr_in address = {0}; address.sin_family = AF_INET;
         address.sin_addr.s_addr = htonl(INADDR_LOOPBACK); address.sin_port = htons((unsigned short)atoi(argv[2]));
@@ -286,7 +303,12 @@ int main(int argc, char **argv) {
             ssl = SSL_accept_connection(listener, 0); check(ssl != NULL, "accept connection");
 #else
             unsigned char b; socklen_t size = sizeof(address);
-            check(recvfrom(fd, &b, 1, MSG_PEEK, (struct sockaddr *)&address, &size) > 0, "first datagram");
+            do {
+                check(recvfrom(fd, &b, 1, MSG_PEEK, (struct sockaddr *)&address, &size) > 0, "first datagram");
+                if (!benchmark || b == 22) break;
+                unsigned char discard[2048];
+                check(recvfrom(fd, discard, sizeof(discard), 0, (struct sockaddr *)&address, &size) > 0, "discard previous association");
+            } while (1);
             check(connect(fd, (struct sockaddr *)&address, size) == 0, "connect server UDP");
 #endif
         } else {
@@ -332,18 +354,24 @@ int main(int argc, char **argv) {
 #endif
             }
         }
-        if (!server && round != 0) check(session != NULL && SSL_set_session(ssl, session), "restore session");
+        if (!server && resumed) check(session != NULL && SSL_set_session(ssl, session), "restore session");
 #ifndef OPENSSL_IS_BORINGSSL
-        if (early && !server && round != 0) {
+        if (early && !server && resumed) {
             size_t written; check(SSL_write_early_data(ssl, "early", 5, &written) && written == 5, "write early data");
         }
 #endif
         check((server ? SSL_accept(ssl) : SSL_connect(ssl)) == 1, "handshake");
 #ifndef OPENSSL_IS_BORINGSSL
-        if (early && round != 0) check(SSL_get_early_data_status(ssl) == SSL_EARLY_DATA_ACCEPTED, "early data accepted");
+        if (early && resumed) check(SSL_get_early_data_status(ssl) == SSL_EARLY_DATA_ACCEPTED, "early data accepted");
 #endif
-        check(SSL_session_reused(ssl) == (round != 0 || strcmp(mode, "external-psk") == 0), "session reuse");
+        check(SSL_session_reused(ssl) == (resumed || strcmp(mode, "external-psk") == 0), "session reuse");
+        if (!server && (strcmp(mode, "external-psk") == 0 || strcmp(mode, "imported-psk") == 0)) {
+            X509 *peer_cert = SSL_get_peer_certificate(ssl);
+            check(peer_cert == NULL, "external PSK selected");
+            X509_free(peer_cert);
+        }
         check(SSL_version(ssl) == DTLS1_3_VERSION, "negotiated version");
+        check(SSL_CIPHER_get_protocol_id(SSL_get_current_cipher(ssl)) == cipher_id, "negotiated cipher suite");
 #ifdef OPENSSL_IS_BORINGSSL
         if (strcmp(mode, "ech") == 0) check(SSL_ech_accepted(ssl), "ECH not accepted");
 #else
@@ -368,22 +396,28 @@ int main(int argc, char **argv) {
         }
         if (strcmp(mode, "alpn") == 0) { const unsigned char *p; unsigned n; SSL_get0_alpn_selected(ssl, &p, &n); check(n == 4 && memcmp(p, "coap", 4) == 0, "negotiated ALPN"); }
         unsigned char exporter[32]; check(SSL_export_keying_material(ssl, exporter, sizeof(exporter), "interop", 7, NULL, 0, 0) == 1, "exporter");
-        printf("VERSION=%04x CIPHER=%s EXPORTER=", SSL_version(ssl), SSL_get_cipher(ssl));
+        printf("ROUND=%d VERSION=%04x CIPHER=%s EXPORTER=", round, SSL_version(ssl), SSL_get_cipher(ssl));
         for (unsigned i = 0; i < sizeof(exporter); i++) printf("%02x", exporter[i]);
         puts(""); fflush(stdout);
         unsigned char buf[64]; int n;
-        if (earlyIO && round != 0) {
+        if (earlyIO && resumed) {
             n = read_datagram(ssl, buf, sizeof(buf));
             check(n == 11 && memcmp(buf, "early reply", 11) == 0, "early response");
         }
-        if (strcmp(mode, "keyupdate") == 0) check(SSL_key_update(ssl, SSL_KEY_UPDATE_REQUESTED) == 1, "KeyUpdate");
+        if (strcmp(mode, "keyupdate") == 0 && (!benchmark || !server || getenv("DTLS13_BENCH_SERVER_KEYUPDATE"))) {
+            check(SSL_key_update(ssl, SSL_KEY_UPDATE_REQUESTED) == 1, "KeyUpdate");
+#ifdef OPENSSL_IS_BORINGSSL
+            if (benchmark) check(SSL_do_handshake(ssl) == 1, "flush KeyUpdate");
+#endif
+        }
         if (!server) check(SSL_write(ssl, "interop", 7) == 7, "write datagram");
         n = read_datagram(ssl, buf, sizeof(buf)); check(n == 7 && memcmp(buf, "interop", 7) == 0, "read datagram");
 #ifndef OPENSSL_IS_BORINGSSL
         if (server && strcmp(mode, "pha") == 0) check(SSL_verify_client_post_handshake(ssl), "request PHA");
 #endif
         if (server) check(SSL_write(ssl, buf, n) == n, "echo datagram");
-        /* Keep the association alive until Go has received the echo and ACKed KU. */
+        if (benchmark) check(SSL_write(ssl, "done", 4) == 4, "benchmark completion");
+        /* Keep the association alive until the other endpoint completes. */
         n = read_datagram(ssl, buf, sizeof(buf)); check(n == 4 && memcmp(buf, "done", 4) == 0, "completion datagram");
         if (server && strcmp(mode, "pha") == 0) { X509 *cert = SSL_get_peer_certificate(ssl); check(cert != NULL && SSL_get_verify_result(ssl) == X509_V_OK, "PHA identity"); X509_free(cert); }
         /* The authenticated completion datagram closes the test exchange. */
