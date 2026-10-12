@@ -758,42 +758,16 @@ func parseReport(reader io.Reader) (*report, error) {
 	for lineNumber := 1; scanner.Scan(); lineNumber++ {
 		line := strings.TrimSpace(scanner.Text())
 		switch {
-		case strings.HasPrefix(line, "commit: ") && result.commit == "":
-			result.commit = strings.TrimSpace(strings.TrimPrefix(line, "commit: "))
-		case strings.HasPrefix(line, "workload-changed: "):
-			changed, err := strconv.ParseBool(strings.TrimSpace(strings.TrimPrefix(line, "workload-changed: ")))
-			if err != nil {
-				return nil, fmt.Errorf("line %d: parse workload change marker: %w", lineNumber, err)
-			}
-			result.workloadChanged = changed
-		case strings.HasPrefix(line, "go version ") && result.goVersion == "":
-			result.goVersion = line
-		case strings.HasPrefix(line, "goos: ") && result.goos == "":
-			result.goos = strings.TrimSpace(strings.TrimPrefix(line, "goos: "))
-		case strings.HasPrefix(line, "goarch: ") && result.goarch == "":
-			result.goarch = strings.TrimSpace(strings.TrimPrefix(line, "goarch: "))
-		case strings.HasPrefix(line, "cpu: ") && result.cpu == "":
-			result.cpu = strings.TrimSpace(strings.TrimPrefix(line, "cpu: "))
-		case strings.HasPrefix(line, "wolfssl: ") && result.wolfSSL == "":
-			result.wolfSSL = strings.TrimSpace(strings.TrimPrefix(line, "wolfssl: "))
-		case strings.HasPrefix(line, "nss: "):
-			if err := result.setPeerCommit("NSS", strings.TrimSpace(strings.TrimPrefix(line, "nss: "))); err != nil {
-				return nil, fmt.Errorf("line %d: %w", lineNumber, err)
-			}
-		case strings.HasPrefix(line, "boringssl: "):
-			if err := result.setPeerCommit("BORINGSSL", strings.TrimSpace(strings.TrimPrefix(line, "boringssl: "))); err != nil {
-				return nil, fmt.Errorf("line %d: %w", lineNumber, err)
-			}
-		case strings.HasPrefix(line, "openssl: "):
-			if err := result.setPeerCommit("OPENSSL", strings.TrimSpace(strings.TrimPrefix(line, "openssl: "))); err != nil {
-				return nil, fmt.Errorf("line %d: %w", lineNumber, err)
-			}
 		case strings.HasPrefix(line, "{"):
 			if err := result.addGoTestJSONLine(lineNumber, line); err != nil {
 				return nil, err
 			}
 		case strings.HasPrefix(line, "Benchmark"):
 			if err := result.addBenchmarkLine(lineNumber, line); err != nil {
+				return nil, err
+			}
+		default:
+			if err := result.addMetadataLine(lineNumber, line); err != nil {
 				return nil, err
 			}
 		}
@@ -808,6 +782,42 @@ func parseReport(reader io.Reader) (*report, error) {
 		return nil, errors.New("benchmark output contains no results")
 	}
 	return result, nil
+}
+
+func (r *report) addMetadataLine(lineNumber int, line string) error {
+	switch {
+	case strings.HasPrefix(line, "commit: ") && r.commit == "":
+		r.commit = strings.TrimSpace(strings.TrimPrefix(line, "commit: "))
+	case strings.HasPrefix(line, "workload-changed: "):
+		changed, err := strconv.ParseBool(strings.TrimSpace(strings.TrimPrefix(line, "workload-changed: ")))
+		if err != nil {
+			return fmt.Errorf("line %d: parse workload change marker: %w", lineNumber, err)
+		}
+		r.workloadChanged = changed
+	case strings.HasPrefix(line, "go version ") && r.goVersion == "":
+		r.goVersion = line
+	case strings.HasPrefix(line, "goos: ") && r.goos == "":
+		r.goos = strings.TrimSpace(strings.TrimPrefix(line, "goos: "))
+	case strings.HasPrefix(line, "goarch: ") && r.goarch == "":
+		r.goarch = strings.TrimSpace(strings.TrimPrefix(line, "goarch: "))
+	case strings.HasPrefix(line, "cpu: ") && r.cpu == "":
+		r.cpu = strings.TrimSpace(strings.TrimPrefix(line, "cpu: "))
+	case strings.HasPrefix(line, "wolfssl: ") && r.wolfSSL == "":
+		r.wolfSSL = strings.TrimSpace(strings.TrimPrefix(line, "wolfssl: "))
+	case strings.HasPrefix(line, "nss: "):
+		if err := r.setPeerCommit("NSS", strings.TrimSpace(strings.TrimPrefix(line, "nss: "))); err != nil {
+			return fmt.Errorf("line %d: %w", lineNumber, err)
+		}
+	case strings.HasPrefix(line, "boringssl: "):
+		if err := r.setPeerCommit("BORINGSSL", strings.TrimSpace(strings.TrimPrefix(line, "boringssl: "))); err != nil {
+			return fmt.Errorf("line %d: %w", lineNumber, err)
+		}
+	case strings.HasPrefix(line, "openssl: "):
+		if err := r.setPeerCommit("OPENSSL", strings.TrimSpace(strings.TrimPrefix(line, "openssl: "))); err != nil {
+			return fmt.Errorf("line %d: %w", lineNumber, err)
+		}
+	}
+	return nil
 }
 
 func (r *report) setPeerCommit(peer, value string) error {
@@ -875,8 +885,11 @@ func (r *report) addGoTestOutput(lineNumber int, test, output string) error {
 		if r.goTestOutput != "" && test != "" {
 			r.goTestOutputTest = test
 		}
-		if isBenchmarkResultLine(line) && isRealUDPBenchmark(strings.Fields(line)[0]) {
-			r.realUDPJSON = true
+		if err := r.addMetadataLine(lineNumber, line); err != nil {
+			return err
+		}
+		if isBenchmarkResultLine(line) {
+			r.realUDPJSON = r.realUDPJSON || isRealUDPBenchmark(strings.Fields(line)[0])
 			if err := r.addBenchmarkLine(lineNumber, line); err != nil {
 				return err
 			}
@@ -1435,6 +1448,9 @@ func reportLanguageLinks(output string) string {
 }
 
 func writeReport(writer io.Writer, result *report, commit, wolfSSL, generated string, text reportLanguage, languageLinks string) error {
+	if commit == "" {
+		commit = result.commit
+	}
 	if wolfSSL == "" {
 		wolfSSL = result.wolfSSL
 	}

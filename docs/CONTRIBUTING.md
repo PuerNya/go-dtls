@@ -118,13 +118,13 @@ go test -run TestInteropWolfSSL -v -count=10
 
 wolfSSL 支持目标功能时，还必须增加并运行真实 UDP 专项 benchmark，覆盖 go-dtls -> go-dtls、go-dtls -> wolfSSL、wolfSSL -> go-dtls 和 wolfSSL -> wolfSSL。将对端 commit/构建配置、workload、计时边界、五轮中位数及能力限制作为 pull request 验证证据；跨实现 benchmark 数据不写入 README。
 
-四向 benchmark 使用 `go test -json`。报告只展示实际取得的样本及结构化 skip；缺失方向或样本不足不会使 benchmark workflow 失败。维护者验证互通能力时仍应检查四个方向、五轮样本和 skip 证据；允许的对端限制应记录最后实际验证该限制的完整 wolfSSL SHA。
+所有 benchmark 阶段均使用 `go test -json`；报告器也接受旧的纯文本结果。workflow 测量最新 wolfSSL commit，以及[互通指南](../testdata/interop/README.md)中固定版本的 NSS、BoringSSL 和 OpenSSL。报告只展示实际取得的样本及结构化 skip；缺失方向或样本不足不会使 benchmark workflow 失败。验证互通能力时应检查四个方向、五轮样本和 skip 证据；允许的限制应记录最后实际验证该限制的完整对端 SHA。
 
 验证 wolfSSL 互通限制时，先解析其 `master` 的最新完整 SHA，使用与 workflow 相同的构建选项，并设置 `GO_DTLS_PROBE_WOLFSSL_SKIPS=1` 逐一真实运行所有人工 skip 方向。能力恢复时删除对应 skip；限制仍存在时核对原因和证据，并把每个条目的 `verifiedCommit` 更新为本次 SHA。benchmark workflow 不以该 SHA 的新旧或 skip 原因作为验收条件。
 
-benchmark workflow 使用本次解析的精确 wolfSSL SHA 运行专项测量；完整功能互通测试仍按功能变更单独验证，不再作为 benchmark 的前置门禁。wolfSSL 获取、构建或测量失败时，已取得的 Go benchmark 数据仍可展示，报告会标明部分步骤未完成。
+完整功能互通测试按功能变更单独验证，不作为 benchmark 报告的前置条件。对端准备或测量失败时，已取得的 benchmark 数据仍可展示，报告会标明部分步骤未完成。
 
-`master` push 的 wolfSSL 准备、测量和报告步骤全部成功时，会更新独立的 `benchmark-results` 分支；否则已有原始输出保留在 artifact 和日志中，能生成的报告也会显示在 Actions 摘要。定时检查仅在 go-dtls 或 wolfSSL 的 `master` SHA 变化，且该 go-dtls SHA 没有 benchmark 正在排队或运行时触发并发布。pull request 只更新对应 PR 页面上的结果评论，不写入 `master` 或结果分支。不要手工维护 README 中的性能数字。
+`master` push 的 Go 测量、四个对端的准备及测量、矩阵校验和报告生成全部成功时，会更新独立的 `benchmark-results` 分支；否则已有原始输出保留在 artifact 和日志中，能生成的报告也会显示在 Actions 摘要。定时检查仅在 go-dtls 或 wolfSSL 的 `master` SHA 变化，且该 go-dtls SHA 没有 benchmark 正在排队或运行时触发并发布。pull request 只更新对应 PR 页面上的结果评论，不写入 `master` 或结果分支。不要手工维护 README 中的性能数字。
 
 所有执行 pull request 代码的 checkout 都必须设置 `persist-credentials: false`，并在运行仓库代码前确认本地 Git 配置和 origin URL 不含 workflow token。PR benchmark job 只读；只有可信的 `workflow_run` 评论 job 拥有 PR 写权限。不可信 benchmark artifact 必须唯一、受大小限制且只含预期的普通文件，并由默认分支上的报告器重新解析和转义；任何边界不匹配都必须失败。
 

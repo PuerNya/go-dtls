@@ -52,8 +52,8 @@ jobs:
           mkdir -p "$(dirname "$output")"
           printf 'commit: %s\n' "$(git rev-parse HEAD)" > "$output"
           go version >> "$output"
-          go test . -run '^$' -bench . -skip '^BenchmarkEarlyDataHandshakeLifecycle$' -benchmem -count=5 -cpu=1 -timeout=45m | tee -a "$output"
-          go test . -run '^$' -bench '^BenchmarkEarlyDataHandshakeLifecycle$' -benchtime=2000x -benchmem -count=5 -cpu=1 -timeout=45m | tee -a "$output"
+          go test . -run '^$' -bench . -skip '^(BenchmarkEarlyDataHandshakeLifecycle|BenchmarkWolfSSLFeatureRealUDP|BenchmarkHybridKeyExchangeRealUDP|BenchmarkDTLS13PeerRealUDP)$' -benchmem -count=5 -cpu=1 -timeout=45m -json | tee -a "$output"
+          go test . -run '^$' -bench '^BenchmarkEarlyDataHandshakeLifecycle$' -benchtime=2000x -benchmem -count=5 -cpu=1 -timeout=45m -json | tee -a "$output"
       - name: Resolve latest wolfSSL commit
         id: wolfssl
         continue-on-error: true

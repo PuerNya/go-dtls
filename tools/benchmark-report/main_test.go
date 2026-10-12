@@ -484,7 +484,7 @@ func TestRealUDPDirection(t *testing.T) {
 }
 
 func TestValidatePeerRealUDPMatrix(t *testing.T) {
-	report := completePeerRealUDPReport()
+	report := completePeerRealUDPReport(t)
 	if err := report.validatePeerRealUDPMatrix(); err != nil {
 		t.Fatal(err)
 	}
@@ -509,7 +509,7 @@ func TestValidatePeerRealUDPMatrix(t *testing.T) {
 		if err := writeReport(&output, report, "", "", "", reportLanguages[test.language], ""); err != nil {
 			t.Fatal(err)
 		}
-		for _, want := range []string{test.label, test.metadata, test.skip} {
+		for _, want := range []string{test.label, test.metadata, test.skip, "2 ms/conn", "2 ms/pair", "linux/amd64, Example CPU", "`abc123`"} {
 			if !strings.Contains(output.String(), want) {
 				t.Errorf("%s report missing %q", test.language, want)
 			}
@@ -534,7 +534,7 @@ func TestValidatePeerRealUDPMatrixRejectsIncompleteEvidence(t *testing.T) {
 		{"missing sample", func(r *report) { r.byName[name+"-2"].samples-- }},
 	} {
 		t.Run(test.name, func(t *testing.T) {
-			report := completePeerRealUDPReport()
+			report := completePeerRealUDPReport(t)
 			test.change(report)
 			if err := report.validatePeerRealUDPMatrix(); err == nil {
 				t.Fatal("accepted incomplete peer matrix")
@@ -543,20 +543,45 @@ func TestValidatePeerRealUDPMatrixRejectsIncompleteEvidence(t *testing.T) {
 	}
 }
 
-func completePeerRealUDPReport() *report {
-	r := &report{byName: make(map[string]*benchmark), realUDPJSON: true, peerCommits: make(map[string]string), realUDPSkips: make(map[string]string), realUDPSamples: make(map[string]int)}
+func completePeerRealUDPReport(t *testing.T) *report {
+	t.Helper()
+	var input bytes.Buffer
+	input.WriteString("commit: abc123\ngo version go1.27.0 linux/amd64\n")
+	encoder := json.NewEncoder(&input)
+	encode := func(event goTestEvent) {
+		t.Helper()
+		if err := encoder.Encode(event); err != nil {
+			t.Fatal(err)
+		}
+	}
+	encode(goTestEvent{Action: "output", Output: "goos: linux\ngoarch: amd64\ncpu: Example CPU\n"})
 	for _, peer := range []string{"NSS", "BORINGSSL", "OPENSSL"} {
-		r.peerCommits[peer] = peerRealUDPCommits[peer]
+		encode(goTestEvent{Action: "output", Output: strings.ToLower(peer) + ": " + peerRealUDPCommits[peer] + "\n"})
 		for _, feature := range peerRealUDPWorkloads[peer] {
 			for _, direction := range []string{"GoClient/GoServer", "GoClient/" + peer + "Server", peer + "Client/GoServer", peer + "Client/" + peer + "Server"} {
 				name := "BenchmarkDTLS13PeerRealUDP/" + peer + "/" + feature + "/" + direction
 				if allowance, ok := realUDPSkipAllowances[name]; ok {
-					r.realUDPSkips[name], r.realUDPSamples[name] = allowance.output, realUDPSkipSamples
+					encode(goTestEvent{Action: "output", Test: name, Output: "    peer_benchmark_test.go:1: " + allowance.output + "\n"})
+					encode(goTestEvent{Action: "skip", Test: name})
 				} else {
-					r.addBenchmarkForTest(name)
+					unit := "go_ms/conn"
+					if strings.HasPrefix(direction, peer+"Client") {
+						unit = "peer_process_ms/conn"
+					}
+					if strings.Contains(feature, "Resumption") || feature == "EarlyData" {
+						unit = strings.TrimSuffix(unit, "/conn") + "/pair"
+					}
+					for range realUDPMatrixSamples {
+						encode(goTestEvent{Action: "output", Test: name, Output: name + "-2\t"})
+						encode(goTestEvent{Action: "output", Output: "1 1000000 ns/op 2 " + unit + " 10 B/op 1 allocs/op\n"})
+					}
 				}
 			}
 		}
+	}
+	r, err := parseReport(&input)
+	if err != nil {
+		t.Fatal(err)
 	}
 	return r
 }
@@ -565,8 +590,11 @@ func TestParseRealUDPJSON(t *testing.T) {
 	const skipped = "BenchmarkHybridKeyExchangeRealUDP/SecP384r1MLKEM1024/GoClient/WolfSSLServer"
 	const result = "BenchmarkHybridKeyExchangeRealUDP/SecP384r1MLKEM1024/GoClient/GoServer-2"
 	var input bytes.Buffer
+	input.WriteString("BenchmarkBuildPlainFlight-2 1 1 ns/op 1 B/op 1 allocs/op\n")
 	encoder := json.NewEncoder(&input)
 	for _, event := range []goTestEvent{
+		{Action: "output", Output: "BenchmarkBuildPlainFlight-2\t"},
+		{Action: "output", Output: "1 3 ns/op 3 B/op 3 allocs/op\n"},
 		{Action: "output", Test: skipped, Output: "    interop_test.go:1079: wolfSSL server receive buffers cannot hold the P384 ClientHello at MTU 4096\n"},
 		{Action: "skip", Test: skipped},
 		{Action: "output", Test: result, Output: result + "\t"},
@@ -583,8 +611,27 @@ func TestParseRealUDPJSON(t *testing.T) {
 	if !report.realUDPJSON || report.realUDPSkips[skipped] != "wolfSSL server receive buffers cannot hold the P384 ClientHello at MTU 4096" || report.realUDPSamples[skipped] != 1 {
 		t.Fatalf("structured skip was not preserved: %#v", report)
 	}
-	if len(report.benchmarks) != 1 || report.benchmarks[0].name != result || report.benchmarks[0].samples != 1 {
+	if len(report.benchmarks) != 2 || report.byName[result] == nil || report.byName[result].samples != 1 {
 		t.Fatalf("structured benchmark result was not preserved: %#v", report.benchmarks)
+	}
+	if item := report.byName["BenchmarkBuildPlainFlight-2"]; item == nil || item.samples != 2 || item.timeMetric() != "2 ns/op" {
+		t.Fatalf("mixed plain and JSON samples were not preserved: %#v", item)
+	}
+}
+
+func TestParseReportRejectsConflictingPeerMetadata(t *testing.T) {
+	for _, peer := range []string{"nss", "boringssl", "openssl"} {
+		t.Run(peer, func(t *testing.T) {
+			var input bytes.Buffer
+			input.WriteString(peer + ": " + strings.Repeat("a", 40) + "\n")
+			encoder := json.NewEncoder(&input)
+			if err := encoder.Encode(goTestEvent{Action: "output", Output: peer + ": " + strings.Repeat("b", 40) + "\n"}); err != nil {
+				t.Fatal(err)
+			}
+			if _, err := parseReport(&input); err == nil || !strings.Contains(err.Error(), "conflicts with") {
+				t.Fatalf("conflicting peer metadata error = %v", err)
+			}
+		})
 	}
 }
 
