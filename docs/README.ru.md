@@ -58,7 +58,7 @@ DTLS — протокол ненадежных дейтаграмм, а не б�
 | Go | Go 1.27 или новее; точные версии Go, платформа и CPU автоматического запуска указаны в последнем отчете |
 | Транспорт | `udp`, `udp4` или `udp6`; TCP не поддерживается |
 | Race-тесты Windows | Скрипту репозитория нужны Zig 0.17 и рабочая цепочка CGO |
-| Тесты совместимости с wolfSSL | Необязательно; переменная `WOLFSSL_ROOT` должна указывать на совместимый каталог исходников/сборки wolfSSL |
+| Тесты совместимости с wolfSSL | Необязательно; `WOLFSSL_ROOT` должен указывать на совместимый каталог исходников/сборки wolfSSL. Для явных исполняемых файлов peer задайте вместе `WOLFSSL_SERVER` и `WOLFSSL_CLIENT` |
 
 Установка:
 
@@ -314,6 +314,7 @@ Nil-срез на клиенте отключает обмен; пустой н�
 | `IgnorePathMTU` | По умолчанию `false`; только Application Data пропускает внутреннюю проверку PMTU, рукопожатие не меняется |
 | `RecordSizeLimit` | `0` выбирает значение по умолчанию `2^14+1`; диапазон `64..2^14+1` задает максимальный полный `DTLSInnerPlaintext`, принимаемый узлом, и объявляется по RFC 8449 независимо от PMTU |
 | `EnableCertificateCompression` | По умолчанию `false`; включает стандартный zlib по RFC 8879 и отправляет `CompressedCertificate`, только если узел предложил zlib и полное сжатое сообщение меньше; выход ограничен `MaxHandshakeMessage` |
+| `EnableOCSPStapling` | По умолчанию `false`; клиент отправляет `status_request` RFC 6066, а сервер запрашивает staple клиента в `CertificateRequest`; `tls.Certificate.OCSPStaple` отправляется только по запросу, а полученный ответ доступен в `ConnectionState.OCSPResponse` |
 | `CachedInformationCache`, `EnableCachedInformation` | По умолчанию nil/false; ограниченный кэш клиента и явное включение RFC 7924 на сервере, независимо от session tickets |
 | `EnableDelegatedCredentials`, `DelegatedCredentials` | По умолчанию false/nil; явное включение приёма и неизменяемые заранее выпущенные DC; обратные вызовы имеют приоритет |
 | `FlightInterval` | Начальный интервал повторной передачи рукопожатия — одна секунда |
@@ -519,7 +520,7 @@ serverConfig.MaxSessionTickets = 4
 | [RFC 9849](https://www.rfc-editor.org/rfc/rfc9849) | Реализовано | Реализованы HPKE, Inner/Outer ClientHello, padding, HRR, подтверждение принятия, retry-конфигурации, аутентифицированное отклонение, GREASE, возобновление и 0-RTT |
 | [RFC 9954](https://www.rfc-editor.org/rfc/rfc9954) | Реализовано | Три стандартные группы ECDHE-MLKEM, fallback на традиционный share, HRR, фрагментация, возобновление mTLS, 0-RTT, ECH и строгая семантика ошибок; по умолчанию отключено |
 | [RFC 9846](https://www.rfc-editor.org/rfc/rfc9846) | Реализовано для включенных возможностей | Реализованы подсказки УЦ/OID и выбор из нескольких сертификатов на обеих сторонах; `user_canceled(90)` игнорируется с продолжением ожидания `close_notify` во время рукопожатия, ожидания финального ACK и post-handshake; локальная криптографическая ошибка без более точного предупреждения отправляет `general_error(117)`, а конкретное предупреждение протокола всегда имеет приоритет |
-| [RFC 9325](https://www.rfc-editor.org/rfc/rfc9325) | Частично | Покрыты PFS, AEAD, SNI/ALPN, tickets, 0-RTT, KeyUpdate и ограничения сертификатов; OCSP stapling отсутствует, а модуль намеренно не реализует поддержку DTLS 1.2, требуемую этим BCP |
+| [RFC 9325](https://www.rfc-editor.org/rfc/rfc9325) | Частично | Покрыты PFS, AEAD, SNI/ALPN, tickets, 0-RTT, KeyUpdate, ограничения сертификатов и явно включаемый OCSP stapling; модуль намеренно не реализует поддержку DTLS 1.2, требуемую этим BCP |
 | [RFC 9525](https://www.rfc-editor.org/rfc/rfc9525) | Частично | Go X.509 и `ServerName` покрывают DNS-ID/IP-ID; URI-ID, SRV-ID и прикладные service identity делегированы callback-функциям проверки вызывающего кода |
 | [RFC 9853](https://www.rfc-editor.org/rfc/rfc9853) | Реализовано | Расширение 61, защищенный content type 27, все три сообщения, неизвестные типы, enhanced/basic state machine, трехкратное ограничение усиления, таймер одна секунда/3xRTT, NAT rebinding, защита от off-path атак и межпутевая приватность с резервным CID |
 

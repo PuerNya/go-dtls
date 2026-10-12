@@ -43,7 +43,7 @@ GitHub Actions 会在每次 push 和 pull request 上分别执行八个必需 jo
 
 ## Fuzz 门禁
 
-普通 `go test ./...` 会回放 `testing.F.Add` 和 `testdata/fuzz` 中的全部 seed corpus。独立的 fuzz workflow 对当前五个 fuzz target 分层运行：pull request 和手动运行对每个 target 执行 20 秒 smoke fuzz；每天 `18:00 UTC` 的定时任务在独立 runner 上分别执行 10 分钟，不与 benchmark 共享 CPU。新增或重命名 fuzz target 时必须同步更新 workflow matrix。
+普通 `go test ./...` 会回放 `testing.F.Add` 和 `testdata/fuzz` 中的全部 seed corpus。独立的 fuzz workflow 对当前六个 fuzz target 分层运行：pull request 和手动运行对每个 target 执行 20 秒 smoke fuzz；每天 `18:00 UTC` 的定时任务在独立 runner 上分别执行 10 分钟，不与 benchmark 共享 CPU。新增或重命名 fuzz target 时必须同步更新 workflow matrix。
 
 本地复现单个 target：
 
@@ -113,6 +113,8 @@ README 只记录当前环境下的代表性能，不记录 A/B、冻结基线或
 $env:WOLFSSL_ROOT = 'C:\path\to\wolfssl'
 go test -run TestInteropWolfSSL -v -count=10
 ```
+
+如果使用其他位置的对端可执行文件，必须同时设置 `WOLFSSL_SERVER` 和 `WOLFSSL_CLIENT`；只设置其中一个会报错。
 
 wolfSSL 支持目标功能时，还必须增加并运行真实 UDP 专项 benchmark，覆盖 go-dtls -> go-dtls、go-dtls -> wolfSSL、wolfSSL -> go-dtls 和 wolfSSL -> wolfSSL。将对端 commit/构建配置、workload、计时边界、五轮中位数及能力限制作为 pull request 验证证据；跨实现 benchmark 数据不写入 README。
 

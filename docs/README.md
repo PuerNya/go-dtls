@@ -58,7 +58,7 @@ DTLS 是不可靠报文协议，不是 TLS 字节流：
 | Go | 最低 Go 1.27；自动 benchmark 使用的具体 Go、平台和 CPU 记录在最新报告中 |
 | Transport | `udp`、`udp4` 或 `udp6`；不接受 TCP |
 | Windows race | 仓库脚本需要 Zig 0.17 和可用的 CGO 工具链 |
-| wolfSSL 互通测试 | 可选；需要设置 `WOLFSSL_ROOT` 指向兼容的 wolfSSL 源码/构建目录 |
+| wolfSSL 互通测试 | 可选；设置 `WOLFSSL_ROOT` 指向兼容的 wolfSSL 源码/构建目录；使用指定的对端可执行文件时，同时设置 `WOLFSSL_SERVER` 和 `WOLFSSL_CLIENT` |
 
 安装：
 
@@ -319,6 +319,7 @@ deadline、socket 关闭和底层 UDP 错误沿 Go `net` 错误模型返回；�
 | `IgnorePathMTU` | 默认 `false`；仅让 Application Data 跳过库内 PMTU 检查，握手不受影响 |
 | `RecordSizeLimit` | `0` 表示默认 `2^14+1`；可配置 `64..2^14+1`，作为本端接收的完整 `DTLSInnerPlaintext` 上限并通过 RFC 8449 主动协商；与 PMTU 独立 |
 | `EnableCertificateCompression` | 默认 `false`；启用 RFC 8879 标准 zlib，只有对端提供该算法且完整压缩消息更小时才发送 `CompressedCertificate`；解压输出受 `MaxHandshakeMessage` 限制 |
+| `EnableOCSPStapling` | 默认 `false`；客户端发送 RFC 6066 `status_request`，服务端在 `CertificateRequest` 中请求客户端 staple；仅在对端请求时发送 `tls.Certificate.OCSPStaple`，收到的响应从 `ConnectionState.OCSPResponse` 读取 |
 | `CachedInformationCache`、`EnableCachedInformation` | 默认 nil/false；客户端有界缓存与服务端显式启用 RFC 7924，独立于 session ticket |
 | `EnableDelegatedCredentials`、`DelegatedCredentials` | 默认 false/nil；接收端显式启用，发送端配置离线签发的不可变凭据，证书回调保留优先级 |
 | `FlightInterval` | 1 秒初始握手重传间隔 |
@@ -524,7 +525,7 @@ serverConfig.MaxSessionTickets = 4
 | [RFC 9849](https://www.rfc-editor.org/rfc/rfc9849) | 完成 | HPKE、Inner/Outer ClientHello、padding、HRR、accept confirmation、retry configs、认证拒绝、GREASE、恢复和 0-RTT 完成 |
 | [RFC 9954](https://www.rfc-editor.org/rfc/rfc9954) | 完成 | 三个标准 ECDHE-MLKEM 组、传统 share fallback、HRR、分片、mTLS 恢复、0-RTT、ECH 和严格错误语义完成；默认不启用 |
 | [RFC 9846](https://www.rfc-editor.org/rfc/rfc9846) | 完成（已启用范围） | 完成 CA/OID 证书选择提示和双端多证书选择；握手内、final ACK 等待和握手后均忽略 `user_canceled(90)` 并继续等 `close_notify`；没有更具体 alert 的本地加密失败发送 `general_error(117)`，具体协议 alert 始终优先 |
-| [RFC 9325](https://www.rfc-editor.org/rfc/rfc9325) | 部分实现 | PFS、AEAD、SNI/ALPN、ticket、0-RTT、KeyUpdate 和证书安全下限已覆盖；缺少 OCSP stapling，且本模块有意不实现该 BCP 要求的 DTLS 1.2 |
+| [RFC 9325](https://www.rfc-editor.org/rfc/rfc9325) | 部分实现 | PFS、AEAD、SNI/ALPN、ticket、0-RTT、KeyUpdate、证书安全下限和显式 opt-in 的 OCSP stapling 已覆盖；本模块有意不实现该 BCP 要求的 DTLS 1.2 |
 | [RFC 9525](https://www.rfc-editor.org/rfc/rfc9525) | 部分实现 | Go X.509 与 `ServerName` 覆盖 DNS-ID/IP-ID；URI-ID、SRV-ID 和应用 service identity 由调用方验证回调承担 |
 | [RFC 9853](https://www.rfc-editor.org/rfc/rfc9853) | 完成 | 扩展 61、受保护 content type 27、三类消息、unknown type、enhanced/basic 状态机、3 倍放大限制、1 秒/3xRTT timer、NAT rebind、off-path 防护和 spare-CID 跨路径隐私完成 |
 

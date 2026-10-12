@@ -43,7 +43,7 @@ GitHub Actions runs eight required jobs independently on every push and pull req
 
 ## Fuzz Gates
 
-Regular `go test ./...` replays every seed corpus registered with `testing.F.Add` or stored under `testdata/fuzz`. The separate fuzz workflow runs the current five targets in layers: pull requests and manual runs smoke-test each target for 20 seconds, while the daily `18:00 UTC` schedule runs each target for 10 minutes on separate runners without sharing CPU with benchmarks. Adding or renaming a fuzz target requires updating the workflow matrix.
+Regular `go test ./...` replays every seed corpus registered with `testing.F.Add` or stored under `testdata/fuzz`. The separate fuzz workflow runs the current six targets in layers: pull requests and manual runs smoke-test each target for 20 seconds, while the daily `18:00 UTC` schedule runs each target for 10 minutes on separate runners without sharing CPU with benchmarks. Adding or renaming a fuzz target requires updating the workflow matrix.
 
 To reproduce one target locally:
 
@@ -113,6 +113,8 @@ When the peer supports a feature, add bidirectional third-party end-to-end tests
 $env:WOLFSSL_ROOT = 'C:\path\to\wolfssl'
 go test -run TestInteropWolfSSL -v -count=10
 ```
+
+Set `WOLFSSL_SERVER` and `WOLFSSL_CLIENT` together to use explicit peer binaries; setting only one is invalid.
 
 When wolfSSL supports the target feature, also add and run a focused real-UDP benchmark covering go-dtls -> go-dtls, go-dtls -> wolfSSL, wolfSSL -> go-dtls, and wolfSSL -> wolfSSL. Include the peer commit/build configuration, workload, timing boundaries, five-run median, and capability limits in the pull request validation evidence; do not put cross-implementation benchmark data in README files.
 

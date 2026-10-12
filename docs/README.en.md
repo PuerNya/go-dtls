@@ -58,7 +58,7 @@ Note: Positive OpenSSL-server cases have the fixture drop a valid initial epoch-
 | Go | Go 1.27 or later; the exact Go version, platform, and CPU used by automation are recorded in the latest report |
 | Transport | `udp`, `udp4`, or `udp6`; TCP is not accepted |
 | Windows race | The repository script requires Zig 0.17 and a working CGO toolchain |
-| wolfSSL interoperability tests | Optional; set `WOLFSSL_ROOT` to a compatible wolfSSL source/build directory |
+| wolfSSL interoperability tests | Optional; set `WOLFSSL_ROOT` to a compatible wolfSSL source/build directory. Set `WOLFSSL_SERVER` and `WOLFSSL_CLIENT` together to use explicit peer binaries |
 
 Install:
 
@@ -314,6 +314,7 @@ Where TLS 1.3 semantics match, `Config` follows `crypto/tls.Config`. A configura
 | `IgnorePathMTU` | `false` by default; only Application Data skips the library PMTU check, while handshake behavior is unchanged |
 | `RecordSizeLimit` | `0` selects the `2^14+1` default; values from `64..2^14+1` set the complete `DTLSInnerPlaintext` this endpoint accepts and are advertised with RFC 8449 independently of PMTU |
 | `EnableCertificateCompression` | `false` by default; enables standard RFC 8879 zlib and sends `CompressedCertificate` only when the peer offered zlib and the complete compressed message is smaller; output is bounded by `MaxHandshakeMessage` |
+| `EnableOCSPStapling` | `false` by default; clients send RFC 6066 `status_request`, and servers request a client staple in `CertificateRequest`; `tls.Certificate.OCSPStaple` is sent only when requested, and the received response is available as `ConnectionState.OCSPResponse` |
 | `CachedInformationCache`, `EnableCachedInformation` | Nil/false by default; client bounded cache and server opt-in for RFC 7924, independent of session tickets |
 | `EnableDelegatedCredentials`, `DelegatedCredentials` | Default false/nil; receiving opt-in and immutable offline-issued credentials; callbacks retain precedence |
 | `FlightInterval` | One-second initial handshake retransmission interval |
@@ -519,7 +520,7 @@ Normative keywords are interpreted according to BCP 14. `MUST`, `MUST NOT`, `REQ
 | [RFC 9849](https://www.rfc-editor.org/rfc/rfc9849) | Complete | HPKE, Inner/Outer ClientHello, padding, HRR, acceptance confirmation, retry configurations, authenticated rejection, GREASE, resumption, and 0-RTT |
 | [RFC 9954](https://www.rfc-editor.org/rfc/rfc9954) | Complete | Three standard ECDHE-MLKEM groups, traditional-share fallback, HRR, fragmentation, mTLS resumption, 0-RTT, ECH, and strict error semantics; disabled by default |
 | [RFC 9846](https://www.rfc-editor.org/rfc/rfc9846) | Complete for enabled features | Implements CA/OID certificate-selection hints and multi-certificate selection on both endpoints; ignores `user_canceled(90)` and continues waiting for `close_notify` during the handshake, final-ACK wait, and post-handshake processing; local cryptographic failure without a more specific alert sends `general_error(117)`, while a specific protocol alert always takes precedence |
-| [RFC 9325](https://www.rfc-editor.org/rfc/rfc9325) | Partial | PFS, AEAD, SNI/ALPN, tickets, 0-RTT, KeyUpdate, and certificate security limits are covered; OCSP stapling is absent, and this module intentionally does not implement the DTLS 1.2 support required by the BCP |
+| [RFC 9325](https://www.rfc-editor.org/rfc/rfc9325) | Partial | PFS, AEAD, SNI/ALPN, tickets, 0-RTT, KeyUpdate, certificate security limits, and opt-in OCSP stapling are covered; this module intentionally does not implement the DTLS 1.2 support required by the BCP |
 | [RFC 9525](https://www.rfc-editor.org/rfc/rfc9525) | Partial | Go X.509 and `ServerName` cover DNS-ID/IP-ID; URI-ID, SRV-ID, and application service identities are delegated to caller verification callbacks |
 | [RFC 9853](https://www.rfc-editor.org/rfc/rfc9853) | Complete | Extension 61, protected content type 27, all three messages, unknown types, enhanced/basic state machines, the three-times amplification limit, one-second/3xRTT timer, NAT rebinding, off-path protection, and spare-CID cross-path privacy |
 
