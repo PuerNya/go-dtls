@@ -2,7 +2,7 @@ name: Stability
 
 on:
   push:
-    branches: [master]
+    branches: [main]
   schedule:
     # Run after the benchmark and fuzz schedules, on separate hosted runners.
     - cron: '0 19 * * *'

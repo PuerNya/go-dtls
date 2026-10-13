@@ -55,7 +55,7 @@ GODEBUG=fuzzseed=123 go test . -run '^$' -fuzz '^FuzzPlainRecordParsers$' -fuzzt
 
 ## Race 与资源稳定性门禁
 
-pull request 继续由 CI 执行一次全模块 `go test -race ./... -count=1`。独立 Stability workflow 在 `master` push、每天 `19:00 UTC` 和手动触发时执行全模块 `-race -shuffle=on -count=3`，并把连接生命周期、证书压缩和 Listener 回收测试拆成三个独立 job，各运行八轮。
+pull request 继续由 CI 执行一次全模块 `go test -race ./... -count=1`。独立 Stability workflow 在 `main` push、每天 `19:00 UTC` 和手动触发时执行全模块 `-race -shuffle=on -count=3`，并把连接生命周期、证书压缩和 Listener 回收测试拆成三个独立 job，各运行八轮。
 
 资源测试记录连接/session 数、平均分配、保留堆、goroutine 前后值、清理超时和耗时；判定使用测试内固定上限，不比较 Windows、WSL 或不同 hosted runner 的绝对值。Windows `tools/test-race.ps1` 只构建并运行根包；工具子包由普通 Windows test 与 Linux/WSL 全模块 race 覆盖。
 
@@ -101,7 +101,7 @@ go test -run '^$' -bench '^BenchmarkProtectedRecord(Seal|RoundTripInPlace)$' -be
 - 分配或内存出现差异时使用 profile 定位到具体对象和调用路径。
 - benchmark、profile 和临时二进制保存在仓库外，不得提交生成物。
 
-pull request benchmark workflow 只运行当前 commit 的 benchmark，并在 PR 评论展示实际取得的样本、中位数和缺失情况；原始输出保存在 artifact 中。它不执行 base/head 自动比较，不按耗时、内存、分配或样本完整性拒绝 PR。`master` push 也只展示测量结果，不以 benchmark 作为 CI 验收门禁；性能变化由维护者结合相同环境的本地配对测量判断。
+pull request benchmark workflow 只运行当前 commit 的 benchmark，并在 PR 评论展示实际取得的样本、中位数和缺失情况；原始输出保存在 artifact 中。它不执行 base/head 自动比较，不按耗时、内存、分配或样本完整性拒绝 PR。`main` push 也只展示测量结果，不以 benchmark 作为 CI 验收门禁；性能变化由维护者结合相同环境的本地配对测量判断。
 
 README 只记录当前环境下的代表性能，不记录 A/B、冻结基线或修改前后叙事；这些内容应作为 pull request 的验证证据。
 
@@ -124,7 +124,7 @@ wolfSSL 支持目标功能时，还必须增加并运行真实 UDP 专项 benchm
 
 完整功能互通测试按功能变更单独验证，不作为 benchmark 报告的前置条件。对端准备或测量失败时，已取得的 benchmark 数据仍可展示，报告会标明部分步骤未完成。
 
-`master` push 的 Go 测量、四个对端的准备及测量、矩阵校验和报告生成全部成功时，会更新独立的 `benchmark-results` 分支；否则已有原始输出保留在 artifact 和日志中，能生成的报告也会显示在 Actions 摘要。定时检查仅在 go-dtls 或 wolfSSL 的 `master` SHA 变化，且该 go-dtls SHA 没有 benchmark 正在排队或运行时触发并发布。pull request 只更新对应 PR 页面上的结果评论，不写入 `master` 或结果分支。不要手工维护 README 中的性能数字。
+`main` push 的 Go 测量、四个对端的准备及测量、矩阵校验和报告生成全部成功时，会更新独立的 `benchmark-results` 分支；否则已有原始输出保留在 artifact 和日志中，能生成的报告也会显示在 Actions 摘要。定时检查仅在 go-dtls `main` 或 wolfSSL `master` 的 SHA 变化，且该 go-dtls SHA 没有 benchmark 正在排队或运行时触发并发布。pull request 只更新对应 PR 页面上的结果评论，不写入 `main` 或结果分支。不要手工维护 README 中的性能数字。
 
 所有执行 pull request 代码的 checkout 都必须设置 `persist-credentials: false`，并在运行仓库代码前确认本地 Git 配置和 origin URL 不含 workflow token。PR benchmark job 只读；只有可信的 `workflow_run` 评论 job 拥有 PR 写权限。不可信 benchmark artifact 必须唯一、受大小限制且只含预期的普通文件，并由默认分支上的报告器重新解析和转义；任何边界不匹配都必须失败。
 

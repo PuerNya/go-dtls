@@ -4,7 +4,7 @@
 
 [![Go Reference](https://pkg.go.dev/badge/github.com/puernya/go-dtls.svg)](https://pkg.go.dev/github.com/puernya/go-dtls)
 [![CI](https://github.com/puernya/go-dtls/actions/workflows/ci.yml/badge.svg)](https://github.com/puernya/go-dtls/actions/workflows/ci.yml)
-[![Benchmarks](https://github.com/puernya/go-dtls/actions/workflows/benchmarks.yml/badge.svg?branch=master)](https://github.com/puernya/go-dtls/blob/benchmark-results/README.md)
+[![Benchmarks](https://github.com/puernya/go-dtls/actions/workflows/benchmarks.yml/badge.svg?branch=main)](https://github.com/puernya/go-dtls/blob/benchmark-results/README.md)
 [![License: GPL v3](https://img.shields.io/badge/license-GPLv3-blue.svg)](../LICENSE)
 
 `go-dtls` 是一个使用 Go 实现的 DTLS 1.3 库，协议行为以 [RFC 9147](https://www.rfc-editor.org/rfc/rfc9147) 为准。模块导入路径为 `github.com/puernya/go-dtls`，包名为 `dtls13`。
@@ -600,7 +600,7 @@ serverConfig.MaxSessionTickets = 4
 
 ## Benchmark
 
-`master` 每次 push 后都会解析并固定本次运行所用的最新 wolfSSL `master` commit，运行 Go benchmark 和真实 UDP 四向 benchmark。各测量及报告步骤成功时，实测样本的中位数与精确 SHA 会发布到独立结果分支：[查看最新自动 benchmark 报告](https://github.com/puernya/go-dtls/blob/benchmark-results/README.md)；部分测量的原始输出保留在 artifact 和日志中，能生成的报告也会显示在 Actions 摘要。每天北京时间 08:00、16:00 和 00:00 还会检查 go-dtls 与 wolfSSL 的 `master` SHA，仅在任一方变化且该 go-dtls SHA 没有 benchmark 正在排队或运行时重新执行。wolfSSL 源码和构建产物按 SHA 缓存。Pull request 使用相同流程，结果直接显示在对应 PR 页面，不会更新 master 的报告。
+`main` 每次 push 后都会解析并固定本次运行所用的最新 wolfSSL `master` commit，运行 Go benchmark 和真实 UDP 四向 benchmark。各测量及报告步骤成功时，实测样本的中位数与精确 SHA 会发布到独立结果分支：[查看最新自动 benchmark 报告](https://github.com/puernya/go-dtls/blob/benchmark-results/README.md)；部分测量的原始输出保留在 artifact 和日志中，能生成的报告也会显示在 Actions 摘要。每天北京时间 08:00、16:00 和 00:00 还会检查 go-dtls `main` 与 wolfSSL `master` 的 SHA，仅在任一方变化且该 go-dtls SHA 没有 benchmark 正在排队或运行时重新执行。wolfSSL 源码和构建产物按 SHA 缓存。Pull request 使用相同流程，结果直接显示在对应 PR 页面，不会更新已发布的报告。
 
 运行全部 benchmark：
 

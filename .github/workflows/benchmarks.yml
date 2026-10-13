@@ -2,7 +2,7 @@ name: Benchmarks
 
 on:
   push:
-    branches: [master]
+    branches: [main]
   pull_request:
     types: [opened, reopened, synchronize]
   workflow_dispatch:
@@ -329,10 +329,10 @@ jobs:
           if-no-files-found: warn
 
   publish:
-    name: publish master results
+    name: publish main results
     if: >-
       (github.event_name == 'push' ||
-      (github.event_name == 'workflow_dispatch' && inputs.publish && github.ref == 'refs/heads/master')) &&
+      (github.event_name == 'workflow_dispatch' && inputs.publish && github.ref == 'refs/heads/main')) &&
       needs.benchmark.outputs.complete == 'true'
     needs: benchmark
     runs-on: ubuntu-latest

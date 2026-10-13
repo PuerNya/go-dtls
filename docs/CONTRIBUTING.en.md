@@ -55,7 +55,7 @@ A failed job uploads the target, Go version, random seed, complete output, and t
 
 ## Race and Resource Stability Gates
 
-Pull requests continue to run one full-module `go test -race ./... -count=1` in CI. The separate Stability workflow runs on `master` pushes, daily at `19:00 UTC`, and on manual dispatch. It runs the full module with `-race -shuffle=on -count=3` and splits connection lifecycle, certificate compression, and Listener reclamation into three independent jobs with eight iterations each.
+Pull requests continue to run one full-module `go test -race ./... -count=1` in CI. The separate Stability workflow runs on `main` pushes, daily at `19:00 UTC`, and on manual dispatch. It runs the full module with `-race -shuffle=on -count=3` and splits connection lifecycle, certificate compression, and Listener reclamation into three independent jobs with eight iterations each.
 
 Resource tests record connection/session counts, average allocation, retained heap, goroutine counts before and after cleanup, cleanup timeout, and elapsed time. Decisions use fixed in-test bounds rather than comparing absolute values across Windows, WSL, or different hosted runners. Windows `tools/test-race.ps1` builds and runs only the root package; ordinary Windows tests and the full-module Linux/WSL race run cover tool subpackages.
 
@@ -101,7 +101,7 @@ When comparing performance before and after a change:
 - When allocations or memory differ, use profiles to identify the exact object and call path.
 - Store benchmark output, profiles, and temporary binaries outside the repository. Do not commit generated artifacts.
 
-The pull request benchmark workflow runs benchmarks only for the current commit and comments with the observed samples, medians, and missing-data notice; the artifact retains the raw output. It does not compare base and head automatically or reject a PR for timing, memory, allocations, or sample completeness. A `master` push also displays measurements without using benchmarks as a CI acceptance gate. Maintainers assess performance changes using local paired measurements under the same environment.
+The pull request benchmark workflow runs benchmarks only for the current commit and comments with the observed samples, medians, and missing-data notice; the artifact retains the raw output. It does not compare base and head automatically or reject a PR for timing, memory, allocations, or sample completeness. A `main` push also displays measurements without using benchmarks as a CI acceptance gate. Maintainers assess performance changes using local paired measurements under the same environment.
 
 README files record only representative performance for the current environment. A/B data, frozen baselines, and before/after narratives belong in pull request validation evidence.
 
@@ -124,7 +124,7 @@ When validating wolfSSL limitations, resolve the latest full SHA of wolfSSL `mas
 
 Validate the complete functional interoperability matrix separately when a feature changes; it is not a prerequisite for benchmark reporting. If peer preparation or measurement fails, available benchmark data can still be shown with a partial-results notice.
 
-When Go measurements, preparation and measurement of all four peers, matrix validation, and report generation all succeed on a `master` push, the workflow updates the separate `benchmark-results` branch; otherwise, available raw output remains in the artifact and logs, and any generated report also appears in the Actions summary. The scheduled check triggers and publishes only when the go-dtls or wolfSSL `master` SHA changed and no benchmark for that go-dtls SHA is queued or running. A pull request only updates its benchmark comment and never writes to `master` or the results branch. Do not maintain performance numbers manually in README files.
+When Go measurements, preparation and measurement of all four peers, matrix validation, and report generation all succeed on a `main` push, the workflow updates the separate `benchmark-results` branch; otherwise, available raw output remains in the artifact and logs, and any generated report also appears in the Actions summary. The scheduled check triggers and publishes only when the go-dtls `main` or wolfSSL `master` SHA changed and no benchmark for that go-dtls SHA is queued or running. A pull request only updates its benchmark comment and never writes to `main` or the results branch. Do not maintain performance numbers manually in README files.
 
 Every checkout that executes pull request code must set `persist-credentials: false` and verify that neither the local Git configuration nor the origin URL contains the workflow token before repository code runs. The PR benchmark job is read-only; PR write permission exists only in the trusted `workflow_run` comment job. An untrusted benchmark artifact must be unique, size-bounded, contain only the expected regular files, and be reparsed and escaped by the report generator from the default branch; any boundary mismatch must fail.
 

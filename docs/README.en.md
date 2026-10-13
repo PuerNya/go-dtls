@@ -4,7 +4,7 @@
 
 [![Go Reference](https://pkg.go.dev/badge/github.com/puernya/go-dtls.svg)](https://pkg.go.dev/github.com/puernya/go-dtls)
 [![CI](https://github.com/puernya/go-dtls/actions/workflows/ci.yml/badge.svg)](https://github.com/puernya/go-dtls/actions/workflows/ci.yml)
-[![Benchmarks](https://github.com/puernya/go-dtls/actions/workflows/benchmarks.yml/badge.svg?branch=master)](https://github.com/puernya/go-dtls/blob/benchmark-results/benchmark.en.md)
+[![Benchmarks](https://github.com/puernya/go-dtls/actions/workflows/benchmarks.yml/badge.svg?branch=main)](https://github.com/puernya/go-dtls/blob/benchmark-results/benchmark.en.md)
 [![License: GPL v3](https://img.shields.io/badge/license-GPLv3-blue.svg)](../LICENSE)
 
 `go-dtls` is a DTLS 1.3 library implemented in Go. Its protocol behavior follows [RFC 9147](https://www.rfc-editor.org/rfc/rfc9147). The module path is `github.com/puernya/go-dtls`, and the package name is `dtls13`.
@@ -595,7 +595,7 @@ The following items do not reduce completion of mandatory RFC 9147 semantics, bu
 
 ## Benchmark
 
-Every push to `master` resolves and locks the latest wolfSSL `master` commit for that run, then runs Go benchmarks and the real-UDP four-way benchmarks. When the measurement and report steps succeed, the medians of observed samples and exact SHA are published to a separate results branch: [view the latest automated benchmark report](https://github.com/puernya/go-dtls/blob/benchmark-results/benchmark.en.md); raw partial output remains in the artifact and logs, and any generated report also appears in the Actions summary. A scheduled check at 08:00, 16:00, and 00:00 Asia/Shanghai compares both go-dtls and wolfSSL `master` SHAs and reruns only when either changed and no benchmark for that go-dtls SHA is queued or running. wolfSSL sources and build outputs are cached by SHA. Pull requests use the same process and display their results directly on the PR without updating the master report.
+Every push to `main` resolves and locks the latest wolfSSL `master` commit for that run, then runs Go benchmarks and the real-UDP four-way benchmarks. When the measurement and report steps succeed, the medians of observed samples and exact SHA are published to a separate results branch: [view the latest automated benchmark report](https://github.com/puernya/go-dtls/blob/benchmark-results/benchmark.en.md); raw partial output remains in the artifact and logs, and any generated report also appears in the Actions summary. A scheduled check at 08:00, 16:00, and 00:00 Asia/Shanghai compares go-dtls `main` and wolfSSL `master` SHAs and reruns only when either changed and no benchmark for that go-dtls SHA is queued or running. wolfSSL sources and build outputs are cached by SHA. Pull requests use the same process and display their results directly on the PR without updating the published report.
 
 Run all benchmarks:
 

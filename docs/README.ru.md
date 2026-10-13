@@ -4,7 +4,7 @@
 
 [![Go Reference](https://pkg.go.dev/badge/github.com/puernya/go-dtls.svg)](https://pkg.go.dev/github.com/puernya/go-dtls)
 [![CI](https://github.com/puernya/go-dtls/actions/workflows/ci.yml/badge.svg)](https://github.com/puernya/go-dtls/actions/workflows/ci.yml)
-[![Benchmarks](https://github.com/puernya/go-dtls/actions/workflows/benchmarks.yml/badge.svg?branch=master)](https://github.com/puernya/go-dtls/blob/benchmark-results/benchmark.ru.md)
+[![Benchmarks](https://github.com/puernya/go-dtls/actions/workflows/benchmarks.yml/badge.svg?branch=main)](https://github.com/puernya/go-dtls/blob/benchmark-results/benchmark.ru.md)
 [![License: GPL v3](https://img.shields.io/badge/license-GPLv3-blue.svg)](../LICENSE)
 
 `go-dtls` — библиотека DTLS 1.3, реализованная на Go. Поведение протокола соответствует [RFC 9147](https://www.rfc-editor.org/rfc/rfc9147). Путь модуля — `github.com/puernya/go-dtls`, имя пакета — `dtls13`.
@@ -595,7 +595,7 @@ serverConfig.MaxSessionTickets = 4
 
 ## Тесты производительности
 
-После каждого push в `master` определяется и фиксируется последний commit ветки wolfSSL `master` для данного запуска, затем выполняются Go benchmark и четырехсторонние benchmark через настоящий UDP. Если шаги измерения и формирования отчета завершились успешно, медианы полученных замеров и точный SHA публикуются в отдельной ветке результатов: [посмотреть последний автоматический отчет](https://github.com/puernya/go-dtls/blob/benchmark-results/benchmark.ru.md); исходный вывод частичных измерений остается в artifact и журналах, а сформированный отчет также показывается в сводке Actions. Плановая проверка в 08:00, 16:00 и 00:00 по времени Asia/Shanghai сравнивает SHA веток `master` go-dtls и wolfSSL и запускает тесты повторно, только если один из них изменился и для этого SHA go-dtls нет benchmark в очереди или в процессе выполнения. Исходники и результаты сборки wolfSSL кешируются по SHA. Pull request использует тот же процесс и показывает результаты непосредственно на странице PR, не обновляя отчет master.
+После каждого push в `main` определяется и фиксируется последний commit ветки wolfSSL `master` для данного запуска, затем выполняются Go benchmark и четырехсторонние benchmark через настоящий UDP. Если шаги измерения и формирования отчета завершились успешно, медианы полученных замеров и точный SHA публикуются в отдельной ветке результатов: [посмотреть последний автоматический отчет](https://github.com/puernya/go-dtls/blob/benchmark-results/benchmark.ru.md); исходный вывод частичных измерений остается в artifact и журналах, а сформированный отчет также показывается в сводке Actions. Плановая проверка в 08:00, 16:00 и 00:00 по времени Asia/Shanghai сравнивает SHA веток go-dtls `main` и wolfSSL `master` и запускает тесты повторно, только если один из них изменился и для этого SHA go-dtls нет benchmark в очереди или в процессе выполнения. Исходники и результаты сборки wolfSSL кешируются по SHA. Pull request использует тот же процесс и показывает результаты непосредственно на странице PR, не обновляя опубликованный отчет.
 
 Запуск всех тестов производительности:
 
