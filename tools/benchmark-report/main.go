@@ -233,7 +233,7 @@ var reportLanguages = map[string]reportLanguage{
 		labelIndex:      0,
 		title:           "Automated benchmark results",
 		summary:         "%d results, grouped by workload and ordered by feature, then benchmark name. Values are medians of the samples emitted by the final benchmark run.\n",
-		details:         "Workload-specific connection metrics are preferred over the Go harness time. Memory and allocations remain per Go benchmark operation. Exact raw output remains in the workflow artifact.",
+		details:         "Workload-specific connection metrics are preferred over the Go harness time. Memory and allocations remain per operation; Listener UDP sums the separate client/server processes and excludes the relay. Exact raw output remains in the workflow artifact.",
 		quickNavigation: "Quick navigation",
 		metadata:        [5]string{"Commit", "Generated", "Go", "Platform", "wolfSSL"},
 		sections: [4]string{
@@ -263,7 +263,7 @@ var reportLanguages = map[string]reportLanguage{
 		labelIndex:      1,
 		title:           "自动化基准测试结果",
 		summary:         "共 %d 项结果，按工作负载分组，并按功能、基准测试名称排序。数值为最终测试运行所输出样本的中位数。\n",
-		details:         "工作负载专用的连接指标优先于 Go 基准测试框架耗时。内存和分配次数仍按每次 Go 基准测试操作统计。精确原始输出保留在 Workflow Artifact 中。",
+		details:         "工作负载专用的连接指标优先于 Go 基准测试框架耗时。内存和分配次数按每次操作统计；Listener UDP 汇总独立客户端和服务端进程，排除中转器。精确原始输出保留在 Workflow Artifact 中。",
 		quickNavigation: "快速跳转",
 		metadata:        [5]string{"提交", "生成时间", "Go", "平台", "wolfSSL"},
 		sections: [4]string{
@@ -293,7 +293,7 @@ var reportLanguages = map[string]reportLanguage{
 		labelIndex:      2,
 		title:           "Результаты автоматических бенчмарков",
 		summary:         "%d результатов сгруппированы по нагрузке и упорядочены по функции, затем по имени бенчмарка. Значения являются медианами выборок последнего запуска.\n",
-		details:         "Специализированные метрики соединения имеют приоритет над временем стенда Go. Память и число аллокаций указаны на одну операцию Go-бенчмарка. Точный исходный вывод сохранен в артефакте Workflow.",
+		details:         "Специализированные метрики соединения имеют приоритет над временем стенда Go. Память и аллокации указаны на операцию; Listener UDP суммирует отдельные процессы клиента и сервера без ретранслятора. Точный исходный вывод сохранен в артефакте Workflow.",
 		quickNavigation: "Быстрая навигация",
 		metadata:        [5]string{"Коммит", "Сформировано", "Go", "Платформа", "wolfSSL"},
 		sections: [4]string{

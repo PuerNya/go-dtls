@@ -5,7 +5,6 @@ import (
 	"crypto/tls"
 	"encoding/binary"
 	"fmt"
-	"net"
 	"os"
 	"runtime"
 	"slices"
@@ -50,86 +49,6 @@ func BenchmarkMemoryDatagramRoundTrip(b *testing.B) {
 	}
 }
 
-// Use real UDP and the public API so routing, record readers, queues and
-// transport costs are included alongside cryptography.
-func newLoadPairs(t testing.TB, count int, cid bool) []loadPair {
-	t.Helper()
-	certificate, roots := testServerCertificate(t)
-	config := &Config{
-		Certificates: []tls.Certificate{certificate}, SessionTicketsDisabled: true,
-		MaxPendingConnections: count, MTU: 1500, HandshakeTimeout: 10 * time.Second,
-	}
-	if cid {
-		var next uint64
-		config.GetConnectionID = func() ([]byte, error) {
-			next++
-			return binary.BigEndian.AppendUint64(nil, next), nil
-		}
-	}
-	listener, err := Listen("udp4", "127.0.0.1:0", config)
-	if err != nil {
-		t.Fatal(err)
-	}
-	if os.Getenv("GO_DTLS_STRESS") == "1" {
-		if err = listener.conn.(*net.UDPConn).SetReadBuffer(4 << 20); err != nil {
-			_ = listener.Close()
-			t.Fatal(err)
-		}
-	}
-	pairs := make([]loadPair, 0, count)
-	t.Cleanup(func() {
-		for _, pair := range pairs {
-			_ = pair.client.Close()
-			_ = pair.server.Close()
-		}
-		_ = listener.Close()
-	})
-	type accepted struct {
-		conn *Conn
-		err  error
-	}
-	serverReady := make(chan accepted, 1)
-	for i := range count {
-		go func() {
-			conn, acceptErr := listener.Accept()
-			if acceptErr == nil {
-				acceptErr = conn.Handshake()
-			}
-			serverReady <- accepted{conn, acceptErr}
-		}()
-		clientConfig := &Config{
-			RootCAs: roots, ServerName: "server.test", SessionTicketsDisabled: true,
-			MTU: 1500, HandshakeTimeout: 10 * time.Second,
-		}
-		if cid {
-			clientConfig.ConnectionID = binary.BigEndian.AppendUint64(nil, uint64(i+1))
-		}
-		client, dialErr := Dial("udp4", listener.Addr().String(), clientConfig)
-		if dialErr != nil {
-			_ = listener.Close()
-		}
-		server := <-serverReady
-		if dialErr != nil || server.err != nil {
-			if client != nil {
-				_ = client.Close()
-			}
-			if server.conn != nil {
-				_ = server.conn.Close()
-			}
-			t.Fatalf("pair %d: client=%v server=%v", i, dialErr, server.err)
-		}
-		pairs = append(pairs, loadPair{client, server.conn})
-		deadline := time.Now().Add(5 * time.Minute)
-		if err = client.SetDeadline(deadline); err != nil {
-			t.Fatal(err)
-		}
-		if err = server.conn.SetDeadline(deadline); err != nil {
-			t.Fatal(err)
-		}
-	}
-	return pairs
-}
-
 func (p loadPair) roundTrip(payload, buffer []byte) error {
 	if _, err := p.client.WriteDatagram(payload); err != nil {
 		return err
@@ -163,22 +82,24 @@ func BenchmarkListenerDatagramRoundTrip(b *testing.B) {
 			}
 			for _, size := range []int{64, 1200} {
 				b.Run(fmt.Sprintf("Connections%d/%s/Bytes%d", count, cidName, size), func(b *testing.B) {
-					pairs := newLoadPairs(b, count, cid)
-					payload, buffer := make([]byte, size), make([]byte, size)
-					for _, pair := range pairs {
-						if err := pair.roundTrip(payload, buffer); err != nil {
-							b.Fatal(err)
-						}
+					b.StopTimer()
+					run := newPacketProcessRun(b, packetProcessSpec{Connections: count, Operations: b.N, Payload: size, CID: cid})
+					b.StartTimer()
+					stats := run.stage(b, "traffic")
+					b.StopTimer()
+					run.close(b)
+					client, server, relay := stats["client"], stats["server"], stats["relay"]
+					if client.Received != uint64(b.N) || server.Received != uint64(b.N) {
+						b.Fatal("incomplete UDP round trips")
 					}
-					b.ReportAllocs()
-					b.SetBytes(int64(2 * size))
-					var sequence uint64
-					for b.Loop() {
-						binary.BigEndian.PutUint64(payload, sequence)
-						if err := pairs[sequence%uint64(count)].roundTrip(payload, buffer); err != nil {
-							b.Fatal(err)
-						}
-						sequence++
+					b.SetBytes(int64(2 * client.Payload))
+					b.ReportMetric(float64(2*client.Payload*b.N)/client.Elapsed.Seconds()/1e6, "MB/s")
+					b.ReportMetric(float64(client.Elapsed)/float64(b.N), "ns/op")
+					b.ReportMetric(float64(client.Allocated+server.Allocated)/float64(b.N), "B/op")
+					b.ReportMetric(float64(client.Allocs+server.Allocs)/float64(b.N), "allocs/op")
+					for role, resources := range map[string]packetProcessStats{"client": client, "server": server, "relay": relay} {
+						b.ReportMetric(float64(resources.Allocated)/float64(b.N), role+"_B/op")
+						b.ReportMetric(float64(resources.Resources.User+resources.Resources.System)/float64(b.N), role+"_cpu_ns/op")
 					}
 				})
 			}
@@ -187,15 +108,28 @@ func BenchmarkListenerDatagramRoundTrip(b *testing.B) {
 }
 
 func TestListenerDatagramLoad(t *testing.T) {
-	testDatagramLoad(t, newLoadPairs)
+	if os.Getenv("GO_DTLS_STRESS") != "1" {
+		t.Skip("set GO_DTLS_STRESS=1 for the large datagram workload")
+	}
+	connections, operations, workers := 1024, 1024*1024, 16
+	for name, target := range map[string]*int{"GO_DTLS_PROCESS_CONNECTIONS": &connections, "GO_DTLS_PROCESS_OPERATIONS": &operations, "GO_DTLS_STRESS_WORKERS": &workers} {
+		if value := os.Getenv(name); value != "" {
+			parsed, err := strconv.Atoi(value)
+			if err != nil || parsed < 1 {
+				t.Fatalf("invalid %s", name)
+			}
+			*target = parsed
+		}
+	}
+	run := newPacketProcessRun(t, packetProcessSpec{Connections: connections, Operations: operations, Workers: workers, Payload: 1200, CID: true})
+	stats := run.stage(t, "traffic")
+	if stats["client"].Received != uint64(operations) || stats["server"].Received != uint64(operations) {
+		t.Fatal("incomplete round trips")
+	}
+	run.close(t)
 }
 
 func TestMemoryDatagramLoad(t *testing.T) {
-	testDatagramLoad(t, newMemoryLoadPairs)
-}
-
-func testDatagramLoad(t *testing.T, makePairs func(testing.TB, int, bool) []loadPair) {
-	t.Helper()
 	if os.Getenv("GO_DTLS_STRESS") != "1" {
 		t.Skip("set GO_DTLS_STRESS=1 for the large datagram workload")
 	}
@@ -214,7 +148,7 @@ func testDatagramLoad(t *testing.T, makePairs func(testing.TB, int, bool) []load
 	beforeGoroutines := runtime.NumGoroutine()
 	started := time.Now()
 	t.Run("exchange", func(t *testing.T) {
-		pairs := makePairs(t, connections, true)
+		pairs := newMemoryLoadPairs(t, connections, true)
 		runtime.GC()
 		runtime.ReadMemStats(&live)
 		var workers sync.WaitGroup

@@ -26,9 +26,11 @@ type packetNetworkStats struct {
 }
 
 type scheduledPacket struct {
-	at   time.Time
-	data []byte
-	to   net.Addr
+	at    time.Time
+	data  []byte
+	to    net.Addr
+	write uint64
+	copy  int
 }
 
 type scheduledPackets []scheduledPacket
@@ -59,28 +61,37 @@ type impairedPacketConn struct {
 	writeErr                                            error
 	wake, stop, done                                    chan struct{}
 	closeOnce                                           sync.Once
+	trace                                               *packetNetworkTrace
 }
 
 func newImpairedPacketConn(t testing.TB, seed uint64, profile packetNetworkProfile) *impairedPacketConn {
 	t.Helper()
+	c, err := openImpairedPacketConn(seed, profile)
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { _ = c.Close() })
+	return c
+}
+
+func openImpairedPacketConn(seed uint64, profile packetNetworkProfile) (*impairedPacketConn, error) {
 	if profile.minRate <= 0 || profile.maxRate < profile.minRate || profile.queuePackets < 1 || profile.queueBytes < 1 || profile.delay < 0 || profile.jitter < 0 || profile.loss < 0 || profile.loss > 1000 || profile.maxLoss > 1000 || profile.maxLoss != 0 && profile.maxLoss < profile.loss || profile.duplicate < 0 || profile.duplicate > 1000 {
-		t.Fatal("invalid packet network profile")
+		return nil, errors.New("invalid packet network profile")
 	}
 	for _, rate := range profile.rateChoices {
 		if rate < profile.minRate || rate > profile.maxRate {
-			t.Fatal("invalid packet network rate")
+			return nil, errors.New("invalid packet network rate")
 		}
 	}
 	raw, err := net.ListenPacket("udp4", "127.0.0.1:0")
 	if err != nil {
-		t.Fatal(err)
+		return nil, err
 	}
 	//nolint:gosec // Reproducible test impairments, never cryptographic randomness.
 	c := &impairedPacketConn{PacketConn: raw, profile: profile, random: rand.New(rand.NewPCG(seed, seed^0x9e3779b97f4a7c15)),
 		wake: make(chan struct{}, 1), stop: make(chan struct{}), done: make(chan struct{})}
 	go c.run()
-	t.Cleanup(func() { _ = c.Close() })
-	return c
+	return c, nil
 }
 
 func (c *impairedPacketConn) WriteTo(p []byte, to net.Addr) (int, error) {
@@ -98,62 +109,65 @@ func (c *impairedPacketConn) WriteTo(p []byte, to net.Addr) (int, error) {
 	if !c.writeDeadline.IsZero() && !now.Before(c.writeDeadline) {
 		return 0, os.ErrDeadlineExceeded
 	}
-	if c.stats.writes%16 == 0 {
-		if len(c.profile.rateChoices) == 0 {
-			c.rate = c.profile.minRate + c.random.IntN(c.profile.maxRate-c.profile.minRate+1)
-		} else {
-			c.rate = c.profile.rateChoices[c.random.IntN(len(c.profile.rateChoices))]
-		}
-		if c.stats.minRate == 0 || c.rate < c.stats.minRate {
-			c.stats.minRate = c.rate
-		}
-		c.stats.maxRate = max(c.stats.maxRate, c.rate)
+	decision, err := c.nextDecision(len(p))
+	if err != nil {
+		c.writeErr = err
+		return 0, err
 	}
 	c.stats.writes++
-	loss := c.profile.loss
-	if c.profile.maxLoss > c.profile.loss {
-		if c.lossRemaining == 0 {
-			c.lossRate = loss + c.random.IntN(c.profile.maxLoss-loss+1)
-			c.lossRemaining = 1 + c.random.IntN(64)
-		}
-		loss = c.lossRate
-		c.lossRemaining--
+	if c.stats.minRate == 0 || decision.Rate < c.stats.minRate {
+		c.stats.minRate = decision.Rate
 	}
-	if c.stats.writes == 1 || loss < c.stats.minLoss {
-		c.stats.minLoss = loss
+	c.stats.maxRate = max(c.stats.maxRate, decision.Rate)
+	if c.stats.writes == 1 || decision.Loss < c.stats.minLoss {
+		c.stats.minLoss = decision.Loss
 	}
-	c.stats.maxLoss = max(c.stats.maxLoss, loss)
-	if c.random.IntN(1000) < loss {
+	c.stats.maxLoss = max(c.stats.maxLoss, decision.Loss)
+	if decision.Lost {
 		c.stats.lost++
+		if err := c.recordDecision(decision); err != nil {
+			c.writeErr = err
+			return 0, err
+		}
 		return len(p), nil
 	}
 	copies := 1
-	if c.random.IntN(1000) < c.profile.duplicate {
+	if decision.Duplicate {
 		copies++
 		c.stats.duplicated++
 	}
-	for range copies {
+	expected := decision.Queued
+	decision.Queued = [2]bool{}
+	for i := range copies {
 		if len(c.queue) >= c.profile.queuePackets || len(p) > c.profile.queueBytes-c.queuedBytes {
 			c.stats.overflow++
 			continue
 		}
 		data := bytes.Clone(p)
-		if len(data) != 0 && c.random.IntN(1000) < c.corrupt {
-			data[len(data)-1] ^= byte(1 << c.random.IntN(8))
+		if len(data) != 0 && decision.Corrupt[i] != 0 {
+			data[len(data)-1] ^= decision.Corrupt[i]
 			c.stats.corrupted++
 		}
 		if c.next.Before(now) {
 			c.next = now
 		}
-		c.next = c.next.Add(time.Duration(int64(len(data)) * int64(time.Second) / int64(c.rate)))
-		at := c.next.Add(c.profile.delay + time.Duration(c.random.Int64N(int64(c.profile.jitter)+1)))
-		// Retain the address by value, just as WriteTo retains the packet by value.
+		c.next = c.next.Add(time.Duration(int64(len(data)) * int64(time.Second) / int64(decision.Rate)))
+		at := c.next.Add(decision.Delay[i])
 		address := *to.(*net.UDPAddr)
 		address.IP = bytes.Clone(address.IP)
-		heap.Push(&c.queue, scheduledPacket{at, data, &address})
+		heap.Push(&c.queue, scheduledPacket{at: at, data: data, to: &address, write: decision.Write, copy: i})
+		decision.Queued[i] = true
 		c.queuedBytes += len(data)
 		c.stats.peakPackets = max(c.stats.peakPackets, len(c.queue))
 		c.stats.peakBytes = max(c.stats.peakBytes, c.queuedBytes)
+	}
+	if c.trace != nil && c.trace.decode != nil && decision.Queued != expected {
+		c.writeErr = errors.New("replay queue occupancy diverged")
+		return 0, c.writeErr
+	}
+	if err := c.recordDecision(decision); err != nil {
+		c.writeErr = err
+		return 0, err
 	}
 	select {
 	case c.wake <- struct{}{}:
@@ -170,6 +184,11 @@ func (c *impairedPacketConn) run() {
 		c.mu.Lock()
 		select {
 		case <-c.stop:
+			for _, p := range c.queue {
+				if err := c.recordDecision(packetNetworkDecision{Kind: "canceled", Write: p.write, Copy: p.copy, Size: len(p.data)}); err != nil && c.writeErr == nil {
+					c.writeErr = err
+				}
+			}
 			c.stats.canceled += uint64(len(c.queue))
 			c.queue = nil
 			c.queuedBytes = 0
@@ -196,6 +215,13 @@ func (c *impairedPacketConn) run() {
 		c.mu.Unlock()
 		n, err := c.PacketConn.WriteTo(p.data, p.to)
 		c.mu.Lock()
+		outcome := "sent"
+		if err != nil {
+			outcome = "failed"
+		}
+		if traceErr := c.recordDecision(packetNetworkDecision{Kind: outcome, Write: p.write, Copy: p.copy, Size: len(p.data)}); traceErr != nil && c.writeErr == nil {
+			c.writeErr = traceErr
+		}
 		if err != nil {
 			c.stats.failed++
 			c.writeErr = err
@@ -235,22 +261,6 @@ func (c *impairedPacketConn) snapshot() packetNetworkStats {
 	defer c.mu.Unlock()
 	return c.stats
 }
-
-type connectedPacketConn struct {
-	net.PacketConn
-	remote net.Addr
-}
-
-func (c *connectedPacketConn) Read(p []byte) (int, error) {
-	for {
-		n, from, err := c.ReadFrom(p)
-		if err != nil || from.String() == c.remote.String() {
-			return n, err
-		}
-	}
-}
-func (c *connectedPacketConn) Write(p []byte) (int, error) { return c.WriteTo(p, c.remote) }
-func (c *connectedPacketConn) RemoteAddr() net.Addr        { return c.remote }
 
 func TestImpairedPacketConn(t *testing.T) {
 	profile := packetNetworkProfile{minRate: 1 << 20, maxRate: 1 << 20, queuePackets: 2, queueBytes: 8, delay: time.Hour}
