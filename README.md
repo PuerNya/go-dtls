@@ -3,10 +3,10 @@
 [简体中文](README.md) | [English](benchmark.en.md) | [Русский](benchmark.ru.md)
 
 - 提交: `c7cb9ac2cd73dcebe3ab9e32545048ee026e9bd8`
-- 生成时间: `2026-10-14T13:41:07Z`
+- 生成时间: `2026-10-14T20:18:31Z`
 - Go: `go version go1.27.2 linux/amd64`
-- 平台: `linux/amd64, AMD EPYC 7763 64-Core Processor`
-- wolfSSL: `782235be7cbb83f9551612a54cfc5f220d7b7d5f (Linux Release static)`
+- 平台: `linux/amd64, INTEL(R) XEON(R) PLATINUM 8573C`
+- wolfSSL: `e9a8f62d6ea0d196e386ce80b7d4df24160835ec (Linux Release static)`
 - NSS: `b9283c1e4ee232b4450d36115272af670d38ec81 (Linux Release)`
 - BoringSSL: `4f3b183c5d4a8f8fcaba4c0ab4435df181df6978 (Linux Release)`
 - OpenSSL: `41eecc7c7cd4069b1b29bca49b9d97825c6bf648 (Linux Release)`
@@ -42,40 +42,40 @@
 
 | 基准测试 | 样本数 | 中位耗时 | 吞吐量 | 测试框架内存 | 测试框架分配次数 |
 | --- | :---: | :---: | :---: | :---: | :---: |
-| 证书认证完整握手 / AES-128-GCM | 5 | 587.766 us/op | - | 101322 B/op | 732 allocs/op |
-| 完整 mTLS 握手 | 5 | 887.29 us/op | - | 116334 B/op | 929 allocs/op |
-| mTLS 会话恢复握手 | 5 | 455.714 us/op | - | 123196 B/op | 855 allocs/op |
-| 按 CA 与 OID filters 选择多证书的 mTLS 握手 | 5 | 1.133 ms/op | - | 123643 B/op | 1108 allocs/op |
-| 握手后认证的多证书选择 | 5 | 1.533 ms/op | - | 142426 B/op | 1404 allocs/op |
-| 完整握手 + 4 个已确认会话票据 | 5 | 686.541 us/op | - | 121345 B/op | 962 allocs/op |
-| 完整 mTLS 握手 + 会话票据 / GREASE 关闭 | 5 | 939.481 us/op | - | 125649 B/op | 1000 allocs/op |
-| 完整 mTLS 握手 + 会话票据 / GREASE 启用 | 5 | 937.336 us/op | - | 125745 B/op | 1000 allocs/op |
-| 直接外部 PSK 握手 | 5 | 375.011 us/op | - | 103774 B/op | 758 allocs/op |
-| 服务器证书完整握手 / 证书未压缩 | 5 | 1.055 ms/op | - | 136091 B/op | 1017 allocs/op |
-| zlib 服务器证书压缩握手 | 5 | 1.048 ms/op | - | 126046 B/op | 993 allocs/op |
-| 完整 mTLS 握手 / 证书未压缩 | 5 | 1.748 ms/op | - | 177153 B/op | 1469 allocs/op |
-| zlib mTLS 证书压缩握手 | 5 | 1.759 ms/op | - | 162384 B/op | 1422 allocs/op |
-| ECH 握手 / 直接（无 HRR） | 5 | 994.885 us/op | - | 151403 B/op | 1232 allocs/op |
-| ECH 握手 / 经 HRR | 5 | 1.004 ms/op | - | 154179 B/op | 1253 allocs/op |
-| 后量子混合密钥交换 / X25519MLKEM768 | 5 | 910.062 us/op | - | 149311 B/op | 765 allocs/op |
-| 后量子混合密钥交换 / SecP256r1MLKEM768 | 5 | 862.134 us/op | - | 152656 B/op | 796 allocs/op |
-| 后量子混合密钥交换 / SecP384r1MLKEM1024 | 5 | 2.171 ms/op | - | 178102 B/op | 814 allocs/op |
-| Listener UDP 往返 / 1 个连接 / 无 CID / 64 字节 | 5 | 22.229 us/op | 5.76 MB/s | 592 B/op | 12 allocs/op |
-| Listener UDP 往返 / 1 个连接 / 无 CID / 1200 字节 | 5 | 25.789 us/op | 93.06 MB/s | 2992 B/op | 12 allocs/op |
-| Listener UDP 往返 / 1 个连接 / CID / 64 字节 | 5 | 22.445 us/op | 5.7 MB/s | 592 B/op | 12 allocs/op |
-| Listener UDP 往返 / 1 个连接 / CID / 1200 字节 | 5 | 26.276 us/op | 91.34 MB/s | 2992 B/op | 12 allocs/op |
-| Listener UDP 往返 / 64 个连接 / 无 CID / 64 字节 | 5 | 22.701 us/op | 5.64 MB/s | 598 B/op | 12 allocs/op |
-| Listener UDP 往返 / 64 个连接 / 无 CID / 1200 字节 | 5 | 25.947 us/op | 92.5 MB/s | 2997 B/op | 12 allocs/op |
-| Listener UDP 往返 / 64 个连接 / CID / 64 字节 | 5 | 23.515 us/op | 5.44 MB/s | 601 B/op | 12 allocs/op |
-| Listener UDP 往返 / 64 个连接 / CID / 1200 字节 | 5 | 26.606 us/op | 90.2 MB/s | 2998 B/op | 12 allocs/op |
-| Listener UDP 往返 / 1024 个连接 / 无 CID / 64 字节 | 5 | 27.587 us/op | 4.64 MB/s | 623 B/op | 12 allocs/op |
-| Listener UDP 往返 / 1024 个连接 / 无 CID / 1200 字节 | 5 | 31.152 us/op | 77.04 MB/s | 3032 B/op | 12 allocs/op |
-| Listener UDP 往返 / 1024 个连接 / CID / 64 字节 | 5 | 36.74 us/op | 3.48 MB/s | 644 B/op | 12 allocs/op |
-| Listener UDP 往返 / 1024 个连接 / CID / 1200 字节 | 5 | 41.207 us/op | 58.24 MB/s | 2995 B/op | 12 allocs/op |
-| 0-RTT / 初始 64 条重放记录 | 5 | 431.18 us/op | - | 109275 B/op | 796 allocs/op |
-| 0-RTT / 初始 4096 条重放记录 | 5 | 433.512 us/op | - | 109114 B/op | 796 allocs/op |
-| 内存 datagram 往返 / 64 字节 | 5 | 3.469 us/op | 36.9 MB/s | 384 B/op | 4 allocs/op |
-| 内存 datagram 往返 / 1200 字节 | 5 | 6.984 us/op | 343.63 MB/s | 5184 B/op | 4 allocs/op |
+| 证书认证完整握手 / AES-128-GCM | 5 | 441.807 us/op | - | 101322 B/op | 732 allocs/op |
+| 完整 mTLS 握手 | 5 | 670.655 us/op | - | 116336 B/op | 929 allocs/op |
+| mTLS 会话恢复握手 | 5 | 361.224 us/op | - | 123189 B/op | 855 allocs/op |
+| 按 CA 与 OID filters 选择多证书的 mTLS 握手 | 5 | 841.708 us/op | - | 123645 B/op | 1108 allocs/op |
+| 握手后认证的多证书选择 | 5 | 1.165 ms/op | - | 142416 B/op | 1404 allocs/op |
+| 完整握手 + 4 个已确认会话票据 | 5 | 539.632 us/op | - | 121345 B/op | 962 allocs/op |
+| 完整 mTLS 握手 + 会话票据 / GREASE 关闭 | 5 | 730.423 us/op | - | 125649 B/op | 1000 allocs/op |
+| 完整 mTLS 握手 + 会话票据 / GREASE 启用 | 5 | 727.562 us/op | - | 125745 B/op | 1000 allocs/op |
+| 直接外部 PSK 握手 | 5 | 290.189 us/op | - | 103775 B/op | 758 allocs/op |
+| 服务器证书完整握手 / 证书未压缩 | 5 | 770.526 us/op | - | 136094 B/op | 1017 allocs/op |
+| zlib 服务器证书压缩握手 | 5 | 770.259 us/op | - | 126017 B/op | 993 allocs/op |
+| 完整 mTLS 握手 / 证书未压缩 | 5 | 1.282 ms/op | - | 177158 B/op | 1469 allocs/op |
+| zlib mTLS 证书压缩握手 | 5 | 1.285 ms/op | - | 162355 B/op | 1422 allocs/op |
+| ECH 握手 / 直接（无 HRR） | 5 | 758.667 us/op | - | 151405 B/op | 1232 allocs/op |
+| ECH 握手 / 经 HRR | 5 | 796.719 us/op | - | 154181 B/op | 1253 allocs/op |
+| 后量子混合密钥交换 / X25519MLKEM768 | 5 | 655.019 us/op | - | 149313 B/op | 765 allocs/op |
+| 后量子混合密钥交换 / SecP256r1MLKEM768 | 5 | 638.739 us/op | - | 152657 B/op | 796 allocs/op |
+| 后量子混合密钥交换 / SecP384r1MLKEM1024 | 5 | 1.648 ms/op | - | 178099 B/op | 814 allocs/op |
+| Listener UDP 往返 / 1 个连接 / 无 CID / 64 字节 | 5 | 10.652 us/op | 12.02 MB/s | 592 B/op | 12 allocs/op |
+| Listener UDP 往返 / 1 个连接 / 无 CID / 1200 字节 | 5 | 12.77 us/op | 187.94 MB/s | 2992 B/op | 12 allocs/op |
+| Listener UDP 往返 / 1 个连接 / CID / 64 字节 | 5 | 10.991 us/op | 11.65 MB/s | 592 B/op | 12 allocs/op |
+| Listener UDP 往返 / 1 个连接 / CID / 1200 字节 | 5 | 13.09 us/op | 183.35 MB/s | 2992 B/op | 12 allocs/op |
+| Listener UDP 往返 / 64 个连接 / 无 CID / 64 字节 | 5 | 11.498 us/op | 11.13 MB/s | 593 B/op | 12 allocs/op |
+| Listener UDP 往返 / 64 个连接 / 无 CID / 1200 字节 | 5 | 14.634 us/op | 164 MB/s | 2993 B/op | 12 allocs/op |
+| Listener UDP 往返 / 64 个连接 / CID / 64 字节 | 5 | 12.45 us/op | 10.28 MB/s | 593 B/op | 12 allocs/op |
+| Listener UDP 往返 / 64 个连接 / CID / 1200 字节 | 5 | 14.944 us/op | 160.6 MB/s | 2993 B/op | 12 allocs/op |
+| Listener UDP 往返 / 1024 个连接 / 无 CID / 64 字节 | 5 | 16.556 us/op | 7.73 MB/s | 608 B/op | 12 allocs/op |
+| Listener UDP 往返 / 1024 个连接 / 无 CID / 1200 字节 | 5 | 20.94 us/op | 114.61 MB/s | 3000 B/op | 12 allocs/op |
+| Listener UDP 往返 / 1024 个连接 / CID / 64 字节 | 5 | 24.205 us/op | 5.29 MB/s | 612 B/op | 12 allocs/op |
+| Listener UDP 往返 / 1024 个连接 / CID / 1200 字节 | 5 | 26.597 us/op | 90.24 MB/s | 3018 B/op | 12 allocs/op |
+| 0-RTT / 初始 64 条重放记录 | 5 | 332.203 us/op | - | 109247 B/op | 796 allocs/op |
+| 0-RTT / 初始 4096 条重放记录 | 5 | 338.606 us/op | - | 109120 B/op | 796 allocs/op |
+| 内存 datagram 往返 / 64 字节 | 5 | 2.881 us/op | 44.43 MB/s | 384 B/op | 4 allocs/op |
+| 内存 datagram 往返 / 1200 字节 | 5 | 5.586 us/op | 429.66 MB/s | 5184 B/op | 4 allocs/op |
 
 <a id="section-real-udp-interoperability"></a>
 ## 真实 UDP 互通
@@ -87,21 +87,21 @@
 
 | 基准测试 | 样本数 | 中位耗时 | 测试框架内存 | 测试框架分配次数 |
 | --- | :---: | :---: | :---: | :---: |
-| 证书认证完整握手 / AES-128-GCM | 5 | 2.01 ms/conn | 2671704 B/op | 21758 allocs/op |
-| 应用数据 1-RTT 往返 | 5 | 2.035 ms/conn | 2682536 B/op | 22097 allocs/op |
-| 完整 mTLS 握手 | 5 | 3.592 ms/conn | 3375048 B/op | 30099 allocs/op |
-| GREASE 兼容性 / 完整 mTLS 握手 + 会话票据 | 5 | 3.627 ms/conn | 3833600 B/op | 31833 allocs/op |
-| 证书认证完整握手 / AES-128-CCM | 5 | 1.999 ms/conn | 3149576 B/op | 25608 allocs/op |
-| 直接外部 PSK 握手 | 5 | 0.55 ms/conn | 1785080 B/op | 14976 allocs/op |
-| CID + 应用数据 1-RTT 往返 | 5 | 1.977 ms/conn | 2689112 B/op | 22876 allocs/op |
-| KeyUpdate + 应用数据 1-RTT 往返 | 5 | 2.125 ms/conn | 2850176 B/op | 23392 allocs/op |
-| PHA + 应用数据 1-RTT 往返 | 5 | 5.112 ms/conn | 4181448 B/op | 40336 allocs/op |
-| 会话恢复握手 | 5 | 0.6689 ms/conn | 4735608 B/op | 39436 allocs/op |
-| mTLS 会话恢复握手 | 5 | 0.8408 ms/conn | 6866976 B/op | 51418 allocs/op |
-| 0-RTT + 应用数据 1-RTT 往返 | 5 | 0.6852 ms/conn | 298872 B/op | 1959 allocs/op |
-| 后量子混合密钥交换 / X25519MLKEM768 | 5 | 2.356 ms/conn | 3543168 B/op | 22081 allocs/op |
-| 后量子混合密钥交换 / SecP256r1MLKEM768 | 5 | 2.334 ms/conn | 3585088 B/op | 22421 allocs/op |
-| 后量子混合密钥交换 / SecP384r1MLKEM1024 | 5 | 3.569 ms/conn | 4080768 B/op | 22781 allocs/op |
+| 证书认证完整握手 / AES-128-GCM | 5 | 1.488 ms/conn | 2671704 B/op | 21758 allocs/op |
+| 应用数据 1-RTT 往返 | 5 | 1.444 ms/conn | 2682536 B/op | 22097 allocs/op |
+| 完整 mTLS 握手 | 5 | 2.579 ms/conn | 3374952 B/op | 30097 allocs/op |
+| GREASE 兼容性 / 完整 mTLS 握手 + 会话票据 | 5 | 2.572 ms/conn | 3833552 B/op | 31839 allocs/op |
+| 证书认证完整握手 / AES-128-CCM | 5 | 1.365 ms/conn | 3149576 B/op | 25608 allocs/op |
+| 直接外部 PSK 握手 | 5 | 0.3119 ms/conn | 1785080 B/op | 14976 allocs/op |
+| CID + 应用数据 1-RTT 往返 | 5 | 1.502 ms/conn | 2689112 B/op | 22876 allocs/op |
+| KeyUpdate + 应用数据 1-RTT 往返 | 5 | 1.546 ms/conn | 2850176 B/op | 23392 allocs/op |
+| PHA + 应用数据 1-RTT 往返 | 5 | 3.683 ms/conn | 4180704 B/op | 40355 allocs/op |
+| 会话恢复握手 | 5 | 0.4187 ms/conn | 4735608 B/op | 39420 allocs/op |
+| mTLS 会话恢复握手 | 5 | 0.5158 ms/conn | 6867128 B/op | 51413 allocs/op |
+| 0-RTT + 应用数据 1-RTT 往返 | 5 | 0.45 ms/conn | 299120 B/op | 1962 allocs/op |
+| 后量子混合密钥交换 / X25519MLKEM768 | 5 | 1.628 ms/conn | 3543168 B/op | 22081 allocs/op |
+| 后量子混合密钥交换 / SecP256r1MLKEM768 | 5 | 1.608 ms/conn | 3585088 B/op | 22421 allocs/op |
+| 后量子混合密钥交换 / SecP384r1MLKEM1024 | 5 | 2.62 ms/conn | 4080768 B/op | 22781 allocs/op |
 
 <a id="real-udp-go-dtls-client-wolfssl-server"></a>
 ### go-dtls 客户端 -> wolfSSL 服务端
@@ -110,20 +110,20 @@
 
 | 基准测试 | 样本数 | 中位耗时 | 测试框架内存 | 测试框架分配次数 |
 | --- | :---: | :---: | :---: | :---: |
-| 证书认证完整握手 / AES-128-GCM | 5 | 4.75 ms/conn | 1332944 B/op | 11042 allocs/op |
-| 应用数据 1-RTT 往返 | 5 | 4.89 ms/conn | 1353584 B/op | 11302 allocs/op |
-| 完整 mTLS 握手 | 5 | 6.417 ms/conn | 1495072 B/op | 11923 allocs/op |
-| GREASE 兼容性 / 完整 mTLS 握手 + 会话票据 | 5 | 6.388 ms/conn | 1495024 B/op | 11922 allocs/op |
-| 证书认证完整握手 / AES-128-CCM | 5 | 4.76 ms/conn | 1571344 B/op | 12602 allocs/op |
-| 直接外部 PSK 握手 | 5 | 0.9872 ms/conn | 834864 B/op | 7042 allocs/op |
-| CID + 应用数据 1-RTT 往返 | 5 | 4.701 ms/conn | 1340144 B/op | 11602 allocs/op |
-| KeyUpdate + 应用数据 1-RTT 往返 | 5 | 4.942 ms/conn | 1589904 B/op | 12662 allocs/op |
-| PHA + 应用数据 1-RTT 往返 | 5 | 6.243 ms/conn | 1546576 B/op | 12665 allocs/op |
-| 会话恢复握手 | 5 | 1.182 ms/conn | 2370200 B/op | 19324 allocs/op |
-| mTLS 会话恢复握手 | 5 | 1.174 ms/conn | 2537736 B/op | 20244 allocs/op |
+| 证书认证完整握手 / AES-128-GCM | 5 | 3.518 ms/conn | 1332944 B/op | 11042 allocs/op |
+| 应用数据 1-RTT 往返 | 5 | 3.56 ms/conn | 1353584 B/op | 11302 allocs/op |
+| 完整 mTLS 握手 | 5 | 4.67 ms/conn | 1495024 B/op | 11922 allocs/op |
+| GREASE 兼容性 / 完整 mTLS 握手 + 会话票据 | 5 | 4.537 ms/conn | 1495224 B/op | 11925 allocs/op |
+| 证书认证完整握手 / AES-128-CCM | 5 | 3.428 ms/conn | 1571344 B/op | 12602 allocs/op |
+| 直接外部 PSK 握手 | 5 | 0.883 ms/conn | 834864 B/op | 7042 allocs/op |
+| CID + 应用数据 1-RTT 往返 | 5 | 3.587 ms/conn | 1340144 B/op | 11602 allocs/op |
+| KeyUpdate + 应用数据 1-RTT 往返 | 5 | 3.712 ms/conn | 1589904 B/op | 12662 allocs/op |
+| PHA + 应用数据 1-RTT 往返 | 5 | 4.768 ms/conn | 1547088 B/op | 12673 allocs/op |
+| 会话恢复握手 | 5 | 0.9762 ms/conn | 2370200 B/op | 19324 allocs/op |
+| mTLS 会话恢复握手 | 5 | 0.9259 ms/conn | 2537736 B/op | 20244 allocs/op |
 | 0-RTT + 应用数据 1-RTT 往返 | - | 跳过: 该场景启用了 cookie HRR，按 RFC 必须拒绝 go-dtls 0-RTT；该限制最后验证于 wolfSSL commit 7499fc5b6c99eb39055a59f538bb3709971341c9 | - | - |
-| 后量子混合密钥交换 / X25519MLKEM768 | 5 | 5.003 ms/conn | 2005400 B/op | 11246 allocs/op |
-| 后量子混合密钥交换 / SecP256r1MLKEM768 | 5 | 6.026 ms/conn | 2018584 B/op | 11373 allocs/op |
+| 后量子混合密钥交换 / X25519MLKEM768 | 5 | 3.661 ms/conn | 2005320 B/op | 11245 allocs/op |
+| 后量子混合密钥交换 / SecP256r1MLKEM768 | 5 | 4.475 ms/conn | 2017720 B/op | 11364 allocs/op |
 | 后量子混合密钥交换 / SecP384r1MLKEM1024 | - | 跳过: MTU 4096 下 P384 ClientHello 超出 wolfSSL 服务端接收缓冲；该限制最后验证于 wolfSSL commit 7499fc5b6c99eb39055a59f538bb3709971341c9 | - | - |
 
 <a id="real-udp-wolfssl-client-go-dtls-server"></a>
@@ -133,21 +133,21 @@
 
 | 基准测试 | 样本数 | 中位耗时 | 测试框架内存 | 测试框架分配次数 |
 | --- | :---: | :---: | :---: | :---: |
-| 证书认证完整握手 / AES-128-GCM | 5 | 2.41 ms/conn | 1327216 B/op | 9519 allocs/op |
-| 应用数据 1-RTT 往返 | 5 | 5.359 ms/conn | 2480824 B/op | 11025 allocs/op |
-| 完整 mTLS 握手 | 5 | 6.222 ms/conn | 1771680 B/op | 15069 allocs/op |
-| GREASE 兼容性 / 完整 mTLS 握手 + 会话票据 | 5 | 6.134 ms/conn | 1974600 B/op | 15592 allocs/op |
-| 证书认证完整握手 / AES-128-CCM | 5 | 2.438 ms/conn | 1391712 B/op | 10439 allocs/op |
-| 直接外部 PSK 握手 | 5 | 0.914 ms/conn | 1048400 B/op | 7679 allocs/op |
-| CID + 应用数据 1-RTT 往返 | 5 | 5.138 ms/conn | 2494360 B/op | 11586 allocs/op |
-| KeyUpdate + 应用数据 1-RTT 往返 | 5 | 5.275 ms/conn | 2655064 B/op | 12665 allocs/op |
-| PHA + 应用数据 1-RTT 往返 | 5 | 12.88 ms/conn | 3404232 B/op | 22846 allocs/op |
-| 会话恢复握手 | 5 | 1009 ms/pair | 3643344 B/op | 20507 allocs/op |
+| 证书认证完整握手 / AES-128-GCM | 5 | 1.714 ms/conn | 1326944 B/op | 9519 allocs/op |
+| 应用数据 1-RTT 往返 | 5 | 3.966 ms/conn | 2480888 B/op | 11025 allocs/op |
+| 完整 mTLS 握手 | 5 | 4.428 ms/conn | 1770640 B/op | 15066 allocs/op |
+| GREASE 兼容性 / 完整 mTLS 握手 + 会话票据 | 5 | 4.352 ms/conn | 1974624 B/op | 15593 allocs/op |
+| 证书认证完整握手 / AES-128-CCM | 5 | 1.741 ms/conn | 1391488 B/op | 10439 allocs/op |
+| 直接外部 PSK 握手 | 5 | 0.651 ms/conn | 1048624 B/op | 7679 allocs/op |
+| CID + 应用数据 1-RTT 往返 | 5 | 4.159 ms/conn | 2494744 B/op | 11586 allocs/op |
+| KeyUpdate + 应用数据 1-RTT 往返 | 5 | 4.217 ms/conn | 2655384 B/op | 12665 allocs/op |
+| PHA + 应用数据 1-RTT 往返 | 5 | 9.329 ms/conn | 3404600 B/op | 22843 allocs/op |
+| 会话恢复握手 | 5 | 1007 ms/pair | 3642896 B/op | 20507 allocs/op |
 | mTLS 会话恢复握手 | - | 跳过: wolfSSL 客户端拒绝分片发送携带 mTLS ticket 的首个 ClientHello；该限制最后验证于 wolfSSL commit 7499fc5b6c99eb39055a59f538bb3709971341c9 | - | - |
-| 0-RTT + 应用数据 1-RTT 往返 | 5 | 1009 ms/pair | 244184 B/op | 1014 allocs/op |
-| 后量子混合密钥交换 / X25519MLKEM768 | 5 | 2.635 ms/conn | 1627808 B/op | 10019 allocs/op |
-| 后量子混合密钥交换 / SecP256r1MLKEM768 | 5 | 3.67 ms/conn | 1648128 B/op | 10159 allocs/op |
-| 后量子混合密钥交换 / SecP384r1MLKEM1024 | 5 | 6.765 ms/conn | 1807552 B/op | 10339 allocs/op |
+| 0-RTT + 应用数据 1-RTT 往返 | 5 | 1007 ms/pair | 244184 B/op | 1014 allocs/op |
+| 后量子混合密钥交换 / X25519MLKEM768 | 5 | 1.885 ms/conn | 1627968 B/op | 10019 allocs/op |
+| 后量子混合密钥交换 / SecP256r1MLKEM768 | 5 | 2.649 ms/conn | 1648288 B/op | 10159 allocs/op |
+| 后量子混合密钥交换 / SecP384r1MLKEM1024 | 5 | 5.07 ms/conn | 1807040 B/op | 10339 allocs/op |
 
 <a id="real-udp-wolfssl-client-wolfssl-server"></a>
 ### wolfSSL 客户端 -> wolfSSL 服务端
@@ -157,19 +157,19 @@
 | 基准测试 | 样本数 | 中位耗时 | 测试框架内存 | 测试框架分配次数 |
 | --- | :---: | :---: | :---: | :---: |
 | 证书认证完整握手 / AES-128-GCM | 5 | 1024 ms/conn | 63640 B/op | 55 allocs/op |
-| 应用数据 1-RTT 往返 | 5 | 7.998 ms/conn | 1169792 B/op | 1201 allocs/op |
+| 应用数据 1-RTT 往返 | 5 | 5.72 ms/conn | 1169792 B/op | 1201 allocs/op |
 | 完整 mTLS 握手 | 5 | 1024 ms/conn | 63608 B/op | 55 allocs/op |
-| GREASE 兼容性 / 完整 mTLS 握手 + 会话票据 | 5 | 1024 ms/conn | 63608 B/op | 55 allocs/op |
+| GREASE 兼容性 / 完整 mTLS 握手 + 会话票据 | 5 | 1024 ms/conn | 63680 B/op | 57 allocs/op |
 | 证书认证完整握手 / AES-128-CCM | 5 | 1024 ms/conn | 63640 B/op | 55 allocs/op |
-| 直接外部 PSK 握手 | 5 | 1024 ms/conn | 63688 B/op | 55 allocs/op |
-| CID + 应用数据 1-RTT 往返 | 5 | 7.721 ms/conn | 1183488 B/op | 1202 allocs/op |
-| KeyUpdate + 应用数据 1-RTT 往返 | 5 | 7.824 ms/conn | 1170112 B/op | 1201 allocs/op |
-| PHA + 应用数据 1-RTT 往返 | 5 | 11.78 ms/conn | 1172800 B/op | 1206 allocs/op |
-| 会话恢复握手 | 5 | 1012 ms/pair | 1191168 B/op | 1202 allocs/op |
-| mTLS 会话恢复握手 | 5 | 1016 ms/pair | 1190552 B/op | 1203 allocs/op |
+| 直接外部 PSK 握手 | 5 | 1024 ms/conn | 63760 B/op | 57 allocs/op |
+| CID + 应用数据 1-RTT 往返 | 5 | 5.927 ms/conn | 1183488 B/op | 1202 allocs/op |
+| KeyUpdate + 应用数据 1-RTT 往返 | 5 | 6.032 ms/conn | 1170112 B/op | 1201 allocs/op |
+| PHA + 应用数据 1-RTT 往返 | 5 | 8.291 ms/conn | 1172800 B/op | 1206 allocs/op |
+| 会话恢复握手 | 5 | 1009 ms/pair | 1191240 B/op | 1204 allocs/op |
+| mTLS 会话恢复握手 | 5 | 1012 ms/pair | 1190600 B/op | 1204 allocs/op |
 | 0-RTT + 应用数据 1-RTT 往返 | - | 跳过: 该场景启用了 cookie HRR，按 RFC 必须拒绝 wolfSSL 客户端 0-RTT；该限制最后验证于 wolfSSL commit 7499fc5b6c99eb39055a59f538bb3709971341c9 | - | - |
 | 后量子混合密钥交换 / X25519MLKEM768 | 5 | 1024 ms/conn | 64392 B/op | 55 allocs/op |
-| 后量子混合密钥交换 / SecP256r1MLKEM768 | 5 | 1024 ms/conn | 64416 B/op | 56 allocs/op |
+| 后量子混合密钥交换 / SecP256r1MLKEM768 | 5 | 1024 ms/conn | 64392 B/op | 55 allocs/op |
 | 后量子混合密钥交换 / SecP384r1MLKEM1024 | 5 | 1024 ms/conn | 64392 B/op | 55 allocs/op |
 
 <a id="real-udp-nss-go-go"></a>
@@ -179,24 +179,24 @@
 
 | 基准测试 | 样本数 | 中位耗时 | 测试框架内存 | 测试框架分配次数 |
 | --- | :---: | :---: | :---: | :---: |
-| 证书认证 AES-128-GCM 连接 + 数据报交换 | 5 | 0.9946 ms/conn | 460680 B/op | 3537 allocs/op |
-| AES-256-GCM/SHA-384 连接 + 数据报交换 | 5 | 1.517 ms/conn | 526920 B/op | 3537 allocs/op |
-| ChaCha20-Poly1305 连接 + 数据报交换 | 5 | 1.005 ms/conn | 398136 B/op | 3500 allocs/op |
-| P-256 密钥交换 + 数据报交换 | 5 | 0.9342 ms/conn | 467416 B/op | 3584 allocs/op |
-| P-384 密钥交换 + 数据报交换 | 5 | 2.12 ms/conn | 472216 B/op | 3656 allocs/op |
-| HelloRetryRequest 握手 + 数据报交换 | 5 | 1.021 ms/conn | 535648 B/op | 3995 allocs/op |
-| X25519MLKEM768 混合握手 + 数据报交换 | 5 | 1.285 ms/conn | 642488 B/op | 3716 allocs/op |
-| MTU 256 分片握手 + 数据报交换 | 5 | 1.07 ms/conn | 517248 B/op | 3939 allocs/op |
-| 完整 mTLS 握手 | 5 | 1.439 ms/conn | 549736 B/op | 4706 allocs/op |
-| 协商 ALPN 的连接 + 数据报交换 | 5 | 1.015 ms/conn | 462632 B/op | 3584 allocs/op |
-| KeyUpdate + 应用数据 1-RTT 往返 | 5 | 1.038 ms/conn | 496040 B/op | 3765 allocs/op |
-| OCSP 装订握手 + 数据报交换 | 5 | 1.202 ms/conn | 542152 B/op | 4305 allocs/op |
-| 直接外部 PSK 握手 | 5 | 0.6491 ms/conn | 423192 B/op | 3252 allocs/op |
-| 会话恢复握手 | 5 | 1.723 ms/pair | 882968 B/op | 7357 allocs/op |
-| mTLS 会话恢复握手 | 5 | 2.128 ms/pair | 1065856 B/op | 8754 allocs/op |
-| 0-RTT + 应用数据 1-RTT 往返 | 5 | 1.731 ms/pair | 882184 B/op | 7303 allocs/op |
-| 委派凭证握手 + 数据报交换 | 5 | 1.383 ms/conn | 519480 B/op | 4088 allocs/op |
-| 委派凭证握手 + 会话恢复 | 5 | 2.17 ms/pair | 961848 B/op | 8087 allocs/op |
+| 证书认证 AES-128-GCM 连接 + 数据报交换 | 5 | 0.7234 ms/conn | 460680 B/op | 3537 allocs/op |
+| AES-256-GCM/SHA-384 连接 + 数据报交换 | 5 | 0.7615 ms/conn | 526792 B/op | 3537 allocs/op |
+| ChaCha20-Poly1305 连接 + 数据报交换 | 5 | 0.69 ms/conn | 398008 B/op | 3500 allocs/op |
+| P-256 密钥交换 + 数据报交换 | 5 | 0.6948 ms/conn | 467416 B/op | 3584 allocs/op |
+| P-384 密钥交换 + 数据报交换 | 5 | 1.655 ms/conn | 472216 B/op | 3656 allocs/op |
+| HelloRetryRequest 握手 + 数据报交换 | 5 | 0.7818 ms/conn | 535648 B/op | 3995 allocs/op |
+| X25519MLKEM768 混合握手 + 数据报交换 | 5 | 0.9013 ms/conn | 642488 B/op | 3716 allocs/op |
+| MTU 256 分片握手 + 数据报交换 | 5 | 0.7181 ms/conn | 517248 B/op | 3939 allocs/op |
+| 完整 mTLS 握手 | 5 | 0.9992 ms/conn | 549608 B/op | 4704 allocs/op |
+| 协商 ALPN 的连接 + 数据报交换 | 5 | 0.696 ms/conn | 462504 B/op | 3584 allocs/op |
+| KeyUpdate + 应用数据 1-RTT 往返 | 5 | 0.7153 ms/conn | 495528 B/op | 3764 allocs/op |
+| OCSP 装订握手 + 数据报交换 | 5 | 0.859 ms/conn | 541048 B/op | 4304 allocs/op |
+| 直接外部 PSK 握手 | 5 | 0.4362 ms/conn | 423192 B/op | 3252 allocs/op |
+| 会话恢复握手 | 5 | 1.117 ms/pair | 884744 B/op | 7357 allocs/op |
+| mTLS 会话恢复握手 | 5 | 1.593 ms/pair | 1065472 B/op | 8755 allocs/op |
+| 0-RTT + 应用数据 1-RTT 往返 | 5 | 1.182 ms/pair | 882064 B/op | 7299 allocs/op |
+| 委派凭证握手 + 数据报交换 | 5 | 1.089 ms/conn | 519608 B/op | 4088 allocs/op |
+| 委派凭证握手 + 会话恢复 | 5 | 1.597 ms/pair | 961976 B/op | 8087 allocs/op |
 
 <a id="real-udp-nss-go-peer"></a>
 ### NSS / go-dtls 客户端 -> NSS 服务端
@@ -205,24 +205,24 @@
 
 | 基准测试 | 样本数 | 中位耗时 | 测试框架内存 | 测试框架分配次数 |
 | --- | :---: | :---: | :---: | :---: |
-| 证书认证 AES-128-GCM 连接 + 数据报交换 | 5 | 1.313 ms/conn | 181552 B/op | 1534 allocs/op |
-| AES-256-GCM/SHA-384 连接 + 数据报交换 | 5 | 1.667 ms/conn | 215280 B/op | 1534 allocs/op |
-| ChaCha20-Poly1305 连接 + 数据报交换 | 5 | 1.44 ms/conn | 146832 B/op | 1514 allocs/op |
-| P-256 密钥交换 + 数据报交换 | 5 | 1.928 ms/conn | 184560 B/op | 1558 allocs/op |
-| P-384 密钥交换 + 数据报交换 | 5 | 4.339 ms/conn | 186512 B/op | 1594 allocs/op |
-| HelloRetryRequest 握手 + 数据报交换 | 5 | 2.111 ms/conn | 215344 B/op | 1810 allocs/op |
-| X25519MLKEM768 混合握手 + 数据报交换 | 5 | 2.627 ms/conn | 274864 B/op | 1646 allocs/op |
+| 证书认证 AES-128-GCM 连接 + 数据报交换 | 5 | 0.9971 ms/conn | 181552 B/op | 1534 allocs/op |
+| AES-256-GCM/SHA-384 连接 + 数据报交换 | 5 | 1.059 ms/conn | 215024 B/op | 1534 allocs/op |
+| ChaCha20-Poly1305 连接 + 数据报交换 | 5 | 1.035 ms/conn | 146704 B/op | 1514 allocs/op |
+| P-256 密钥交换 + 数据报交换 | 5 | 1.467 ms/conn | 184560 B/op | 1558 allocs/op |
+| P-384 密钥交换 + 数据报交换 | 5 | 3.863 ms/conn | 186512 B/op | 1594 allocs/op |
+| HelloRetryRequest 握手 + 数据报交换 | 5 | 1.846 ms/conn | 215344 B/op | 1810 allocs/op |
+| X25519MLKEM768 混合握手 + 数据报交换 | 5 | 2.005 ms/conn | 274864 B/op | 1646 allocs/op |
 | MTU 256 分片握手 + 数据报交换 | - | 跳过: NSS 夹具无法强制 NSS 服务端的握手分片；该限制最后验证于 NSS commit b9283c1e4ee232b4450d36115272af670d38ec81 | - | - |
-| 完整 mTLS 握手 | 5 | 2.264 ms/conn | 222800 B/op | 1910 allocs/op |
-| 协商 ALPN 的连接 + 数据报交换 | 5 | 1.365 ms/conn | 181840 B/op | 1546 allocs/op |
-| KeyUpdate + 应用数据 1-RTT 往返 | 5 | 1.339 ms/conn | 213328 B/op | 1718 allocs/op |
-| OCSP 装订握手 + 数据报交换 | 5 | 1.369 ms/conn | 194288 B/op | 1638 allocs/op |
-| 直接外部 PSK 握手 | 5 | 0.8979 ms/conn | 158896 B/op | 1306 allocs/op |
-| 会话恢复握手 | 5 | 2.426 ms/pair | 379024 B/op | 3141 allocs/op |
-| mTLS 会话恢复握手 | 5 | 3.314 ms/pair | 458928 B/op | 3517 allocs/op |
+| 完整 mTLS 握手 | 5 | 1.61 ms/conn | 222800 B/op | 1910 allocs/op |
+| 协商 ALPN 的连接 + 数据报交换 | 5 | 0.9681 ms/conn | 181712 B/op | 1546 allocs/op |
+| KeyUpdate + 应用数据 1-RTT 往返 | 5 | 1.063 ms/conn | 213328 B/op | 1718 allocs/op |
+| OCSP 装订握手 + 数据报交换 | 5 | 1.018 ms/conn | 194288 B/op | 1638 allocs/op |
+| 直接外部 PSK 握手 | 5 | 0.6182 ms/conn | 158896 B/op | 1306 allocs/op |
+| 会话恢复握手 | 5 | 1.723 ms/pair | 379024 B/op | 3141 allocs/op |
+| mTLS 会话恢复握手 | 5 | 2.695 ms/pair | 458800 B/op | 3517 allocs/op |
 | 0-RTT + 应用数据 1-RTT 往返 | - | 跳过: 此夹具中的 NSS 服务端无法接收 DTLS 1.3 早期数据；该限制最后验证于 NSS commit b9283c1e4ee232b4450d36115272af670d38ec81 | - | - |
-| 委派凭证握手 + 数据报交换 | 5 | 1.504 ms/conn | 203184 B/op | 1714 allocs/op |
-| 委派凭证握手 + 会话恢复 | 5 | 2.608 ms/pair | 420208 B/op | 3477 allocs/op |
+| 委派凭证握手 + 数据报交换 | 5 | 1.126 ms/conn | 203312 B/op | 1714 allocs/op |
+| 委派凭证握手 + 会话恢复 | 5 | 2.256 ms/pair | 420336 B/op | 3477 allocs/op |
 
 <a id="real-udp-nss-peer-go"></a>
 ### NSS / NSS 客户端 -> go-dtls 服务端
@@ -231,24 +231,24 @@
 
 | 基准测试 | 样本数 | 中位耗时 | 测试框架内存 | 测试框架分配次数 |
 | --- | :---: | :---: | :---: | :---: |
-| 证书认证 AES-128-GCM 连接 + 数据报交换 | 5 | 4.384 ms/conn | 485640 B/op | 1993 allocs/op |
-| AES-256-GCM/SHA-384 连接 + 数据报交换 | 5 | 4.309 ms/conn | 517256 B/op | 1993 allocs/op |
-| ChaCha20-Poly1305 连接 + 数据报交换 | 5 | 4.351 ms/conn | 457576 B/op | 1975 allocs/op |
-| P-256 密钥交换 + 数据报交换 | 5 | 4.844 ms/conn | 488424 B/op | 2015 allocs/op |
-| P-384 密钥交换 + 数据报交换 | 5 | 7.313 ms/conn | 490856 B/op | 2053 allocs/op |
-| HelloRetryRequest 握手 + 数据报交换 | 5 | 5.046 ms/conn | 518568 B/op | 2189 allocs/op |
-| X25519MLKEM768 混合握手 + 数据报交换 | 5 | 6.871 ms/conn | 555880 B/op | 2117 allocs/op |
-| MTU 256 分片握手 + 数据报交换 | 5 | 4.547 ms/conn | 518856 B/op | 2173 allocs/op |
-| 完整 mTLS 握手 | 5 | 5.03 ms/conn | 528392 B/op | 2565 allocs/op |
-| 协商 ALPN 的连接 + 数据报交换 | 5 | 4.48 ms/conn | 487080 B/op | 2025 allocs/op |
-| KeyUpdate + 应用数据 1-RTT 往返 | 5 | 4.36 ms/conn | 520648 B/op | 2323 allocs/op |
-| OCSP 装订握手 + 数据报交换 | 5 | 4.345 ms/conn | 510600 B/op | 2203 allocs/op |
-| 直接外部 PSK 握手 | 5 | 3.464 ms/conn | 464520 B/op | 1893 allocs/op |
-| 会话恢复握手 | 5 | 5.503 ms/pair | 712392 B/op | 3932 allocs/op |
-| mTLS 会话恢复握手 | 5 | 6.069 ms/pair | 811816 B/op | 4734 allocs/op |
-| 0-RTT + 应用数据 1-RTT 往返 | 5 | 5.485 ms/pair | 714456 B/op | 3885 allocs/op |
-| 委派凭证握手 + 数据报交换 | 5 | 5.104 ms/conn | 521640 B/op | 2353 allocs/op |
-| 委派凭证握手 + 会话恢复 | 5 | 6.268 ms/pair | 749224 B/op | 4298 allocs/op |
+| 证书认证 AES-128-GCM 连接 + 数据报交换 | 5 | 3.149 ms/conn | 485672 B/op | 1995 allocs/op |
+| AES-256-GCM/SHA-384 连接 + 数据报交换 | 5 | 3.252 ms/conn | 517288 B/op | 1995 allocs/op |
+| ChaCha20-Poly1305 连接 + 数据报交换 | 5 | 3.206 ms/conn | 457608 B/op | 1977 allocs/op |
+| P-256 密钥交换 + 数据报交换 | 5 | 3.682 ms/conn | 488456 B/op | 2017 allocs/op |
+| P-384 密钥交换 + 数据报交换 | 5 | 6.143 ms/conn | 490824 B/op | 2051 allocs/op |
+| HelloRetryRequest 握手 + 数据报交换 | 5 | 4.034 ms/conn | 518536 B/op | 2187 allocs/op |
+| X25519MLKEM768 混合握手 + 数据报交换 | 5 | 5.138 ms/conn | 555944 B/op | 2121 allocs/op |
+| MTU 256 分片握手 + 数据报交换 | 5 | 3.295 ms/conn | 518696 B/op | 2179 allocs/op |
+| 完整 mTLS 握手 | 5 | 3.601 ms/conn | 528360 B/op | 2567 allocs/op |
+| 协商 ALPN 的连接 + 数据报交换 | 5 | 3.163 ms/conn | 487112 B/op | 2027 allocs/op |
+| KeyUpdate + 应用数据 1-RTT 往返 | 5 | 3.296 ms/conn | 520616 B/op | 2321 allocs/op |
+| OCSP 装订握手 + 数据报交换 | 5 | 3.449 ms/conn | 510344 B/op | 2203 allocs/op |
+| 直接外部 PSK 握手 | 5 | 2.554 ms/conn | 464552 B/op | 1895 allocs/op |
+| 会话恢复握手 | 5 | 3.927 ms/pair | 712424 B/op | 3934 allocs/op |
+| mTLS 会话恢复握手 | 5 | 4.839 ms/pair | 811496 B/op | 4734 allocs/op |
+| 0-RTT + 应用数据 1-RTT 往返 | 5 | 4.204 ms/pair | 714208 B/op | 3883 allocs/op |
+| 委派凭证握手 + 数据报交换 | 5 | 4.178 ms/conn | 521576 B/op | 2349 allocs/op |
+| 委派凭证握手 + 会话恢复 | 5 | 4.753 ms/pair | 749288 B/op | 4302 allocs/op |
 
 <a id="real-udp-nss-peer-peer"></a>
 ### NSS / NSS 客户端 -> NSS 服务端
@@ -257,24 +257,24 @@
 
 | 基准测试 | 样本数 | 中位耗时 | 测试框架内存 | 测试框架分配次数 |
 | --- | :---: | :---: | :---: | :---: |
-| 证书认证 AES-128-GCM 连接 + 数据报交换 | 5 | 4.518 ms/conn | 212704 B/op | 176 allocs/op |
-| AES-256-GCM/SHA-384 连接 + 数据报交换 | 5 | 4.555 ms/conn | 212192 B/op | 176 allocs/op |
-| ChaCha20-Poly1305 连接 + 数据报交换 | 5 | 4.425 ms/conn | 212448 B/op | 176 allocs/op |
-| P-256 密钥交换 + 数据报交换 | 5 | 5.737 ms/conn | 212192 B/op | 176 allocs/op |
-| P-384 密钥交换 + 数据报交换 | 5 | 9.396 ms/conn | 212192 B/op | 176 allocs/op |
-| HelloRetryRequest 握手 + 数据报交换 | 5 | 6.019 ms/conn | 212448 B/op | 176 allocs/op |
-| X25519MLKEM768 混合握手 + 数据报交换 | 5 | 7.818 ms/conn | 212448 B/op | 176 allocs/op |
+| 证书认证 AES-128-GCM 连接 + 数据报交换 | 5 | 3.362 ms/conn | 212704 B/op | 176 allocs/op |
+| AES-256-GCM/SHA-384 连接 + 数据报交换 | 5 | 3.487 ms/conn | 212192 B/op | 176 allocs/op |
+| ChaCha20-Poly1305 连接 + 数据报交换 | 5 | 3.345 ms/conn | 212448 B/op | 176 allocs/op |
+| P-256 密钥交换 + 数据报交换 | 5 | 4.405 ms/conn | 212192 B/op | 176 allocs/op |
+| P-384 密钥交换 + 数据报交换 | 5 | 8 ms/conn | 212192 B/op | 176 allocs/op |
+| HelloRetryRequest 握手 + 数据报交换 | 5 | 4.56 ms/conn | 212448 B/op | 176 allocs/op |
+| X25519MLKEM768 混合握手 + 数据报交换 | 5 | 6.224 ms/conn | 212448 B/op | 176 allocs/op |
 | MTU 256 分片握手 + 数据报交换 | - | 跳过: NSS 夹具无法强制两个 NSS 对端的握手分片；该限制最后验证于 NSS commit b9283c1e4ee232b4450d36115272af670d38ec81 | - | - |
-| 完整 mTLS 握手 | 5 | 5.663 ms/conn | 212192 B/op | 176 allocs/op |
-| 协商 ALPN 的连接 + 数据报交换 | 5 | 4.533 ms/conn | 212192 B/op | 176 allocs/op |
-| KeyUpdate + 应用数据 1-RTT 往返 | 5 | 4.581 ms/conn | 212192 B/op | 176 allocs/op |
-| OCSP 装订握手 + 数据报交换 | 5 | 4.506 ms/conn | 212192 B/op | 176 allocs/op |
-| 直接外部 PSK 握手 | 5 | 3.476 ms/conn | 212448 B/op | 176 allocs/op |
-| 会话恢复握手 | 5 | 6.646 ms/pair | 207008 B/op | 184 allocs/op |
-| mTLS 会话恢复握手 | 5 | 7.665 ms/pair | 207264 B/op | 184 allocs/op |
+| 完整 mTLS 握手 | 5 | 4.193 ms/conn | 212192 B/op | 176 allocs/op |
+| 协商 ALPN 的连接 + 数据报交换 | 5 | 3.417 ms/conn | 212192 B/op | 176 allocs/op |
+| KeyUpdate + 应用数据 1-RTT 往返 | 5 | 3.395 ms/conn | 212192 B/op | 176 allocs/op |
+| OCSP 装订握手 + 数据报交换 | 5 | 3.458 ms/conn | 212448 B/op | 176 allocs/op |
+| 直接外部 PSK 握手 | 5 | 2.644 ms/conn | 212448 B/op | 176 allocs/op |
+| 会话恢复握手 | 5 | 5.412 ms/pair | 207008 B/op | 184 allocs/op |
+| mTLS 会话恢复握手 | 5 | 5.969 ms/pair | 207264 B/op | 184 allocs/op |
 | 0-RTT + 应用数据 1-RTT 往返 | - | 跳过: 此夹具中的 NSS 服务端无法接收 DTLS 1.3 早期数据；该限制最后验证于 NSS commit b9283c1e4ee232b4450d36115272af670d38ec81 | - | - |
-| 委派凭证握手 + 数据报交换 | 5 | 5.189 ms/conn | 212448 B/op | 176 allocs/op |
-| 委派凭证握手 + 会话恢复 | 5 | 7.259 ms/pair | 207520 B/op | 184 allocs/op |
+| 委派凭证握手 + 数据报交换 | 5 | 3.98 ms/conn | 212448 B/op | 176 allocs/op |
+| 委派凭证握手 + 会话恢复 | 5 | 5.695 ms/pair | 207520 B/op | 184 allocs/op |
 
 <a id="real-udp-boringssl-go-go"></a>
 ### BoringSSL / go-dtls 客户端 -> go-dtls 服务端
@@ -283,25 +283,25 @@
 
 | 基准测试 | 样本数 | 中位耗时 | 测试框架内存 | 测试框架分配次数 |
 | --- | :---: | :---: | :---: | :---: |
-| 证书认证 AES-128-GCM 连接 + 数据报交换 | 5 | 1.009 ms/conn | 460504 B/op | 3536 allocs/op |
-| AES-256-GCM/SHA-384 连接 + 数据报交换 | 5 | 1.046 ms/conn | 526872 B/op | 3536 allocs/op |
-| ChaCha20-Poly1305 连接 + 数据报交换 | 5 | 1.003 ms/conn | 398136 B/op | 3500 allocs/op |
-| P-256 密钥交换 + 数据报交换 | 5 | 0.935 ms/conn | 467416 B/op | 3584 allocs/op |
-| P-384 密钥交换 + 数据报交换 | 5 | 2.098 ms/conn | 472344 B/op | 3656 allocs/op |
-| HelloRetryRequest 握手 + 数据报交换 | 5 | 1.044 ms/conn | 535648 B/op | 3995 allocs/op |
-| X25519MLKEM768 混合握手 + 数据报交换 | 5 | 1.24 ms/conn | 642360 B/op | 3716 allocs/op |
-| MTU 256 分片握手 + 数据报交换 | 5 | 1.025 ms/conn | 517248 B/op | 3939 allocs/op |
-| 完整 mTLS 握手 | 5 | 1.4 ms/conn | 549224 B/op | 4701 allocs/op |
-| 协商 ALPN 的连接 + 数据报交换 | 5 | 1.037 ms/conn | 462632 B/op | 3584 allocs/op |
-| KeyUpdate + 应用数据 1-RTT 往返 | 5 | 1.029 ms/conn | 493160 B/op | 3756 allocs/op |
-| OCSP 装订握手 + 数据报交换 | 5 | 1.193 ms/conn | 542072 B/op | 4304 allocs/op |
-| 原始公钥握手 + 数据报交换 | 5 | 0.8401 ms/conn | 445432 B/op | 3472 allocs/op |
-| 导入式外部 PSK 握手 + 数据报交换 | 5 | 0.6396 ms/conn | 425944 B/op | 3260 allocs/op |
-| 会话恢复握手 | 5 | 1.684 ms/pair | 882376 B/op | 7355 allocs/op |
-| mTLS 会话恢复握手 | 5 | 2.179 ms/pair | 1065728 B/op | 8758 allocs/op |
-| ECH 接受握手 + 数据报交换 | 5 | 1.385 ms/conn | 658296 B/op | 5540 allocs/op |
-| 委派凭证握手 + 数据报交换 | 5 | 1.354 ms/conn | 519480 B/op | 4088 allocs/op |
-| 委派凭证握手 + 会话恢复 | 5 | 2.139 ms/pair | 961976 B/op | 8087 allocs/op |
+| 证书认证 AES-128-GCM 连接 + 数据报交换 | 5 | 0.7622 ms/conn | 460504 B/op | 3536 allocs/op |
+| AES-256-GCM/SHA-384 连接 + 数据报交换 | 5 | 0.786 ms/conn | 526872 B/op | 3536 allocs/op |
+| ChaCha20-Poly1305 连接 + 数据报交换 | 5 | 0.7708 ms/conn | 398008 B/op | 3500 allocs/op |
+| P-256 密钥交换 + 数据报交换 | 5 | 0.7105 ms/conn | 467416 B/op | 3584 allocs/op |
+| P-384 密钥交换 + 数据报交换 | 5 | 1.688 ms/conn | 472344 B/op | 3656 allocs/op |
+| HelloRetryRequest 握手 + 数据报交换 | 5 | 0.8051 ms/conn | 535520 B/op | 3995 allocs/op |
+| X25519MLKEM768 混合握手 + 数据报交换 | 5 | 0.9936 ms/conn | 642488 B/op | 3716 allocs/op |
+| MTU 256 分片握手 + 数据报交换 | 5 | 0.7757 ms/conn | 517248 B/op | 3939 allocs/op |
+| 完整 mTLS 握手 | 5 | 1.015 ms/conn | 549472 B/op | 4704 allocs/op |
+| 协商 ALPN 的连接 + 数据报交换 | 5 | 0.7531 ms/conn | 462504 B/op | 3584 allocs/op |
+| KeyUpdate + 应用数据 1-RTT 往返 | 5 | 0.7179 ms/conn | 493160 B/op | 3756 allocs/op |
+| OCSP 装订握手 + 数据报交换 | 5 | 0.8811 ms/conn | 541944 B/op | 4304 allocs/op |
+| 原始公钥握手 + 数据报交换 | 5 | 0.6036 ms/conn | 445432 B/op | 3472 allocs/op |
+| 导入式外部 PSK 握手 + 数据报交换 | 5 | 0.4119 ms/conn | 425944 B/op | 3260 allocs/op |
+| 会话恢复握手 | 5 | 1.185 ms/pair | 882376 B/op | 7355 allocs/op |
+| mTLS 会话恢复握手 | 5 | 1.585 ms/pair | 1065472 B/op | 8758 allocs/op |
+| ECH 接受握手 + 数据报交换 | 5 | 1.107 ms/conn | 658296 B/op | 5540 allocs/op |
+| 委派凭证握手 + 数据报交换 | 5 | 1.103 ms/conn | 519608 B/op | 4088 allocs/op |
+| 委派凭证握手 + 会话恢复 | 5 | 1.634 ms/pair | 961976 B/op | 8087 allocs/op |
 
 <a id="real-udp-boringssl-go-peer"></a>
 ### BoringSSL / go-dtls 客户端 -> BoringSSL 服务端
@@ -310,25 +310,25 @@
 
 | 基准测试 | 样本数 | 中位耗时 | 测试框架内存 | 测试框架分配次数 |
 | --- | :---: | :---: | :---: | :---: |
-| 证书认证 AES-128-GCM 连接 + 数据报交换 | 5 | 0.763 ms/conn | 179872 B/op | 1524 allocs/op |
-| AES-256-GCM/SHA-384 连接 + 数据报交换 | 5 | 0.8288 ms/conn | 213152 B/op | 1524 allocs/op |
-| ChaCha20-Poly1305 连接 + 数据报交换 | 5 | 0.7565 ms/conn | 145056 B/op | 1503 allocs/op |
-| P-256 密钥交换 + 数据报交换 | 5 | 0.7424 ms/conn | 183008 B/op | 1548 allocs/op |
-| P-384 密钥交换 + 数据报交换 | 5 | 2.421 ms/conn | 185088 B/op | 1584 allocs/op |
-| HelloRetryRequest 握手 + 数据报交换 | 5 | 0.8545 ms/conn | 203680 B/op | 1756 allocs/op |
-| X25519MLKEM768 混合握手 + 数据报交换 | 5 | 1.006 ms/conn | 270496 B/op | 1592 allocs/op |
-| MTU 256 分片握手 + 数据报交换 | 5 | 0.9049 ms/conn | 180320 B/op | 1556 allocs/op |
-| 完整 mTLS 握手 | 5 | 1.119 ms/conn | 220000 B/op | 1900 allocs/op |
-| 协商 ALPN 的连接 + 数据报交换 | 5 | 0.8608 ms/conn | 180192 B/op | 1536 allocs/op |
-| KeyUpdate + 应用数据 1-RTT 往返 | 5 | 0.7844 ms/conn | 211776 B/op | 1708 allocs/op |
-| OCSP 装订握手 + 数据报交换 | 5 | 1.035 ms/conn | 229024 B/op | 2068 allocs/op |
-| 原始公钥握手 + 数据报交换 | 5 | 0.7745 ms/conn | 164064 B/op | 1364 allocs/op |
-| 导入式外部 PSK 握手 + 数据报交换 | 5 | 0.5191 ms/conn | 160544 B/op | 1308 allocs/op |
-| 会话恢复握手 | 5 | 1.552 ms/pair | 388016 B/op | 3280 allocs/op |
-| mTLS 会话恢复握手 | 5 | 1.786 ms/pair | 473568 B/op | 3655 allocs/op |
-| ECH 接受握手 + 数据报交换 | 5 | 1.005 ms/conn | 240960 B/op | 2252 allocs/op |
-| 委派凭证握手 + 数据报交换 | 5 | 0.94 ms/conn | 200800 B/op | 1704 allocs/op |
-| 委派凭证握手 + 会话恢复 | 5 | 1.556 ms/pair | 431616 B/op | 3631 allocs/op |
+| 证书认证 AES-128-GCM 连接 + 数据报交换 | 5 | 0.6009 ms/conn | 179872 B/op | 1524 allocs/op |
+| AES-256-GCM/SHA-384 连接 + 数据报交换 | 5 | 0.6841 ms/conn | 213152 B/op | 1524 allocs/op |
+| ChaCha20-Poly1305 连接 + 数据报交换 | 5 | 0.7009 ms/conn | 144928 B/op | 1503 allocs/op |
+| P-256 密钥交换 + 数据报交换 | 5 | 0.5991 ms/conn | 183008 B/op | 1548 allocs/op |
+| P-384 密钥交换 + 数据报交换 | 5 | 1.908 ms/conn | 185088 B/op | 1584 allocs/op |
+| HelloRetryRequest 握手 + 数据报交换 | 5 | 0.703 ms/conn | 203552 B/op | 1756 allocs/op |
+| X25519MLKEM768 混合握手 + 数据报交换 | 5 | 0.7812 ms/conn | 270624 B/op | 1592 allocs/op |
+| MTU 256 分片握手 + 数据报交换 | 5 | 0.7032 ms/conn | 180320 B/op | 1556 allocs/op |
+| 完整 mTLS 握手 | 5 | 0.9082 ms/conn | 220000 B/op | 1900 allocs/op |
+| 协商 ALPN 的连接 + 数据报交换 | 5 | 0.6609 ms/conn | 180064 B/op | 1536 allocs/op |
+| KeyUpdate + 应用数据 1-RTT 往返 | 5 | 0.6148 ms/conn | 211776 B/op | 1708 allocs/op |
+| OCSP 装订握手 + 数据报交换 | 5 | 0.806 ms/conn | 228896 B/op | 2068 allocs/op |
+| 原始公钥握手 + 数据报交换 | 5 | 0.5952 ms/conn | 164064 B/op | 1364 allocs/op |
+| 导入式外部 PSK 握手 + 数据报交换 | 5 | 0.4204 ms/conn | 160544 B/op | 1308 allocs/op |
+| 会话恢复握手 | 5 | 1.004 ms/pair | 388000 B/op | 3279 allocs/op |
+| mTLS 会话恢复握手 | 5 | 1.252 ms/pair | 473440 B/op | 3655 allocs/op |
+| ECH 接受握手 + 数据报交换 | 5 | 0.8042 ms/conn | 240960 B/op | 2252 allocs/op |
+| 委派凭证握手 + 数据报交换 | 5 | 0.6531 ms/conn | 200928 B/op | 1704 allocs/op |
+| 委派凭证握手 + 会话恢复 | 5 | 1.12 ms/pair | 431616 B/op | 3631 allocs/op |
 
 <a id="real-udp-boringssl-peer-go"></a>
 ### BoringSSL / BoringSSL 客户端 -> go-dtls 服务端
@@ -337,23 +337,23 @@
 
 | 基准测试 | 样本数 | 中位耗时 | 测试框架内存 | 测试框架分配次数 |
 | --- | :---: | :---: | :---: | :---: |
-| 证书认证 AES-128-GCM 连接 + 数据报交换 | 5 | 2.55 ms/conn | 480968 B/op | 1913 allocs/op |
-| AES-256-GCM/SHA-384 连接 + 数据报交换 | 5 | 2.562 ms/conn | 512776 B/op | 1913 allocs/op |
-| ChaCha20-Poly1305 连接 + 数据报交换 | 5 | 2.481 ms/conn | 453256 B/op | 1897 allocs/op |
-| P-256 密钥交换 + 数据报交换 | 5 | 2.476 ms/conn | 483976 B/op | 1937 allocs/op |
-| P-384 密钥交换 + 数据报交换 | 5 | 4.204 ms/conn | 486312 B/op | 1973 allocs/op |
-| HelloRetryRequest 握手 + 数据报交换 | 5 | 2.468 ms/conn | 514408 B/op | 2109 allocs/op |
-| X25519MLKEM768 混合握手 + 数据报交换 | 5 | 2.642 ms/conn | 546344 B/op | 1933 allocs/op |
-| MTU 256 分片握手 + 数据报交换 | 5 | 2.47 ms/conn | 514184 B/op | 2097 allocs/op |
-| 完整 mTLS 握手 | 5 | 2.977 ms/conn | 520936 B/op | 2393 allocs/op |
-| 协商 ALPN 的连接 + 数据报交换 | 5 | 2.506 ms/conn | 482504 B/op | 1945 allocs/op |
-| KeyUpdate + 应用数据 1-RTT 往返 | 5 | 2.515 ms/conn | 496648 B/op | 2025 allocs/op |
-| OCSP 装订握手 + 数据报交换 | 5 | 2.536 ms/conn | 506536 B/op | 2133 allocs/op |
-| 原始公钥握手 + 数据报交换 | 5 | 2.386 ms/conn | 484072 B/op | 2009 allocs/op |
-| 导入式外部 PSK 握手 + 数据报交换 | 5 | 2.184 ms/conn | 461416 B/op | 1813 allocs/op |
-| 会话恢复握手 | 5 | 3.176 ms/pair | 701848 B/op | 3762 allocs/op |
-| mTLS 会话恢复握手 | 5 | 3.548 ms/pair | 798168 B/op | 4474 allocs/op |
-| ECH 接受握手 + 数据报交换 | 5 | 2.901 ms/conn | 562664 B/op | 2793 allocs/op |
+| 证书认证 AES-128-GCM 连接 + 数据报交换 | 5 | 2.116 ms/conn | 480968 B/op | 1913 allocs/op |
+| AES-256-GCM/SHA-384 连接 + 数据报交换 | 5 | 2.031 ms/conn | 512776 B/op | 1913 allocs/op |
+| ChaCha20-Poly1305 连接 + 数据报交换 | 5 | 2.096 ms/conn | 453256 B/op | 1897 allocs/op |
+| P-256 密钥交换 + 数据报交换 | 5 | 2.131 ms/conn | 483976 B/op | 1937 allocs/op |
+| P-384 密钥交换 + 数据报交换 | 5 | 3.353 ms/conn | 486312 B/op | 1973 allocs/op |
+| HelloRetryRequest 握手 + 数据报交换 | 5 | 2.189 ms/conn | 514408 B/op | 2109 allocs/op |
+| X25519MLKEM768 混合握手 + 数据报交换 | 5 | 2.302 ms/conn | 546344 B/op | 1933 allocs/op |
+| MTU 256 分片握手 + 数据报交换 | 5 | 2.145 ms/conn | 514184 B/op | 2097 allocs/op |
+| 完整 mTLS 握手 | 5 | 2.216 ms/conn | 520936 B/op | 2393 allocs/op |
+| 协商 ALPN 的连接 + 数据报交换 | 5 | 2.084 ms/conn | 482504 B/op | 1945 allocs/op |
+| KeyUpdate + 应用数据 1-RTT 往返 | 5 | 2.045 ms/conn | 496648 B/op | 2025 allocs/op |
+| OCSP 装订握手 + 数据报交换 | 5 | 2.222 ms/conn | 506536 B/op | 2133 allocs/op |
+| 原始公钥握手 + 数据报交换 | 5 | 2.013 ms/conn | 484072 B/op | 2009 allocs/op |
+| 导入式外部 PSK 握手 + 数据报交换 | 5 | 1.761 ms/conn | 461416 B/op | 1813 allocs/op |
+| 会话恢复握手 | 5 | 2.488 ms/pair | 701848 B/op | 3762 allocs/op |
+| mTLS 会话恢复握手 | 5 | 2.877 ms/pair | 798024 B/op | 4474 allocs/op |
+| ECH 接受握手 + 数据报交换 | 5 | 2.411 ms/conn | 562664 B/op | 2793 allocs/op |
 | 委派凭证握手 + 数据报交换 | - | 跳过: BoringSSL 客户端不认证 DTLS 1.3 委派凭证；该限制最后验证于 BoringSSL commit 4f3b183c5d4a8f8fcaba4c0ab4435df181df6978 | - | - |
 | 委派凭证握手 + 会话恢复 | - | 跳过: BoringSSL 客户端不认证 DTLS 1.3 委派凭证；该限制最后验证于 BoringSSL commit 4f3b183c5d4a8f8fcaba4c0ab4435df181df6978 | - | - |
 
@@ -364,23 +364,23 @@
 
 | 基准测试 | 样本数 | 中位耗时 | 测试框架内存 | 测试框架分配次数 |
 | --- | :---: | :---: | :---: | :---: |
-| 证书认证 AES-128-GCM 连接 + 数据报交换 | 5 | 2.163 ms/conn | 212768 B/op | 176 allocs/op |
-| AES-256-GCM/SHA-384 连接 + 数据报交换 | 5 | 2.278 ms/conn | 212512 B/op | 176 allocs/op |
-| ChaCha20-Poly1305 连接 + 数据报交换 | 5 | 2.131 ms/conn | 212832 B/op | 176 allocs/op |
-| P-256 密钥交换 + 数据报交换 | 5 | 2.161 ms/conn | 212256 B/op | 176 allocs/op |
-| P-384 密钥交换 + 数据报交换 | 5 | 4.224 ms/conn | 212256 B/op | 176 allocs/op |
-| HelloRetryRequest 握手 + 数据报交换 | 5 | 2.259 ms/conn | 212768 B/op | 176 allocs/op |
-| X25519MLKEM768 混合握手 + 数据报交换 | 5 | 2.298 ms/conn | 212768 B/op | 176 allocs/op |
-| MTU 256 分片握手 + 数据报交换 | 5 | 2.153 ms/conn | 212768 B/op | 176 allocs/op |
-| 完整 mTLS 握手 | 5 | 2.593 ms/conn | 212512 B/op | 176 allocs/op |
-| 协商 ALPN 的连接 + 数据报交换 | 5 | 2.159 ms/conn | 212256 B/op | 176 allocs/op |
-| KeyUpdate + 应用数据 1-RTT 往返 | 5 | 2.126 ms/conn | 212512 B/op | 176 allocs/op |
-| OCSP 装订握手 + 数据报交换 | 5 | 2.23 ms/conn | 212512 B/op | 176 allocs/op |
-| 原始公钥握手 + 数据报交换 | 5 | 2.191 ms/conn | 212512 B/op | 176 allocs/op |
-| 导入式外部 PSK 握手 + 数据报交换 | 5 | 2.019 ms/conn | 212512 B/op | 176 allocs/op |
-| 会话恢复握手 | 5 | 2.732 ms/pair | 210592 B/op | 192 allocs/op |
-| mTLS 会话恢复握手 | 5 | 2.895 ms/pair | 210848 B/op | 192 allocs/op |
-| ECH 接受握手 + 数据报交换 | 5 | 2.281 ms/conn | 212256 B/op | 176 allocs/op |
+| 证书认证 AES-128-GCM 连接 + 数据报交换 | 5 | 1.846 ms/conn | 212768 B/op | 176 allocs/op |
+| AES-256-GCM/SHA-384 连接 + 数据报交换 | 5 | 1.906 ms/conn | 212512 B/op | 176 allocs/op |
+| ChaCha20-Poly1305 连接 + 数据报交换 | 5 | 1.84 ms/conn | 212832 B/op | 176 allocs/op |
+| P-256 密钥交换 + 数据报交换 | 5 | 1.842 ms/conn | 212256 B/op | 176 allocs/op |
+| P-384 密钥交换 + 数据报交换 | 5 | 3.271 ms/conn | 212256 B/op | 176 allocs/op |
+| HelloRetryRequest 握手 + 数据报交换 | 5 | 1.942 ms/conn | 212768 B/op | 176 allocs/op |
+| X25519MLKEM768 混合握手 + 数据报交换 | 5 | 1.994 ms/conn | 212768 B/op | 176 allocs/op |
+| MTU 256 分片握手 + 数据报交换 | 5 | 1.869 ms/conn | 212768 B/op | 176 allocs/op |
+| 完整 mTLS 握手 | 5 | 1.943 ms/conn | 212512 B/op | 176 allocs/op |
+| 协商 ALPN 的连接 + 数据报交换 | 5 | 1.789 ms/conn | 212256 B/op | 176 allocs/op |
+| KeyUpdate + 应用数据 1-RTT 往返 | 5 | 1.71 ms/conn | 212512 B/op | 176 allocs/op |
+| OCSP 装订握手 + 数据报交换 | 5 | 1.824 ms/conn | 212512 B/op | 176 allocs/op |
+| 原始公钥握手 + 数据报交换 | 5 | 1.854 ms/conn | 212512 B/op | 176 allocs/op |
+| 导入式外部 PSK 握手 + 数据报交换 | 5 | 1.725 ms/conn | 212512 B/op | 176 allocs/op |
+| 会话恢复握手 | 5 | 2.237 ms/pair | 210592 B/op | 192 allocs/op |
+| mTLS 会话恢复握手 | 5 | 2.371 ms/pair | 210848 B/op | 192 allocs/op |
+| ECH 接受握手 + 数据报交换 | 5 | 2 ms/conn | 212256 B/op | 176 allocs/op |
 | 委派凭证握手 + 数据报交换 | - | 跳过: BoringSSL 客户端不认证 DTLS 1.3 委派凭证；该限制最后验证于 BoringSSL commit 4f3b183c5d4a8f8fcaba4c0ab4435df181df6978 | - | - |
 | 委派凭证握手 + 会话恢复 | - | 跳过: BoringSSL 客户端不认证 DTLS 1.3 委派凭证；该限制最后验证于 BoringSSL commit 4f3b183c5d4a8f8fcaba4c0ab4435df181df6978 | - | - |
 
@@ -391,25 +391,25 @@
 
 | 基准测试 | 样本数 | 中位耗时 | 测试框架内存 | 测试框架分配次数 |
 | --- | :---: | :---: | :---: | :---: |
-| 证书认证 AES-128-GCM 连接 + 数据报交换 | 5 | 1.005 ms/conn | 460632 B/op | 3536 allocs/op |
-| AES-256-GCM/SHA-384 连接 + 数据报交换 | 5 | 1.047 ms/conn | 526872 B/op | 3536 allocs/op |
-| ChaCha20-Poly1305 连接 + 数据报交换 | 5 | 1.02 ms/conn | 398136 B/op | 3500 allocs/op |
-| 证书认证完整握手 / AES-128-CCM | 5 | 1.016 ms/conn | 525160 B/op | 4222 allocs/op |
-| P-256 密钥交换 + 数据报交换 | 5 | 0.965 ms/conn | 467416 B/op | 3584 allocs/op |
-| P-384 密钥交换 + 数据报交换 | 5 | 2.121 ms/conn | 472344 B/op | 3656 allocs/op |
-| HelloRetryRequest 握手 + 数据报交换 | 5 | 0.9876 ms/conn | 535648 B/op | 3995 allocs/op |
-| X25519MLKEM768 混合握手 + 数据报交换 | 5 | 1.256 ms/conn | 642360 B/op | 3716 allocs/op |
-| MTU 256 分片握手 + 数据报交换 | 5 | 1.031 ms/conn | 517248 B/op | 3939 allocs/op |
-| 完整 mTLS 握手 | 5 | 1.461 ms/conn | 549224 B/op | 4704 allocs/op |
-| 协商 ALPN 的连接 + 数据报交换 | 5 | 1.024 ms/conn | 462632 B/op | 3584 allocs/op |
-| KeyUpdate + 应用数据 1-RTT 往返 | 5 | 1.032 ms/conn | 493160 B/op | 3756 allocs/op |
-| OCSP 装订握手 + 数据报交换 | 5 | 1.198 ms/conn | 541048 B/op | 4304 allocs/op |
-| 原始公钥握手 + 数据报交换 | 5 | 0.8546 ms/conn | 445432 B/op | 3472 allocs/op |
-| 直接外部 PSK 握手 | 5 | 0.6375 ms/conn | 423192 B/op | 3252 allocs/op |
-| 会话恢复握手 | 5 | 1.648 ms/pair | 882248 B/op | 7355 allocs/op |
-| mTLS 会话恢复握手 | 5 | 2.193 ms/pair | 1065096 B/op | 8755 allocs/op |
-| 0-RTT + 应用数据 1-RTT 往返 | 5 | 1.711 ms/pair | 882184 B/op | 7303 allocs/op |
-| PHA + 应用数据 1-RTT 往返 | 5 | 1.919 ms/conn | 653728 B/op | 6120 allocs/op |
+| 证书认证 AES-128-GCM 连接 + 数据报交换 | 5 | 0.7336 ms/conn | 460632 B/op | 3536 allocs/op |
+| AES-256-GCM/SHA-384 连接 + 数据报交换 | 5 | 0.7482 ms/conn | 526744 B/op | 3536 allocs/op |
+| ChaCha20-Poly1305 连接 + 数据报交换 | 5 | 0.6968 ms/conn | 398008 B/op | 3500 allocs/op |
+| 证书认证完整握手 / AES-128-CCM | 5 | 0.6908 ms/conn | 525288 B/op | 4222 allocs/op |
+| P-256 密钥交换 + 数据报交换 | 5 | 0.6851 ms/conn | 467416 B/op | 3584 allocs/op |
+| P-384 密钥交换 + 数据报交换 | 5 | 1.573 ms/conn | 472344 B/op | 3656 allocs/op |
+| HelloRetryRequest 握手 + 数据报交换 | 5 | 0.7517 ms/conn | 535648 B/op | 3995 allocs/op |
+| X25519MLKEM768 混合握手 + 数据报交换 | 5 | 0.8927 ms/conn | 642360 B/op | 3716 allocs/op |
+| MTU 256 分片握手 + 数据报交换 | 5 | 0.7444 ms/conn | 517248 B/op | 3939 allocs/op |
+| 完整 mTLS 握手 | 5 | 1.103 ms/conn | 549096 B/op | 4703 allocs/op |
+| 协商 ALPN 的连接 + 数据报交换 | 5 | 0.6933 ms/conn | 462632 B/op | 3584 allocs/op |
+| KeyUpdate + 应用数据 1-RTT 往返 | 5 | 0.7266 ms/conn | 493032 B/op | 3756 allocs/op |
+| OCSP 装订握手 + 数据报交换 | 5 | 0.9048 ms/conn | 542072 B/op | 4304 allocs/op |
+| 原始公钥握手 + 数据报交换 | 5 | 0.5345 ms/conn | 445432 B/op | 3472 allocs/op |
+| 直接外部 PSK 握手 | 5 | 0.4187 ms/conn | 423192 B/op | 3252 allocs/op |
+| 会话恢复握手 | 5 | 1.099 ms/pair | 882248 B/op | 7355 allocs/op |
+| mTLS 会话恢复握手 | 5 | 1.429 ms/pair | 1065736 B/op | 8755 allocs/op |
+| 0-RTT + 应用数据 1-RTT 往返 | 5 | 1.121 ms/pair | 882376 B/op | 7303 allocs/op |
+| PHA + 应用数据 1-RTT 往返 | 5 | 1.457 ms/conn | 653728 B/op | 6120 allocs/op |
 
 <a id="real-udp-openssl-go-peer"></a>
 ### OpenSSL / go-dtls 客户端 -> OpenSSL 服务端
@@ -418,25 +418,25 @@
 
 | 基准测试 | 样本数 | 中位耗时 | 测试框架内存 | 测试框架分配次数 |
 | --- | :---: | :---: | :---: | :---: |
-| 证书认证 AES-128-GCM 连接 + 数据报交换 | 5 | 1.063 ms/conn | 210848 B/op | 1776 allocs/op |
-| AES-256-GCM/SHA-384 连接 + 数据报交换 | 5 | 1.167 ms/conn | 244896 B/op | 1776 allocs/op |
-| ChaCha20-Poly1305 连接 + 数据报交换 | 5 | 1.129 ms/conn | 175904 B/op | 1755 allocs/op |
-| 证书认证完整握手 / AES-128-CCM | 5 | 1.216 ms/conn | 264352 B/op | 2316 allocs/op |
-| P-256 密钥交换 + 数据报交换 | 5 | 1.107 ms/conn | 220192 B/op | 1844 allocs/op |
-| P-384 密钥交换 + 数据报交换 | 5 | 3.502 ms/conn | 219968 B/op | 1860 allocs/op |
-| HelloRetryRequest 握手 + 数据报交换 | 5 | 1.277 ms/conn | 223520 B/op | 1892 allocs/op |
-| X25519MLKEM768 混合握手 + 数据报交换 | 5 | 1.465 ms/conn | 331440 B/op | 1880 allocs/op |
-| MTU 256 分片握手 + 数据报交换 | 5 | 1.123 ms/conn | 211552 B/op | 1788 allocs/op |
-| 完整 mTLS 握手 | 5 | 1.488 ms/conn | 266688 B/op | 2240 allocs/op |
-| 协商 ALPN 的连接 + 数据报交换 | 5 | 1.191 ms/conn | 214368 B/op | 1812 allocs/op |
-| KeyUpdate + 应用数据 1-RTT 往返 | 5 | 1.18 ms/conn | 247104 B/op | 1988 allocs/op |
-| OCSP 装订握手 + 数据报交换 | 5 | 1.496 ms/conn | 269792 B/op | 2416 allocs/op |
-| 原始公钥握手 + 数据报交换 | 5 | 1.053 ms/conn | 193952 B/op | 1600 allocs/op |
-| 直接外部 PSK 握手 | 5 | 0.9226 ms/conn | 199008 B/op | 1680 allocs/op |
-| 会话恢复握手 | 5 | 1.987 ms/pair | 470464 B/op | 3879 allocs/op |
-| mTLS 会话恢复握手 | 5 | 2.827 ms/pair | 590128 B/op | 4440 allocs/op |
+| 证书认证 AES-128-GCM 连接 + 数据报交换 | 5 | 0.892 ms/conn | 210848 B/op | 1776 allocs/op |
+| AES-256-GCM/SHA-384 连接 + 数据报交换 | 5 | 0.868 ms/conn | 244768 B/op | 1776 allocs/op |
+| ChaCha20-Poly1305 连接 + 数据报交换 | 5 | 0.8746 ms/conn | 175776 B/op | 1755 allocs/op |
+| 证书认证完整握手 / AES-128-CCM | 5 | 0.844 ms/conn | 264480 B/op | 2316 allocs/op |
+| P-256 密钥交换 + 数据报交换 | 5 | 0.8468 ms/conn | 220192 B/op | 1844 allocs/op |
+| P-384 密钥交换 + 数据报交换 | 5 | 2.648 ms/conn | 219968 B/op | 1860 allocs/op |
+| HelloRetryRequest 握手 + 数据报交换 | 5 | 0.8469 ms/conn | 223520 B/op | 1892 allocs/op |
+| X25519MLKEM768 混合握手 + 数据报交换 | 5 | 1.147 ms/conn | 331456 B/op | 1880 allocs/op |
+| MTU 256 分片握手 + 数据报交换 | 5 | 0.921 ms/conn | 211552 B/op | 1788 allocs/op |
+| 完整 mTLS 握手 | 5 | 1.177 ms/conn | 266560 B/op | 2240 allocs/op |
+| 协商 ALPN 的连接 + 数据报交换 | 5 | 0.8858 ms/conn | 214368 B/op | 1812 allocs/op |
+| KeyUpdate + 应用数据 1-RTT 往返 | 5 | 0.9099 ms/conn | 246880 B/op | 1987 allocs/op |
+| OCSP 装订握手 + 数据报交换 | 5 | 1.062 ms/conn | 270368 B/op | 2416 allocs/op |
+| 原始公钥握手 + 数据报交换 | 5 | 0.8145 ms/conn | 193952 B/op | 1600 allocs/op |
+| 直接外部 PSK 握手 | 5 | 0.6149 ms/conn | 199008 B/op | 1680 allocs/op |
+| 会话恢复握手 | 5 | 1.462 ms/pair | 471312 B/op | 3881 allocs/op |
+| mTLS 会话恢复握手 | 5 | 1.899 ms/pair | 590240 B/op | 4439 allocs/op |
 | 0-RTT + 应用数据 1-RTT 往返 | - | 跳过: OpenSSL 监听器无法进入 DTLS 早期数据读取状态；该限制最后验证于 OpenSSL commit 41eecc7c7cd4069b1b29bca49b9d97825c6bf648 | - | - |
-| PHA + 应用数据 1-RTT 往返 | 5 | 1.342 ms/conn | 270080 B/op | 2304 allocs/op |
+| PHA + 应用数据 1-RTT 往返 | 5 | 0.9986 ms/conn | 270824 B/op | 2313 allocs/op |
 
 <a id="real-udp-openssl-peer-go"></a>
 ### OpenSSL / OpenSSL 客户端 -> go-dtls 服务端
@@ -445,25 +445,25 @@
 
 | 基准测试 | 样本数 | 中位耗时 | 测试框架内存 | 测试框架分配次数 |
 | --- | :---: | :---: | :---: | :---: |
-| 证书认证 AES-128-GCM 连接 + 数据报交换 | 5 | 5.195 ms/conn | 485416 B/op | 1937 allocs/op |
-| AES-256-GCM/SHA-384 连接 + 数据报交换 | 5 | 5.206 ms/conn | 517160 B/op | 1937 allocs/op |
-| ChaCha20-Poly1305 连接 + 数据报交换 | 5 | 5.273 ms/conn | 457704 B/op | 1921 allocs/op |
-| 证书认证完整握手 / AES-128-CCM | 5 | 5.187 ms/conn | 500392 B/op | 2141 allocs/op |
-| P-256 密钥交换 + 数据报交换 | 5 | 5.178 ms/conn | 488232 B/op | 1961 allocs/op |
-| P-384 密钥交换 + 数据报交换 | 5 | 7.566 ms/conn | 490568 B/op | 1997 allocs/op |
-| HelloRetryRequest 握手 + 数据报交换 | 5 | 5.204 ms/conn | 518600 B/op | 2133 allocs/op |
-| X25519MLKEM768 混合握手 + 数据报交换 | 5 | 5.414 ms/conn | 549960 B/op | 1957 allocs/op |
-| MTU 256 分片握手 + 数据报交换 | 5 | 5.521 ms/conn | 518696 B/op | 2121 allocs/op |
-| 完整 mTLS 握手 | 5 | 5.769 ms/conn | 525704 B/op | 2433 allocs/op |
-| 协商 ALPN 的连接 + 数据报交换 | 5 | 5.856 ms/conn | 486824 B/op | 1969 allocs/op |
-| KeyUpdate + 应用数据 1-RTT 往返 | 5 | 5.435 ms/conn | 518344 B/op | 2189 allocs/op |
-| OCSP 装订握手 + 数据报交换 | 5 | 5.498 ms/conn | 510472 B/op | 2157 allocs/op |
-| 原始公钥握手 + 数据报交换 | 5 | 5.799 ms/conn | 485480 B/op | 2001 allocs/op |
-| 直接外部 PSK 握手 | 5 | 5.092 ms/conn | 464360 B/op | 1825 allocs/op |
-| 会话恢复握手 | 5 | 6.214 ms/pair | 713448 B/op | 3882 allocs/op |
-| mTLS 会话恢复握手 | 5 | 6.65 ms/pair | 809960 B/op | 4610 allocs/op |
-| 0-RTT + 应用数据 1-RTT 往返 | 5 | 5.993 ms/pair | 711744 B/op | 3784 allocs/op |
-| PHA + 应用数据 1-RTT 往返 | 5 | 5.943 ms/conn | 578728 B/op | 3137 allocs/op |
+| 证书认证 AES-128-GCM 连接 + 数据报交换 | 5 | 4.323 ms/conn | 485416 B/op | 1937 allocs/op |
+| AES-256-GCM/SHA-384 连接 + 数据报交换 | 5 | 4.125 ms/conn | 517160 B/op | 1937 allocs/op |
+| ChaCha20-Poly1305 连接 + 数据报交换 | 5 | 4.172 ms/conn | 457704 B/op | 1921 allocs/op |
+| 证书认证完整握手 / AES-128-CCM | 5 | 4.132 ms/conn | 500392 B/op | 2141 allocs/op |
+| P-256 密钥交换 + 数据报交换 | 5 | 4.222 ms/conn | 488232 B/op | 1961 allocs/op |
+| P-384 密钥交换 + 数据报交换 | 5 | 5.86 ms/conn | 490568 B/op | 1997 allocs/op |
+| HelloRetryRequest 握手 + 数据报交换 | 5 | 4.39 ms/conn | 518600 B/op | 2133 allocs/op |
+| X25519MLKEM768 混合握手 + 数据报交换 | 5 | 4.453 ms/conn | 549960 B/op | 1957 allocs/op |
+| MTU 256 分片握手 + 数据报交换 | 5 | 4.136 ms/conn | 518632 B/op | 2121 allocs/op |
+| 完整 mTLS 握手 | 5 | 4.453 ms/conn | 525704 B/op | 2433 allocs/op |
+| 协商 ALPN 的连接 + 数据报交换 | 5 | 4.125 ms/conn | 486824 B/op | 1969 allocs/op |
+| KeyUpdate + 应用数据 1-RTT 往返 | 5 | 4.252 ms/conn | 518344 B/op | 2189 allocs/op |
+| OCSP 装订握手 + 数据报交换 | 5 | 4.306 ms/conn | 510984 B/op | 2157 allocs/op |
+| 原始公钥握手 + 数据报交换 | 5 | 4.542 ms/conn | 485480 B/op | 2001 allocs/op |
+| 直接外部 PSK 握手 | 5 | 3.894 ms/conn | 464360 B/op | 1825 allocs/op |
+| 会话恢复握手 | 5 | 4.791 ms/pair | 713448 B/op | 3882 allocs/op |
+| mTLS 会话恢复握手 | 5 | 5.226 ms/pair | 810088 B/op | 4610 allocs/op |
+| 0-RTT + 应用数据 1-RTT 往返 | 5 | 4.781 ms/pair | 711992 B/op | 3787 allocs/op |
+| PHA + 应用数据 1-RTT 往返 | 5 | 4.786 ms/conn | 578728 B/op | 3137 allocs/op |
 
 <a id="real-udp-openssl-peer-peer"></a>
 ### OpenSSL / OpenSSL 客户端 -> OpenSSL 服务端
@@ -472,59 +472,59 @@
 
 | 基准测试 | 样本数 | 中位耗时 | 测试框架内存 | 测试框架分配次数 |
 | --- | :---: | :---: | :---: | :---: |
-| 证书认证 AES-128-GCM 连接 + 数据报交换 | 5 | 5.227 ms/conn | 212832 B/op | 176 allocs/op |
-| AES-256-GCM/SHA-384 连接 + 数据报交换 | 5 | 5.462 ms/conn | 212576 B/op | 176 allocs/op |
-| ChaCha20-Poly1305 连接 + 数据报交换 | 5 | 5.189 ms/conn | 212896 B/op | 176 allocs/op |
-| 证书认证完整握手 / AES-128-CCM | 5 | 5.167 ms/conn | 212576 B/op | 176 allocs/op |
-| P-256 密钥交换 + 数据报交换 | 5 | 5.252 ms/conn | 212320 B/op | 176 allocs/op |
-| P-384 密钥交换 + 数据报交换 | 5 | 8.724 ms/conn | 212320 B/op | 176 allocs/op |
-| HelloRetryRequest 握手 + 数据报交换 | 5 | 5.289 ms/conn | 212832 B/op | 176 allocs/op |
-| X25519MLKEM768 混合握手 + 数据报交换 | 5 | 5.614 ms/conn | 212576 B/op | 176 allocs/op |
-| MTU 256 分片握手 + 数据报交换 | 5 | 5.399 ms/conn | 212832 B/op | 176 allocs/op |
-| 完整 mTLS 握手 | 5 | 5.553 ms/conn | 212576 B/op | 176 allocs/op |
-| 协商 ALPN 的连接 + 数据报交换 | 5 | 5.617 ms/conn | 212320 B/op | 176 allocs/op |
-| KeyUpdate + 应用数据 1-RTT 往返 | 5 | 5.435 ms/conn | 212576 B/op | 176 allocs/op |
-| OCSP 装订握手 + 数据报交换 | 5 | 5.488 ms/conn | 212576 B/op | 176 allocs/op |
-| 原始公钥握手 + 数据报交换 | 5 | 5.918 ms/conn | 212576 B/op | 176 allocs/op |
-| 直接外部 PSK 握手 | 5 | 4.996 ms/conn | 212576 B/op | 176 allocs/op |
-| 会话恢复握手 | 5 | 6.296 ms/pair | 210656 B/op | 192 allocs/op |
-| mTLS 会话恢复握手 | 5 | 6.936 ms/pair | 210912 B/op | 192 allocs/op |
+| 证书认证 AES-128-GCM 连接 + 数据报交换 | 5 | 4.287 ms/conn | 212832 B/op | 176 allocs/op |
+| AES-256-GCM/SHA-384 连接 + 数据报交换 | 5 | 4.275 ms/conn | 212576 B/op | 176 allocs/op |
+| ChaCha20-Poly1305 连接 + 数据报交换 | 5 | 4.391 ms/conn | 212896 B/op | 176 allocs/op |
+| 证书认证完整握手 / AES-128-CCM | 5 | 4.326 ms/conn | 212576 B/op | 176 allocs/op |
+| P-256 密钥交换 + 数据报交换 | 5 | 4.411 ms/conn | 212320 B/op | 176 allocs/op |
+| P-384 密钥交换 + 数据报交换 | 5 | 6.888 ms/conn | 212320 B/op | 176 allocs/op |
+| HelloRetryRequest 握手 + 数据报交换 | 5 | 4.438 ms/conn | 212832 B/op | 176 allocs/op |
+| X25519MLKEM768 混合握手 + 数据报交换 | 5 | 4.604 ms/conn | 212576 B/op | 176 allocs/op |
+| MTU 256 分片握手 + 数据报交换 | 5 | 4.367 ms/conn | 212832 B/op | 176 allocs/op |
+| 完整 mTLS 握手 | 5 | 4.468 ms/conn | 212576 B/op | 176 allocs/op |
+| 协商 ALPN 的连接 + 数据报交换 | 5 | 4.23 ms/conn | 212320 B/op | 176 allocs/op |
+| KeyUpdate + 应用数据 1-RTT 往返 | 5 | 4.474 ms/conn | 212576 B/op | 176 allocs/op |
+| OCSP 装订握手 + 数据报交换 | 5 | 4.465 ms/conn | 212576 B/op | 176 allocs/op |
+| 原始公钥握手 + 数据报交换 | 5 | 4.626 ms/conn | 212576 B/op | 176 allocs/op |
+| 直接外部 PSK 握手 | 5 | 4.091 ms/conn | 212576 B/op | 176 allocs/op |
+| 会话恢复握手 | 5 | 4.894 ms/pair | 210656 B/op | 192 allocs/op |
+| mTLS 会话恢复握手 | 5 | 5.546 ms/pair | 210912 B/op | 192 allocs/op |
 | 0-RTT + 应用数据 1-RTT 往返 | - | 跳过: OpenSSL 监听器无法进入 DTLS 早期数据读取状态；该限制最后验证于 OpenSSL commit 41eecc7c7cd4069b1b29bca49b9d97825c6bf648 | - | - |
-| PHA + 应用数据 1-RTT 往返 | 5 | 5.514 ms/conn | 213088 B/op | 176 allocs/op |
+| PHA + 应用数据 1-RTT 往返 | 5 | 4.536 ms/conn | 213088 B/op | 176 allocs/op |
 
 <a id="section-record-layer-and-reliability"></a>
 ## 记录层与可靠性
 
 | 基准测试 | 样本数 | 中位耗时 | 吞吐量 | 测试框架内存 | 测试框架分配次数 |
 | --- | :---: | :---: | :---: | :---: | :---: |
-| 明文 ACK 构建 / 空 | 5 | 36.86 ns/op | - | 16 B/op | 1 allocs/op |
-| 明文 ACK 构建 / 单条 | 5 | 45.03 ns/op | - | 32 B/op | 1 allocs/op |
-| 明文 ACK 构建 / 已排序 64 | 5 | 523.7 ns/op | - | 1152 B/op | 1 allocs/op |
-| 构建明文握手报文组 | 5 | 2.057 us/op | 1991.47 MB/s | 5008 B/op | 9 allocs/op |
-| 受保护 ACK 构建 / 逆序 64 | 5 | 1.699 us/op | - | 2200 B/op | 3 allocs/op |
-| 受保护 ACK 构建 / 单条 | 5 | 202.4 ns/op | - | 72 B/op | 2 allocs/op |
-| 受保护 ACK 构建 / 单条复用 | 5 | 170.6 ns/op | - | 48 B/op | 1 allocs/op |
-| 受保护 ACK 构建 / 已排序 64 | 5 | 928 ns/op | - | 1176 B/op | 2 allocs/op |
-| 构建受保护握手报文组 | 5 | 3.605 us/op | 1136.07 MB/s | 5584 B/op | 6 allocs/op |
-| 合并握手报文组 | 5 | 329.8 ns/op | - | 592 B/op | 4 allocs/op |
-| 握手报文组首次刷新 | 5 | 89.86 ns/op | - | 0 B/op | 0 allocs/op |
-| 握手报文组初始历史批次 | 5 | 345.3 ns/op | - | 480 B/op | 1 allocs/op |
-| 握手报文组传输窗口 / 重传 | 5 | 22.53 ns/op | - | 0 B/op | 0 allocs/op |
-| 解析 ACK / 独占 | 5 | 24.04 ns/op | - | 16 B/op | 1 allocs/op |
-| 解析 ACK / 单条复用 | 5 | 4.372 ns/op | - | 0 B/op | 0 allocs/op |
-| 受保护记录 CID / 往返 | 5 | 2.222 us/op | 539.94 MB/s | 3840 B/op | 3 allocs/op |
-| 受保护记录 CID / 封装 | 5 | 870.7 ns/op | 1378.28 MB/s | 1280 B/op | 1 allocs/op |
-| 拒绝未认证记录 | 5 | 15.3 ns/op | - | 0 B/op | 0 allocs/op |
-| 记录往返 | 5 | 2.32 us/op | 517.31 MB/s | 3840 B/op | 3 allocs/op |
-| 受保护记录原地往返 | 5 | 1.349 us/op | 889.84 MB/s | 1280 B/op | 1 allocs/op |
-| 记录往返 / AES-128-CCM | 5 | 7.066 us/op | 169.84 MB/s | 6240 B/op | 12 allocs/op |
-| 记录往返 / AES-128-GCM | 5 | 2.188 us/op | 548.51 MB/s | 3840 B/op | 3 allocs/op |
-| 记录往返 / AES-256-GCM | 5 | 2.307 us/op | 520.26 MB/s | 3840 B/op | 3 allocs/op |
-| 记录往返 / ChaCha20-Poly1305 | 5 | 3.037 us/op | 395.19 MB/s | 3840 B/op | 3 allocs/op |
-| 记录封装 | 5 | 929.1 ns/op | 1291.58 MB/s | 1280 B/op | 1 allocs/op |
-| 记录封装 / AES-128-CCM | 5 | 3.037 us/op | 395.14 MB/s | 1840 B/op | 5 allocs/op |
-| 记录封装 / AES-128-GCM | 5 | 868.3 ns/op | 1381.95 MB/s | 1280 B/op | 1 allocs/op |
-| 记录封装 / AES-256-GCM | 5 | 922.7 ns/op | 1300.58 MB/s | 1280 B/op | 1 allocs/op |
-| 记录封装 / ChaCha20-Poly1305 | 5 | 1.294 us/op | 927.16 MB/s | 1280 B/op | 1 allocs/op |
+| 明文 ACK 构建 / 空 | 5 | 30.25 ns/op | - | 16 B/op | 1 allocs/op |
+| 明文 ACK 构建 / 单条 | 5 | 37.59 ns/op | - | 32 B/op | 1 allocs/op |
+| 明文 ACK 构建 / 已排序 64 | 5 | 496.2 ns/op | - | 1152 B/op | 1 allocs/op |
+| 构建明文握手报文组 | 5 | 1.944 us/op | 2106.6 MB/s | 5008 B/op | 9 allocs/op |
+| 受保护 ACK 构建 / 逆序 64 | 5 | 1.46 us/op | - | 2200 B/op | 3 allocs/op |
+| 受保护 ACK 构建 / 单条 | 5 | 168.2 ns/op | - | 72 B/op | 2 allocs/op |
+| 受保护 ACK 构建 / 单条复用 | 5 | 136.4 ns/op | - | 48 B/op | 1 allocs/op |
+| 受保护 ACK 构建 / 已排序 64 | 5 | 809.8 ns/op | - | 1176 B/op | 2 allocs/op |
+| 构建受保护握手报文组 | 5 | 2.998 us/op | 1366.44 MB/s | 5584 B/op | 6 allocs/op |
+| 合并握手报文组 | 5 | 292.3 ns/op | - | 592 B/op | 4 allocs/op |
+| 握手报文组首次刷新 | 5 | 90.83 ns/op | - | 0 B/op | 0 allocs/op |
+| 握手报文组初始历史批次 | 5 | 299.1 ns/op | - | 480 B/op | 1 allocs/op |
+| 握手报文组传输窗口 / 重传 | 5 | 24.49 ns/op | - | 0 B/op | 0 allocs/op |
+| 解析 ACK / 独占 | 5 | 21.58 ns/op | - | 16 B/op | 1 allocs/op |
+| 解析 ACK / 单条复用 | 5 | 3.67 ns/op | - | 0 B/op | 0 allocs/op |
+| 受保护记录 CID / 往返 | 5 | 2.037 us/op | 589.12 MB/s | 3840 B/op | 3 allocs/op |
+| 受保护记录 CID / 封装 | 5 | 771.3 ns/op | 1555.75 MB/s | 1280 B/op | 1 allocs/op |
+| 拒绝未认证记录 | 5 | 12.7 ns/op | - | 0 B/op | 0 allocs/op |
+| 记录往返 | 5 | 2.102 us/op | 571.02 MB/s | 3840 B/op | 3 allocs/op |
+| 受保护记录原地往返 | 5 | 1.094 us/op | 1097.23 MB/s | 1280 B/op | 1 allocs/op |
+| 记录往返 / AES-128-CCM | 5 | 6.182 us/op | 194.11 MB/s | 6240 B/op | 12 allocs/op |
+| 记录往返 / AES-128-GCM | 5 | 2.068 us/op | 580.15 MB/s | 3840 B/op | 3 allocs/op |
+| 记录往返 / AES-256-GCM | 5 | 2.14 us/op | 560.62 MB/s | 3840 B/op | 3 allocs/op |
+| 记录往返 / ChaCha20-Poly1305 | 5 | 3.203 us/op | 374.6 MB/s | 3840 B/op | 3 allocs/op |
+| 记录封装 | 5 | 813.7 ns/op | 1474.67 MB/s | 1280 B/op | 1 allocs/op |
+| 记录封装 / AES-128-CCM | 5 | 2.63 us/op | 456.32 MB/s | 1840 B/op | 5 allocs/op |
+| 记录封装 / AES-128-GCM | 5 | 754.9 ns/op | 1589.67 MB/s | 1280 B/op | 1 allocs/op |
+| 记录封装 / AES-256-GCM | 5 | 830 ns/op | 1445.86 MB/s | 1280 B/op | 1 allocs/op |
+| 记录封装 / ChaCha20-Poly1305 | 5 | 1.356 us/op | 884.97 MB/s | 1280 B/op | 1 allocs/op |
 
 [Go benchmark 原始输出](benchmark.txt)
