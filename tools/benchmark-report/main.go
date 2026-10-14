@@ -515,10 +515,18 @@ var benchmarkFeatureLabels = map[string][3]string{
 }
 
 var benchmarkPartTranslations = map[string][3]string{
+	"Listener CID Routing":                 {"Listener CID routing", "Listener CID 路由", "Маршрутизация CID через Listener"},
+	"Fixed":                                {"Fixed length", "固定长度", "Фиксированная длина"},
+	"Mixed":                                {"Mixed lengths", "混合长度", "Разные длины"},
+	"Wide":                                 {"Lengths 4–255", "4–255 字节长度", "Длины 4–255"},
+	"Long":                                 {"255-byte CIDs", "255 字节 CID", "CID по 255 байт"},
+	"Hit":                                  {"Hit", "命中", "Совпадение"},
+	"Miss":                                 {"Miss", "未命中", "Нет совпадения"},
 	"Memory Datagram Round Trip":           {"In-memory datagram round trip", "内存 datagram 往返", "Обмен датаграммами в памяти"},
 	"Listener Datagram Round Trip":         {"Listener UDP round trip", "Listener UDP 往返", "Обмен UDP через Listener"},
 	"Connections1":                         {"1 connection", "1 个连接", "1 соединение"},
 	"Connections64":                        {"64 connections", "64 个连接", "64 соединения"},
+	"Connections252":                       {"252 connections", "252 个连接", "252 соединения"},
 	"Connections1024":                      {"1024 connections", "1024 个连接", "1024 соединения"},
 	"No CID":                               {"No CID", "无 CID", "Без CID"},
 	"CID":                                  {"CID", "CID", "CID"},
@@ -589,6 +597,26 @@ var benchmarkDisplayOrders = map[string]int{
 	"EarlyDataHandshakeLifecycle/Entries4096":                            161,
 	"MemoryDatagramRoundTrip/Bytes64":                                    162,
 	"MemoryDatagramRoundTrip/Bytes1200":                                  163,
+	"ListenerCIDRouting/Connections1/Fixed/Hit":                          180,
+	"ListenerCIDRouting/Connections1/Fixed/Miss":                         181,
+	"ListenerCIDRouting/Connections1/Mixed/Hit":                          182,
+	"ListenerCIDRouting/Connections1/Mixed/Miss":                         183,
+	"ListenerCIDRouting/Connections64/Fixed/Hit":                         184,
+	"ListenerCIDRouting/Connections64/Fixed/Miss":                        185,
+	"ListenerCIDRouting/Connections64/Mixed/Hit":                         186,
+	"ListenerCIDRouting/Connections64/Mixed/Miss":                        187,
+	"ListenerCIDRouting/Connections1024/Fixed/Hit":                       188,
+	"ListenerCIDRouting/Connections1024/Fixed/Miss":                      189,
+	"ListenerCIDRouting/Connections1024/Mixed/Hit":                       190,
+	"ListenerCIDRouting/Connections1024/Mixed/Miss":                      191,
+	"ListenerCIDRouting/Connections252/Wide/Hit":                         192,
+	"ListenerCIDRouting/Connections252/Wide/Miss":                        193,
+	"ListenerCIDRouting/Connections252/Long/Hit":                         194,
+	"ListenerCIDRouting/Connections252/Long/Miss":                        195,
+	"ListenerCIDRouting/Connections1024/Wide/Hit":                        196,
+	"ListenerCIDRouting/Connections1024/Wide/Miss":                       197,
+	"ListenerCIDRouting/Connections1024/Long/Hit":                        198,
+	"ListenerCIDRouting/Connections1024/Long/Miss":                       199,
 
 	"WolfSSLFeatureRealUDP/CertificateAES128GCM":        10,
 	"WolfSSLFeatureRealUDP/ApplicationDataRoundTrip":    20,
@@ -1574,7 +1602,7 @@ func benchmarkSection(name string) int {
 		return 0
 	case strings.Contains(root, "RealUDP") && realUDPDirection(name) >= 0:
 		return 1
-	case strings.Contains(root, "ProtectedRecord"), strings.Contains(root, "Flight"), strings.Contains(root, "ACK"):
+	case strings.Contains(root, "ProtectedRecord"), strings.Contains(root, "Flight"), strings.Contains(root, "ACK"), root == "ListenerCIDRouting":
 		return 2
 	default:
 		return 3

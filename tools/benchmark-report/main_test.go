@@ -101,6 +101,7 @@ func TestValidateBenchmarkCoverageRejectsUnknownNames(t *testing.T) {
 		"BenchmarkTranscriptClone/1301", "BenchmarkParseExtensions/Owned",
 		"BenchmarkCertificateCompression/Decompress", "BenchmarkHandshakeInboxSequentialSingleFragment",
 		"BenchmarkNewFeature-2", "BenchmarkFlightWireWindow/NewMode-2", "BenchmarkGREASEHandshakeLifecycle-2",
+		"BenchmarkListenerCIDRouting/Connections2/Fixed/Hit", "BenchmarkListenerCIDRouting/Connections1/Unknown/Miss",
 	} {
 		if err := validateBenchmarkCoverage(name); err == nil {
 			t.Errorf("uncovered benchmark %q was accepted", name)
@@ -368,6 +369,11 @@ func TestBenchmarkLabel(t *testing.T) {
 		{"en", "BenchmarkProtectedRecordRoundTripSuites/ChaCha20Poly1305-2", "Record round trip / ChaCha20-Poly1305"},
 		{"en", "BenchmarkListenerDatagramRoundTrip/Connections1024/NoCID/Bytes1200-4", "Listener UDP round trip / 1024 connections / No CID / 1200 bytes"},
 		{"en", "BenchmarkMemoryDatagramRoundTrip/Bytes64-4", "In-memory datagram round trip / 64 bytes"},
+		{"en", "BenchmarkListenerCIDRouting/Connections1024/Fixed/Hit-1", "Listener CID routing / 1024 connections / Fixed length / Hit"},
+		{"en", "BenchmarkListenerCIDRouting/Connections252/Wide/Miss-1", "Listener CID routing / 252 connections / Lengths 4–255 / Miss"},
+		{"en", "BenchmarkListenerCIDRouting/Connections1024/Long/Hit-1", "Listener CID routing / 1024 connections / 255-byte CIDs / Hit"},
+		{"zh-CN", "BenchmarkListenerCIDRouting/Connections64/Mixed/Miss-1", "Listener CID 路由 / 64 个连接 / 混合长度 / 未命中"},
+		{"ru", "BenchmarkListenerCIDRouting/Connections1/Fixed/Hit-1", "Маршрутизация CID через Listener / 1 соединение / Фиксированная длина / Совпадение"},
 		{"zh-CN", "BenchmarkListenerDatagramRoundTrip/Connections64/CID/Bytes64-4", "Listener UDP 往返 / 64 个连接 / CID / 64 字节"},
 		{"ru", "BenchmarkEarlyDataHandshakeLifecycle/Entries4096-4", "0-RTT / 4096 начальных записей повторов"},
 		{"zh-CN", "BenchmarkProtectedRecordRoundTripSuites/ChaCha20Poly1305-2", "记录往返 / ChaCha20-Poly1305"},
@@ -425,6 +431,7 @@ func TestBenchmarkSection(t *testing.T) {
 	}{
 		{"BenchmarkConnectionHandshakeLifecycle", 0},
 		{"BenchmarkListenerDatagramRoundTrip/Connections1/CID/Bytes64", 0},
+		{"BenchmarkListenerCIDRouting/Connections1024/Mixed/Miss", 2},
 		{"BenchmarkEarlyDataHandshakeLifecycle/Entries64", 0},
 		{"BenchmarkCertificateSelectionHandshakeLifecycle/InitialMutualTLS", 0},
 		{"BenchmarkWolfSSLFeatureRealUDP/KeyUpdate/GoClient/GoServer", 1},

@@ -439,13 +439,18 @@ func TestDelegatedCredentialResumptionAndPHA(t *testing.T) {
 		t.Fatal(err)
 	}
 	requireDelegatedIdentity(t, server, cc.DelegatedCredentials[0].Credential)
-	clientDC, err := parseDelegatedCredential(cc.DelegatedCredentials[0].Credential)
-	if err != nil {
-		t.Fatal(err)
+	var expired time.Time
+	for _, config := range []*Config{cc, sc} {
+		dc, err := parseDelegatedCredential(config.DelegatedCredentials[0].Credential)
+		if err != nil {
+			t.Fatal(err)
+		}
+		expiry := config.Certificates[0].Leaf.NotBefore.Add(time.Duration(dc.validTime) * time.Second)
+		if expiry.After(expired) {
+			expired = expiry
+		}
 	}
-	sc.Time = func() time.Time {
-		return cc.Certificates[0].Leaf.NotBefore.Add(time.Duration(clientDC.validTime)*time.Second + time.Second)
-	}
+	sc.Time = func() time.Time { return expired.Add(time.Second) }
 	cc.Time = sc.Time
 	client, server = completeHandshakePair(t, cc, sc)
 	if client.ConnectionState().DidResume || server.ConnectionState().DidResume {

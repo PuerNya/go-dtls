@@ -26,6 +26,7 @@ type packetRelayPeer struct {
 	client         net.Addr
 	link           *impairedPacketConn
 	received, sent uint64
+	canceled       uint64
 }
 
 type packetProcessRelay struct {
@@ -37,6 +38,7 @@ type packetProcessRelay struct {
 	peers          []*packetRelayPeer
 	byAddress      map[string]*packetRelayPeer
 	received, sent uint64
+	canceled       uint64
 	err            error
 	wg             sync.WaitGroup
 	closing        bool
@@ -140,6 +142,11 @@ func newPacketProcessRelay(t *testing.T, spec packetProcessSpec) *packetProcessR
 				continue
 			}
 			if _, err := peer.conn.WriteTo(buffer[:n], server); err != nil {
+				r.mu.Lock()
+				if r.closing && errors.Is(err, net.ErrClosed) {
+					peer.canceled++
+				}
+				r.mu.Unlock()
 				r.fail(err)
 				return
 			}
@@ -174,6 +181,11 @@ func (r *packetProcessRelay) readServer(peer *packetRelayPeer) {
 		r.received++
 		r.mu.Unlock()
 		if _, err := r.front.WriteTo(buffer[:n], peer.client); err != nil {
+			r.mu.Lock()
+			if r.closing && errors.Is(err, net.ErrClosed) {
+				r.canceled++
+			}
+			r.mu.Unlock()
 			r.fail(err)
 			return
 		}
@@ -232,8 +244,8 @@ func (r *packetProcessRelay) snapshot(t *testing.T) []packetRelayStats {
 		t.Fatal(r.err)
 	}
 	stats := make([]packetRelayStats, 0, len(r.peers)+1)
-	appendStats := func(direction string, index int, link *impairedPacketConn, received, sent uint64) {
-		item := packetRelayStats{Direction: direction, Peer: index, Received: received, Sent: sent}
+	appendStats := func(direction string, index int, link *impairedPacketConn, received, sent, canceled uint64) {
+		item := packetRelayStats{Direction: direction, Peer: index, Received: received, Sent: sent, Canceled: canceled}
 		if link != nil {
 			s := link.snapshot()
 			item.Received, item.Sent, item.Lost, item.Overflow, item.Duplicated, item.Corrupted, item.Failed, item.Canceled = s.writes, s.sent, s.lost, s.overflow, s.duplicated, s.corrupted, s.failed, s.canceled
@@ -241,9 +253,9 @@ func (r *packetProcessRelay) snapshot(t *testing.T) []packetRelayStats {
 		}
 		stats = append(stats, item)
 	}
-	appendStats("down", 0, r.down, r.received, r.sent)
+	appendStats("down", 0, r.down, r.received, r.sent, r.canceled)
 	for i, peer := range r.peers {
-		appendStats("up", i, peer.link, peer.received, peer.sent)
+		appendStats("up", i, peer.link, peer.received, peer.sent, peer.canceled)
 	}
 	return stats
 }
@@ -299,6 +311,51 @@ func (r *packetProcessRelay) attachTrace(link *impairedPacketConn, name string) 
 	link.trace = &packetNetworkTrace{encode: json.NewEncoder(buffer), phase: "handshake"}
 	link.mu.Unlock()
 	return nil
+}
+
+type closingRelayPacketConn struct {
+	net.PacketConn
+	writing, closed chan struct{}
+}
+
+func (c *closingRelayPacketConn) WriteTo([]byte, net.Addr) (int, error) {
+	close(c.writing)
+	<-c.closed
+	return 0, net.ErrClosed
+}
+
+func (c *closingRelayPacketConn) Close() error {
+	close(c.closed)
+	return nil
+}
+
+func TestPacketProcessRelayCloseCancelsForward(t *testing.T) {
+	server, err := net.ListenPacket("udp4", "127.0.0.1:0")
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer server.Close()
+	upstream, err := net.ListenPacket("udp4", "127.0.0.1:0")
+	if err != nil {
+		t.Fatal(err)
+	}
+	front := &closingRelayPacketConn{writing: make(chan struct{}), closed: make(chan struct{})}
+	peer := &packetRelayPeer{conn: upstream}
+	relay := &packetProcessRelay{front: front, server: server.LocalAddr().(*net.UDPAddr), peers: []*packetRelayPeer{peer}}
+	t.Cleanup(func() { relay.close(t) })
+	relay.wg.Go(func() { relay.readServer(peer) })
+	if _, err := server.WriteTo([]byte("in flight"), upstream.LocalAddr()); err != nil {
+		t.Fatal(err)
+	}
+	select {
+	case <-front.writing:
+	case <-time.After(time.Second):
+		t.Fatal("relay did not start forwarding")
+	}
+	relay.close(t)
+	if stats := relay.snapshot(t)[0]; stats.Received != 1 || stats.Sent != 0 || stats.Canceled != 1 {
+		t.Fatalf("in-flight packet was not canceled: %+v", stats)
+	}
 }
 
 func TestPacketProcessRelayTraceError(t *testing.T) {

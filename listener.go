@@ -4,6 +4,7 @@ import (
 	"bytes"
 	"errors"
 	"net"
+	"slices"
 	"sync"
 	"time"
 )
@@ -73,6 +74,8 @@ type Listener struct {
 	sessions    map[string]*packetSession
 	pending     map[string]*packetSession
 	cidSessions map[string]*packetSession
+	cidLengths  []uint8 // Sorted non-empty CID lengths, protected by mu.
+	cidScan     bool
 	cidGenMu    sync.Mutex
 }
 
@@ -104,7 +107,7 @@ func (l *Listener) readLoop() {
 	for {
 		n, address, err := l.conn.ReadFrom(buffer)
 		if err != nil {
-			l.shutdown(err, false)
+			l.shutdown(err)
 			return
 		}
 		if n == 0 || address == nil {
@@ -196,12 +199,52 @@ func (l *Listener) sessionForCIDLocked(datagram []byte) *packetSession {
 	if len(datagram) < 2 || datagram[0]&unifiedHeaderCID == 0 {
 		return nil
 	}
+	if l.cidScan {
+		return l.scanSessionForCIDLocked(datagram)
+	}
+	for _, length := range l.cidLengths {
+		if len(datagram) < 1+int(length) {
+			continue
+		}
+		if session := l.cidSessions[string(datagram[1:1+int(length)])]; session != nil {
+			return session
+		}
+	}
+	return nil
+}
+
+func (l *Listener) scanSessionForCIDLocked(datagram []byte) *packetSession {
 	for cid, session := range l.cidSessions {
 		if len(datagram) >= 1+len(cid) && bytes.Equal(datagram[1:1+len(cid)], []byte(cid)) {
 			return session
 		}
 	}
 	return nil
+}
+
+func (l *Listener) addCIDLocked(cid []byte, session *packetSession) {
+	length := uint8(len(cid))
+	if !slices.Contains(l.cidLengths, length) {
+		l.cidLengths = append(l.cidLengths, length)
+		slices.Sort(l.cidLengths)
+	}
+	l.cidSessions[string(cid)] = session
+	// Unique lengths cannot reduce probes; scanning avoids up to 255 hashes.
+	l.cidScan = len(l.cidLengths) > 1 && len(l.cidLengths) == len(l.cidSessions)
+}
+
+func (l *Listener) rebuildCIDLengthsLocked() {
+	var active [256]bool
+	for cid := range l.cidSessions {
+		active[len(cid)] = true
+	}
+	l.cidLengths = l.cidLengths[:0]
+	for length := 1; length < len(active); length++ {
+		if active[length] {
+			l.cidLengths = append(l.cidLengths, uint8(length))
+		}
+	}
+	l.cidScan = len(l.cidLengths) > 1 && len(l.cidLengths) == len(l.cidSessions)
 }
 
 func (l *Listener) registerSessionCID(session *packetSession, cid []byte) error {
@@ -225,7 +268,7 @@ func (l *Listener) registerSessionCID(session *packetSession, cid []byte) error 
 			return &ConfigError{"Listener connection IDs must be unique and prefix-free"}
 		}
 	}
-	l.cidSessions[string(cid)] = session
+	l.addCIDLocked(cid, session)
 	return nil
 }
 
@@ -251,7 +294,7 @@ func (l *Listener) registerSessionCIDs(session *packetSession, cids [][]byte) er
 		if len(cid) == 0 {
 			continue
 		}
-		l.cidSessions[string(cid)] = session
+		l.addCIDLocked(cid, session)
 	}
 	return nil
 }
@@ -265,6 +308,7 @@ func (l *Listener) unregisterSessionCIDs(session *packetSession, cids [][]byte) 
 			delete(l.cidSessions, key)
 		}
 	}
+	l.rebuildCIDLengthsLocked()
 }
 
 func (l *Listener) removeSession(session *packetSession) {
@@ -284,6 +328,7 @@ func (l *Listener) removeSession(session *packetSession) {
 			delete(l.cidSessions, cid)
 		}
 	}
+	l.rebuildCIDLengthsLocked()
 	l.mu.Unlock()
 }
 
@@ -332,6 +377,7 @@ func (l *Listener) rebindSession(session *packetSession, newAddress net.Addr) {
 				delete(l.cidSessions, cid)
 			}
 		}
+		l.rebuildCIDLengthsLocked()
 		displaced.closeWithoutCallback()
 	}
 	l.sessions[newKey] = session
@@ -410,7 +456,7 @@ func (l *Listener) Accept() (*Conn, error) {
 	}
 }
 
-func (l *Listener) shutdown(err error, closePacketConn bool) {
+func (l *Listener) shutdown(err error) {
 	l.closeOnce.Do(func() {
 		l.mu.Lock()
 		l.closed = true
@@ -425,13 +471,12 @@ func (l *Listener) shutdown(err error, closePacketConn bool) {
 		l.sessions = make(map[string]*packetSession)
 		l.pending = make(map[string]*packetSession)
 		l.cidSessions = make(map[string]*packetSession)
+		l.cidLengths = nil
+		l.cidScan = false
 		l.mu.Unlock()
 		close(l.done)
 		for _, session := range sessions {
 			session.closeWithoutCallback()
-		}
-		if closePacketConn && l.conn != nil {
-			_ = l.conn.Close()
 		}
 	})
 }
@@ -441,11 +486,11 @@ func (l *Listener) shutdown(err error, closePacketConn bool) {
 // net.ErrClosed unless an earlier packet-read error is available.
 func (l *Listener) Close() error {
 	if l.conn == nil {
-		l.shutdown(net.ErrClosed, false)
+		l.shutdown(net.ErrClosed)
 		return nil
 	}
 	err := l.conn.Close()
-	l.shutdown(net.ErrClosed, false)
+	l.shutdown(net.ErrClosed)
 	return err
 }
 

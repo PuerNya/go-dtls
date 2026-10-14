@@ -3,10 +3,12 @@ package dtls13
 import (
 	"bytes"
 	"crypto/tls"
+	"encoding/binary"
 	"errors"
 	"fmt"
 	"net"
 	"os"
+	"slices"
 	"sync"
 	"testing"
 	"time"
@@ -48,12 +50,22 @@ type reusableUDPClientConn struct {
 func TestListenerConnectionIDBatchRegistrationIsAtomic(t *testing.T) {
 	owner := &packetSession{}
 	other := &packetSession{}
-	listener := &Listener{cidSessions: map[string]*packetSession{string([]byte{3, 4}): other}}
-	if err := listener.registerSessionCIDs(owner, [][]byte{{1, 2}, {3, 4}}); err == nil {
-		t.Fatal("registered a batch containing another session's CID")
+	listener := &Listener{cidSessions: make(map[string]*packetSession)}
+	if err := listener.registerSessionCID(other, []byte{3, 4}); err != nil {
+		t.Fatal(err)
 	}
-	if listener.cidSessions[string([]byte{1, 2})] != nil {
-		t.Fatal("part of a rejected CID batch was registered")
+	for _, cids := range [][][]byte{
+		{{1}, {3, 4}},
+		{{1}, {3}},
+		{{1}, {2}, {2, 3}},
+		{{1}, bytes.Repeat([]byte{5}, 256)},
+	} {
+		if err := listener.registerSessionCIDs(owner, cids); err == nil {
+			t.Fatalf("registered invalid CID batch: %x", cids)
+		}
+		if len(listener.cidSessions) != 1 || !slices.Equal(listener.cidLengths, []uint8{2}) {
+			t.Fatal("part of a rejected CID batch was registered")
+		}
 	}
 	if listener.cidSessions[string([]byte{3, 4})] != other {
 		t.Fatal("rejected CID batch changed the existing owner")
@@ -907,6 +919,77 @@ func TestListenerRejectsAmbiguousConnectionIDs(t *testing.T) {
 	}
 }
 
+func TestListenerConnectionIDRoutingLifecycle(t *testing.T) {
+	l := &Listener{cidSessions: make(map[string]*packetSession), sessions: make(map[string]*packetSession), done: make(chan struct{})}
+	first := newPacketSession(nil, memoryAddr("first"), 1, nil, nil, nil, nil, nil)
+	second := newPacketSession(nil, memoryAddr("second"), 1, nil, nil, nil, nil, nil)
+	l.sessions[sessionKey(first.RemoteAddr())], l.sessions[sessionKey(second.RemoteAddr())] = first, second
+	t.Cleanup(func() { l.shutdown(nil) })
+	cids := [][]byte{{1}, {2, 3}, bytes.Repeat([]byte{4}, 255)}
+	if err := l.registerSessionCID(first, cids[0]); err != nil {
+		t.Fatal(err)
+	}
+	if err := l.registerSessionCIDs(first, cids); err != nil {
+		t.Fatal(err)
+	}
+	if !l.cidScan {
+		t.Fatal("unique CID lengths did not select bounded scanning")
+	}
+	other := []byte{5, 6}
+	if err := l.registerSessionCID(second, other); err != nil {
+		t.Fatal(err)
+	}
+	if l.cidScan {
+		t.Fatal("shared CID lengths did not select indexed routing")
+	}
+	lookup := func(cid []byte) *packetSession {
+		return l.sessionForCIDLocked(append([]byte{unifiedHeaderFixed | unifiedHeaderCID}, cid...))
+	}
+	for _, cid := range cids {
+		if lookup(cid) != first || lookup(cid[:len(cid)-1]) != nil {
+			t.Fatalf("CID length %d was not routed exactly", len(cid))
+		}
+	}
+	for _, datagram := range [][]byte{nil, {unifiedHeaderFixed}, {unifiedHeaderFixed, 1}, {unifiedHeaderFixed | unifiedHeaderCID, 99}} {
+		if l.sessionForCIDLocked(datagram) != nil {
+			t.Fatalf("routed invalid or unknown CID: %x", datagram)
+		}
+	}
+	l.unregisterSessionCIDs(second, cids)
+	if lookup(cids[0]) != first {
+		t.Fatal("another session retired the CID")
+	}
+	l.unregisterSessionCIDs(first, [][]byte{cids[1], cids[1]})
+	if lookup(cids[1]) != nil || lookup(other) != second || !slices.Equal(l.cidLengths, []uint8{1, 2, 255}) {
+		t.Fatal("retirement removed a shared length or retained a CID")
+	}
+	if !l.cidScan {
+		t.Fatal("retirement did not restore bounded scanning")
+	}
+	l.unregisterSessionCIDs(first, [][]byte{cids[0]})
+	if lookup(cids[0]) != nil || !slices.Equal(l.cidLengths, []uint8{2, 255}) {
+		t.Fatal("retirement retained an unused CID length")
+	}
+	if err := l.registerSessionCID(first, cids[0]); err != nil {
+		t.Fatal(err)
+	}
+	l.removeSession(first)
+	if lookup(cids[0]) != nil || lookup(cids[2]) != nil || !slices.Equal(l.cidLengths, []uint8{2}) {
+		t.Fatal("closed session retained CID routes or lengths")
+	}
+	l.rebindSession(first, second.RemoteAddr())
+	if lookup(other) != nil || len(l.cidLengths) != 0 {
+		t.Fatal("displaced session retained CID routes or lengths")
+	}
+	if err := l.registerSessionCID(first, cids[0]); err != nil {
+		t.Fatal(err)
+	}
+	l.shutdown(nil)
+	if lookup(cids[0]) != nil || len(l.cidLengths) != 0 || l.cidScan {
+		t.Fatal("listener shutdown retained CID routes or lengths")
+	}
+}
+
 func TestListenerMixedCIDDatagramDoesNotCrossAssociations(t *testing.T) {
 	suite, _ := cipherSuiteForID(TLS_AES_128_GCM_SHA256)
 	secretA := bytes.Repeat([]byte{0x41}, suite.hash.Size())
@@ -939,7 +1022,13 @@ func TestListenerMixedCIDDatagramDoesNotCrossAssociations(t *testing.T) {
 	mixed := append(append([]byte(nil), recordA...), recordB...)
 
 	sessionA, sessionB := &packetSession{}, &packetSession{}
-	listener := &Listener{cidSessions: map[string]*packetSession{string(cidA): sessionA, string(cidB): sessionB}}
+	listener := &Listener{cidSessions: make(map[string]*packetSession)}
+	if err := listener.registerSessionCID(sessionA, cidA); err != nil {
+		t.Fatal(err)
+	}
+	if err := listener.registerSessionCID(sessionB, cidB); err != nil {
+		t.Fatal(err)
+	}
 	if got := listener.sessionForCIDLocked(mixed); got != sessionA {
 		t.Fatalf("mixed datagram routed to %p, want association A %p", got, sessionA)
 	}
@@ -960,5 +1049,68 @@ func TestListenerMixedCIDDatagramDoesNotCrossAssociations(t *testing.T) {
 	got := string(bufferedApplicationPayload(client))
 	if got != "association-a" {
 		t.Fatalf("mixed datagram delivered %q, want only association A", got)
+	}
+}
+
+func BenchmarkListenerCIDRouting(b *testing.B) {
+	for _, count := range []int{1, 64, 252, 1024} {
+		modes := []string{"Fixed", "Mixed"}
+		switch count {
+		case 252:
+			modes = []string{"Wide", "Long"}
+		case 1024:
+			modes = append(modes, "Wide", "Long")
+		}
+		for _, mode := range modes {
+			b.Run(fmt.Sprintf("Connections%d/%s", count, mode), func(b *testing.B) {
+				l := &Listener{cidSessions: make(map[string]*packetSession)}
+				packets := make([][]byte, count)
+				sessions := make([]*packetSession, count)
+				for i := range count {
+					length := 8
+					switch mode {
+					case "Mixed":
+						length = []int{4, 8, 16}[i%3]
+					case "Wide":
+						length = 4 + i%252
+					case "Long":
+						length = 255
+					}
+					cid := make([]byte, length)
+					binary.BigEndian.PutUint32(cid, uint32(i+1))
+					sessions[i] = &packetSession{}
+					if err := l.registerSessionCID(sessions[i], cid); err != nil {
+						b.Fatal(err)
+					}
+					packets[i] = make([]byte, 1200)
+					packets[i][0] = unifiedHeaderFixed | unifiedHeaderCID
+					copy(packets[i][1:], cid)
+				}
+				b.Run("Hit", func(b *testing.B) {
+					b.ReportAllocs()
+					i := 0
+					for b.Loop() {
+						if l.sessionForCIDLocked(packets[i]) != sessions[i] {
+							b.Fatal("incorrect CID route")
+						}
+						i++
+						if i == count {
+							i = 0
+						}
+					}
+				})
+				b.Run("Miss", func(b *testing.B) {
+					packet := make([]byte, 1200)
+					packet[0] = unifiedHeaderFixed | unifiedHeaderCID
+					binary.BigEndian.PutUint32(packet[1:], ^uint32(0))
+					b.ReportAllocs()
+					for b.Loop() {
+						if l.sessionForCIDLocked(packet) != nil {
+							b.Fatal("routed unknown CID")
+						}
+					}
+				})
+			})
+		}
 	}
 }
