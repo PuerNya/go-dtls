@@ -260,11 +260,18 @@ func (c *Conn) receiveHandshakeWithRetransmitOnEarly(conn net.Conn, inbox *hands
 func (c *Conn) receiveSecondClientHello(conn net.Conn, inbox *handshakeInbox, hrr *flight) (completedHandshakeBatch, error) {
 	buffer := acquireDatagramBuffer()
 	defer releaseDatagramBuffer(buffer)
+	var received []byte
+	var receivedOwned bool
+	defer func() { releasePacketSessionDatagram(receivedOwned, received) }()
 	for {
-		datagram, err := readDatagramWithPending(conn, buffer[:], &c.pendingDatagram)
+		received = nil
+		receivedOwned = false
+		datagram, owned, err := readDatagramWithPendingOwned(conn, buffer[:], &c.pendingDatagram)
 		if err != nil {
 			return completedHandshakeBatch{}, err
 		}
+		received = datagram
+		receivedOwned = owned
 		for len(datagram) > 0 {
 			record, consumed, parseErr := parsePlainRecordView(datagram)
 			if parseErr != nil {
@@ -303,6 +310,9 @@ func (c *Conn) receiveSecondClientHello(conn net.Conn, inbox *handshakeInbox, hr
 				return delivered, nil
 			}
 		}
+		releasePacketSessionDatagram(receivedOwned, received)
+		received = nil
+		receivedOwned = false
 	}
 }
 
@@ -325,11 +335,18 @@ func receiveHandshakeMessageWithEarlyBatch(conn net.Conn, inbox *handshakeInbox,
 	}
 	buffer := acquireDatagramBuffer()
 	defer releaseDatagramBuffer(buffer)
+	var received []byte
+	var receivedOwned bool
+	defer func() { releasePacketSessionDatagram(receivedOwned, received) }()
 	for {
-		datagram, err := readDatagramWithPending(conn, buffer[:], pending)
+		received = nil
+		receivedOwned = false
+		datagram, owned, err := readDatagramWithPendingOwned(conn, buffer[:], pending)
 		if err != nil {
 			return completedHandshakeBatch{}, err
 		}
+		received = datagram
+		receivedOwned = owned
 		for len(datagram) > 0 {
 			var payload []byte
 			var typ uint8
@@ -478,31 +495,48 @@ func receiveHandshakeMessageWithEarlyBatch(conn net.Conn, inbox *handshakeInbox,
 				return delivered, nil
 			}
 		}
+		releasePacketSessionDatagram(receivedOwned, received)
+		received = nil
+		receivedOwned = false
 	}
 }
 
-func readDatagramWithPending(conn net.Conn, buffer []byte, pending *[]byte) ([]byte, error) {
+func readDatagramWithPendingOwned(conn net.Conn, buffer []byte, pending *[]byte) ([]byte, bool, error) {
 	if pending != nil && len(*pending) > 0 {
 		datagram := *pending
 		*pending = nil
-		return datagram, nil
+		return datagram, false, nil
 	}
 	if session, ok := conn.(*packetSession); ok {
-		return session.readDatagram()
+		datagram, err := session.readDatagram()
+		return datagram, err == nil, err
 	}
 	n, err := conn.Read(buffer)
-	return buffer[:n], err
+	return buffer[:n], false, err
+}
+
+func releasePacketSessionDatagram(owned bool, datagram []byte) {
+	if owned {
+		recyclePacketDatagramBuffer(datagram)
+	}
 }
 
 func receiveACKRecordWithPending(conn net.Conn, dst []recordNumber, pending *[]byte, deferRecord func([]byte) error, ciphers ...*recordCipher) ([]recordNumber, error) {
 	buffer := acquireDatagramBuffer()
 	defer releaseDatagramBuffer(buffer)
+	var received []byte
+	var receivedOwned bool
+	defer func() { releasePacketSessionDatagram(receivedOwned, received) }()
 
 	for {
-		datagram, err := readDatagramWithPending(conn, buffer[:], pending)
+		received = nil
+		receivedOwned = false
+		datagram, owned, err := readDatagramWithPendingOwned(conn, buffer[:], pending)
 		if err != nil {
 			return nil, err
 		}
+		received = datagram
+		receivedOwned = owned
 		for len(datagram) > 0 && isUnifiedRecord(datagram) {
 			lastCipher := -1
 			for i, cipher := range ciphers {
@@ -571,6 +605,9 @@ func receiveACKRecordWithPending(conn net.Conn, dst []recordNumber, pending *[]b
 			}
 			datagram = datagram[consumed:]
 		}
+		releasePacketSessionDatagram(receivedOwned, received)
+		received = nil
+		receivedOwned = false
 	}
 }
 
@@ -580,14 +617,14 @@ func receiveACKRecordWithPending(conn net.Conn, dst []recordNumber, pending *[]b
 func (c *Conn) receiveAuthenticatedACK() ([]recordNumber, error) {
 	buffer := acquireDatagramBuffer()
 	defer releaseDatagramBuffer(buffer)
-	datagram, err := readDatagramWithPending(c.conn, buffer[:], &c.pendingDatagram)
+	datagram, owned, err := readDatagramWithPendingOwned(c.conn, buffer[:], &c.pendingDatagram)
 	if err != nil {
 		return nil, err
 	}
 	var numbers []recordNumber
 	err = c.dispatchDatagramWithACK(datagram, c.conn.RemoteAddr(), func(ack []recordNumber) {
 		numbers = append(numbers, ack...)
-	}, false)
+	}, owned)
 	c.inputMu.Lock()
 	closed := c.peerReadClosed
 	c.inputMu.Unlock()

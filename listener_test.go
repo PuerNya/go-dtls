@@ -42,6 +42,57 @@ func TestPacketSessionDatagramOwnership(t *testing.T) {
 	}
 }
 
+func TestPacketSessionReceiveBufferPoolBoundary(t *testing.T) {
+	session := newPacketSession(nil, memoryAddr("peer"), 1, nil, nil, nil, nil, nil)
+	defer session.Close()
+	for _, size := range []int{1200, 64, 0, minPacketDatagramBufferSize - 1, minPacketDatagramBufferSize, packetDatagramBufferSize, packetDatagramBufferSize + 1, maxDatagramSize} {
+		payload := bytes.Repeat([]byte{'a'}, size)
+		session.enqueue(payload, memoryAddr("peer"))
+		got := <-session.in
+		if !bytes.Equal(got.payload, payload) {
+			t.Fatalf("payload mismatch for size %d", size)
+		}
+		if size >= minPacketDatagramBufferSize && size <= packetDatagramBufferSize && cap(got.payload) != packetDatagramBufferSize {
+			t.Fatalf("near-MTU packet capacity=%d", cap(got.payload))
+		}
+		if size == 64 && cap(got.payload) > 2*size {
+			t.Fatal("small packet retained a pooled backing buffer")
+		}
+		if size > 0 {
+			payload[0] = 'b'
+			if got.payload[0] != 'a' {
+				t.Fatal("queued packet aliases the listener receive buffer")
+			}
+		}
+		recyclePacketDatagramBuffer(got.payload)
+	}
+}
+
+func TestPacketSessionCloseReleasesQueuedDatagrams(t *testing.T) {
+	packet := bytes.Repeat([]byte{'a'}, 1200)
+	for range 100 {
+		session := newPacketSession(nil, memoryAddr("peer"), 2, nil, nil, nil, nil, nil)
+		session.enqueue(packet, memoryAddr("peer"))
+		start, finished := make(chan struct{}), make(chan struct{}, 2)
+		go func() {
+			<-start
+			session.enqueue(packet, memoryAddr("peer"))
+			finished <- struct{}{}
+		}()
+		go func() {
+			<-start
+			_ = session.Close()
+			finished <- struct{}{}
+		}()
+		close(start)
+		<-finished
+		<-finished
+		if len(session.in) != 0 {
+			t.Fatalf("closed packet session retained %d queued datagrams", len(session.in))
+		}
+	}
+}
+
 type reusableUDPClientConn struct {
 	conn   *net.UDPConn
 	remote *net.UDPAddr
@@ -1112,5 +1163,24 @@ func BenchmarkListenerCIDRouting(b *testing.B) {
 				})
 			})
 		}
+	}
+}
+
+func BenchmarkPacketSessionIngress(b *testing.B) {
+	for _, size := range []int{64, 1200, 2048, 4096} {
+		b.Run(fmt.Sprintf("Bytes%d", size), func(b *testing.B) {
+			session := newPacketSession(nil, memoryAddr("peer"), 1, nil, nil, nil, nil, nil)
+			defer session.Close()
+			packet := make([]byte, size)
+			b.ReportAllocs()
+			for b.Loop() {
+				session.enqueue(packet, memoryAddr("peer"))
+				got, err := session.readDatagram()
+				if err != nil || len(got) != size {
+					b.Fatal("packet was not delivered")
+				}
+				recyclePacketDatagramBuffer(got)
+			}
+		})
 	}
 }

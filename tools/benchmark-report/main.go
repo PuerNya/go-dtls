@@ -515,6 +515,7 @@ var benchmarkFeatureLabels = map[string][3]string{
 }
 
 var benchmarkPartTranslations = map[string][3]string{
+	"Packet Session Ingress":               {"Listener packet ingress", "Listener 报文入队", "Приём пакетов через Listener"},
 	"Listener CID Routing":                 {"Listener CID routing", "Listener CID 路由", "Маршрутизация CID через Listener"},
 	"Fixed":                                {"Fixed length", "固定长度", "Фиксированная длина"},
 	"Mixed":                                {"Mixed lengths", "混合长度", "Разные длины"},
@@ -532,6 +533,8 @@ var benchmarkPartTranslations = map[string][3]string{
 	"CID":                                  {"CID", "CID", "CID"},
 	"Bytes64":                              {"64 bytes", "64 字节", "64 байта"},
 	"Bytes1200":                            {"1200 bytes", "1200 字节", "1200 байт"},
+	"Bytes2048":                            {"2048 bytes", "2048 字节", "2048 байт"},
+	"Bytes4096":                            {"4096 bytes", "4096 字节", "4096 байт"},
 	"Entries64":                            {"64 initial replay entries", "初始 64 条重放记录", "64 начальные записи повторов"},
 	"Entries4096":                          {"4096 initial replay entries", "初始 4096 条重放记录", "4096 начальных записей повторов"},
 	"Plain ACK build":                      {"Plain ACK build", "明文 ACK 构建", "Построение открытого ACK"},
@@ -617,6 +620,10 @@ var benchmarkDisplayOrders = map[string]int{
 	"ListenerCIDRouting/Connections1024/Wide/Miss":                       197,
 	"ListenerCIDRouting/Connections1024/Long/Hit":                        198,
 	"ListenerCIDRouting/Connections1024/Long/Miss":                       199,
+	"PacketSessionIngress/Bytes64":                                       200,
+	"PacketSessionIngress/Bytes1200":                                     201,
+	"PacketSessionIngress/Bytes2048":                                     202,
+	"PacketSessionIngress/Bytes4096":                                     203,
 
 	"WolfSSLFeatureRealUDP/CertificateAES128GCM":        10,
 	"WolfSSLFeatureRealUDP/ApplicationDataRoundTrip":    20,
@@ -1602,7 +1609,7 @@ func benchmarkSection(name string) int {
 		return 0
 	case strings.Contains(root, "RealUDP") && realUDPDirection(name) >= 0:
 		return 1
-	case strings.Contains(root, "ProtectedRecord"), strings.Contains(root, "Flight"), strings.Contains(root, "ACK"), root == "ListenerCIDRouting":
+	case strings.Contains(root, "ProtectedRecord"), strings.Contains(root, "Flight"), strings.Contains(root, "ACK"), root == "ListenerCIDRouting", root == "PacketSessionIngress":
 		return 2
 	default:
 		return 3

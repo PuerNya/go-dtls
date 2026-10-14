@@ -6,6 +6,7 @@ import (
 	"net"
 	"slices"
 	"sync"
+	"sync/atomic"
 	"time"
 )
 
@@ -503,6 +504,30 @@ func (l *Listener) Addr() net.Addr {
 	return l.conn.LocalAddr()
 }
 
+const packetDatagramBufferSize = 2048
+
+// Small records keep exact-size buffers to avoid a second application copy.
+const minPacketDatagramBufferSize = 1152
+
+var packetDatagramBufferPool = sync.Pool{New: func() any {
+	return new([packetDatagramBufferSize]byte)
+}}
+
+func recyclePacketDatagramBuffer(datagram []byte) {
+	if cap(datagram) != packetDatagramBufferSize {
+		return
+	}
+	packetDatagramBufferPool.Put((*[packetDatagramBufferSize]byte)(datagram[:packetDatagramBufferSize]))
+}
+
+func acquirePacketDatagramBuffer(datagram []byte) []byte {
+	if len(datagram) < minPacketDatagramBufferSize || len(datagram) > packetDatagramBufferSize {
+		return append([]byte(nil), datagram...)
+	}
+	buffer := packetDatagramBufferPool.Get().(*[packetDatagramBufferSize]byte)
+	return append(buffer[:0], datagram...)
+}
+
 type packetSession struct {
 	conn                   net.PacketConn
 	remote                 net.Addr
@@ -522,6 +547,7 @@ type packetSession struct {
 	localCID               []byte
 	connectionIDNegotiated bool
 	validated              bool
+	closed                 atomic.Bool
 }
 
 type packetDatagram struct {
@@ -537,16 +563,34 @@ func newPacketSession(conn net.PacketConn, remote net.Addr, queueSize int, onClo
 }
 
 func (s *packetSession) enqueue(datagram []byte, from net.Addr) {
-	copyOfDatagram := append([]byte(nil), datagram...)
+	copyOfDatagram := acquirePacketDatagramBuffer(datagram)
 	select {
 	case <-s.done:
+		recyclePacketDatagramBuffer(copyOfDatagram)
 	case s.in <- packetDatagram{payload: copyOfDatagram, from: from}:
+		if s.closed.Load() {
+			s.releaseQueuedDatagrams()
+		}
+		return
 	default:
+		recyclePacketDatagramBuffer(copyOfDatagram)
+	}
+}
+
+func (s *packetSession) releaseQueuedDatagrams() {
+	for {
+		select {
+		case datagram := <-s.in:
+			recyclePacketDatagramBuffer(datagram.payload)
+		default:
+			return
+		}
 	}
 }
 
 func (s *packetSession) Read(p []byte) (int, error) {
 	datagram, err := s.readDatagram()
+	defer recyclePacketDatagramBuffer(datagram)
 	return copy(p, datagram), err
 }
 
@@ -623,14 +667,20 @@ func (s *packetSession) WriteTo(p []byte, addr net.Addr) (int, error) {
 }
 
 func (s *packetSession) closeWithoutCallback() {
-	s.closeOnce.Do(func() { close(s.done) })
+	s.closeOnce.Do(func() {
+		s.closed.Store(true)
+		close(s.done)
+		s.releaseQueuedDatagrams()
+	})
 }
 
 func (s *packetSession) Close() error {
 	closed := false
 	s.closeOnce.Do(func() {
 		closed = true
+		s.closed.Store(true)
 		close(s.done)
+		s.releaseQueuedDatagrams()
 		if s.onClose != nil {
 			s.onClose(s)
 		}

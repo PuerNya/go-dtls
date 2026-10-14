@@ -314,6 +314,7 @@ type Conn struct {
 
 type applicationDatagram struct {
 	payload []byte
+	backing []byte
 	from    net.Addr
 	early   bool
 }
@@ -622,24 +623,34 @@ func (c *Conn) queueApplicationData(content []byte, from net.Addr) error {
 }
 
 func (c *Conn) queueApplicationDatagram(content []byte, from net.Addr, early, owned bool) error {
+	_, err := c.queueApplicationDatagramBacking(content, from, early, owned, nil)
+	return err
+}
+
+func (c *Conn) queueApplicationDatagramBacking(content []byte, from net.Addr, early, owned bool, backing []byte) (bool, error) {
 	c.inputMu.Lock()
 	if len(c.applicationDatagrams) >= c.config.MaxBufferedApplicationDatagrams {
 		c.inputMu.Unlock()
-		return &ProtocolError{"buffered application datagram limit exceeded"}
+		return false, &ProtocolError{"buffered application datagram limit exceeded"}
 	}
 	if len(content) > c.config.MaxBufferedApplicationData-c.bufferedApplicationBytes {
 		c.inputMu.Unlock()
-		return &ProtocolError{"buffered application data limit exceeded"}
+		return false, &ProtocolError{"buffered application data limit exceeded"}
 	}
 	payload := content
-	if !owned || len(content) == 0 || cap(content) > 2*len(content) {
-		payload = append([]byte(nil), content...)
+	retained := cap(content)
+	if backing != nil {
+		retained = cap(backing)
 	}
-	c.applicationDatagrams = append(c.applicationDatagrams, applicationDatagram{payload: payload, from: from, early: early})
+	if !owned || len(content) == 0 || retained > 2*len(content) {
+		payload = append([]byte(nil), content...)
+		backing = nil
+	}
+	c.applicationDatagrams = append(c.applicationDatagrams, applicationDatagram{payload: payload, backing: backing, from: from, early: early})
 	c.bufferedApplicationBytes += len(content)
 	c.inputMu.Unlock()
 	c.notifyRead()
-	return nil
+	return backing != nil, nil
 }
 
 func (c *Conn) rememberApplicationRecordLocked(number recordNumber) error {
@@ -770,21 +781,21 @@ func (c *Conn) promoteEarlyApplicationData() error {
 
 func (c *Conn) readRecords() {
 	var buffer []byte
-	_, owned := c.conn.(*packetSession)
-	if !owned {
+	if _, ok := c.conn.(*packetSession); !ok {
 		storage := acquireDatagramBuffer()
 		defer releaseDatagramBuffer(storage)
 		buffer = storage[:]
 	}
 	for {
 		var datagram []byte
+		var owned bool
 		var err error
 		if len(c.pendingPostHandshakeRecords) != 0 {
 			datagram = c.pendingPostHandshakeRecords[0]
 			c.pendingPostHandshakeRecords[0] = nil
 			c.pendingPostHandshakeRecords = c.pendingPostHandshakeRecords[1:]
 		} else {
-			datagram, err = readDatagramWithPending(c.conn, buffer, &c.pendingDatagram)
+			datagram, owned, err = readDatagramWithPendingOwned(c.conn, buffer, &c.pendingDatagram)
 		}
 		if err != nil {
 			c.finishRecordReader(err)
@@ -870,6 +881,11 @@ func (c *Conn) clearTrafficSecrets(failure error) {
 	c.postHandshakeAuthState = nil
 	c.writeMu.Unlock()
 	c.inputMu.Lock()
+	if _, ok := c.conn.(*packetSession); ok {
+		for _, datagram := range c.applicationDatagrams {
+			recyclePacketDatagramBuffer(datagram.backing)
+		}
+	}
 	c.applicationDatagrams = nil
 	c.bufferedApplicationBytes = 0
 	c.inputMu.Unlock()
@@ -929,6 +945,13 @@ func (c *Conn) dispatchDatagramFrom(datagram []byte, from net.Addr, owned bool) 
 func (c *Conn) dispatchDatagramWithACK(datagram []byte, from net.Addr, onACK func([]recordNumber), owned bool) error {
 	c.dispatchMu.Lock()
 	defer c.dispatchMu.Unlock()
+	var backing []byte
+	if owned {
+		if _, ok := c.conn.(*packetSession); ok {
+			backing = datagram
+			defer func() { recyclePacketDatagramBuffer(backing) }()
+		}
+	}
 	for len(datagram) > 0 {
 		content, typ, epoch, consumed, openErr := c.receiveEpochs.openInPlace(datagram)
 		if openErr != nil {
@@ -971,7 +994,11 @@ func (c *Conn) dispatchDatagramWithACK(datagram []byte, from net.Addr, onACK fun
 			if epoch < 3 {
 				return alertError(alertUnexpectedMessage, &ProtocolError{"application data used handshake keys"})
 			}
-			err = c.dispatchApplicationData(content, number, from, owned)
+			var retained bool
+			retained, err = c.dispatchApplicationData(content, number, from, owned, backing)
+			if retained {
+				backing = nil
+			}
 		case recordTypeAlert:
 			err = c.dispatchAlert(content, number)
 		case recordTypeACK:
@@ -1053,6 +1080,9 @@ func (c *Conn) ReadDatagram(p []byte) (int, DatagramInfo, error) {
 			c.bufferedApplicationBytes -= len(datagram.payload)
 			n := copy(p, datagram.payload)
 			c.inputMu.Unlock()
+			if _, ok := c.conn.(*packetSession); ok {
+				recyclePacketDatagramBuffer(datagram.backing)
+			}
 			return n, DatagramInfo{Source: datagram.from, FullLength: len(datagram.payload), Truncated: n < len(datagram.payload), EarlyData: datagram.early}, nil
 		}
 		if c.readErr != nil {

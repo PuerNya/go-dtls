@@ -118,6 +118,82 @@ func TestCoalescedApplicationDatagramsReleaseBacking(t *testing.T) {
 	}
 }
 
+func TestCoalescedSmallApplicationDoesNotRetainWholePacket(t *testing.T) {
+	client, server := establishedConnPair(t)
+	session := newPacketSession(nil, memoryAddr("peer"), 1, nil, nil, nil, nil, nil)
+	defer session.Close()
+	server.conn = session
+	large, err := client.sendCipher.seal(recordTypeApplicationData, bytes.Repeat([]byte{'l'}, 1200))
+	if err != nil {
+		t.Fatal(err)
+	}
+	small, err := client.sendCipher.seal(recordTypeApplicationData, []byte("small"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	datagram := append(large, small...)
+	session.enqueue(datagram, memoryAddr("peer"))
+	packet, err := session.readDatagram()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if cap(packet) != packetDatagramBufferSize {
+		t.Fatal("coalesced packet did not use the near-MTU pool")
+	}
+	if err := server.dispatchDatagramFrom(packet, memoryAddr("peer"), true); err != nil {
+		t.Fatal(err)
+	}
+	if len(server.applicationDatagrams) != 2 {
+		t.Fatalf("queued %d application datagrams, want 2", len(server.applicationDatagrams))
+	}
+	queued := server.applicationDatagrams[1]
+	if queued.backing != nil || !bytes.Equal(queued.payload, []byte("small")) {
+		t.Fatal("small coalesced application retained the whole datagram")
+	}
+}
+
+func TestListenerApplicationQueueBufferOwnership(t *testing.T) {
+	client, server := establishedConnPair(t)
+	session := newPacketSession(nil, memoryAddr("peer"), 1, nil, nil, nil, nil, nil)
+	defer session.Close()
+	server.conn = session
+	for i := range 3 {
+		payload := bytes.Repeat([]byte{byte(i + 1)}, 1200)
+		wire, err := client.sendCipher.seal(recordTypeApplicationData, payload)
+		if err != nil {
+			t.Fatal(err)
+		}
+		session.enqueue(wire, memoryAddr("peer"))
+		packet, err := session.readDatagram()
+		if err != nil {
+			t.Fatal(err)
+		}
+		if err = server.dispatchDatagramFrom(packet, memoryAddr("peer"), true); err != nil {
+			t.Fatal(err)
+		}
+	}
+	queued := server.applicationDatagrams
+	for i, datagram := range queued {
+		if len(datagram.backing) == 0 || cap(datagram.backing) != packetDatagramBufferSize || !bytes.Equal(datagram.payload, bytes.Repeat([]byte{byte(i + 1)}, 1200)) {
+			t.Fatal("queued application data lost its owned receive buffer")
+		}
+	}
+	for i, size := range []int{16, 1200} {
+		buffer := make([]byte, size)
+		n, info, err := server.ReadDatagram(buffer)
+		if err != nil || n != size || info.FullLength != 1200 || info.Truncated != (size < 1200) || !bytes.Equal(buffer, bytes.Repeat([]byte{byte(i + 1)}, size)) {
+			t.Fatalf("read=%d info=%+v error=%v", n, info, err)
+		}
+		if queued[i].payload != nil || queued[i].backing != nil {
+			t.Fatal("consumed queue entry retained its buffer")
+		}
+	}
+	server.clearTrafficSecrets(net.ErrClosed)
+	if len(server.applicationDatagrams) != 0 || server.bufferedApplicationBytes != 0 {
+		t.Fatal("failed connection retained its application queue")
+	}
+}
+
 func (c *failNthRecordWriteConn) Write(p []byte) (int, error) {
 	c.writes++
 	if c.writes == c.failAt {

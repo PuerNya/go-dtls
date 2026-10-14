@@ -13,15 +13,15 @@ import "net"
 // it interleaves a protected handshake message, buffered while a fragmented
 // post-handshake message or a post-handshake auth response is incomplete, and
 // otherwise queued for ReadDatagram.
-func (c *Conn) dispatchApplicationData(content []byte, number recordNumber, from net.Addr, owned bool) error {
+func (c *Conn) dispatchApplicationData(content []byte, number recordNumber, from net.Addr, owned bool, backing []byte) (bool, error) {
 	buffered, err := c.bufferApplicationRecord(content, number, from)
 	if err != nil {
-		return err
+		return false, err
 	}
 	if buffered {
-		return nil
+		return false, nil
 	}
-	return c.queueApplicationDatagram(content, from, false, owned)
+	return c.queueApplicationDatagramBacking(content, from, false, owned, backing)
 }
 
 // bufferApplicationRecord records the application record for ordering

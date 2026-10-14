@@ -914,6 +914,12 @@ func testInteropWolfSSLServerOptions(t *testing.T, options wolfSSLInteropOptions
 			if readErr != nil {
 				t.Fatalf("read wolfSSL echo: %v\n%s", readErr, output.String())
 			}
+			if index > 0 && len(options.clientEarlyData) > 0 && !options.rejectEarlyData && bytes.Equal(reply[:n], options.clientEarlyData) {
+				n, _, readErr = conn.ReadDatagram(reply)
+				if readErr != nil {
+					t.Fatalf("read wolfSSL 1-RTT echo: %v\n%s", readErr, output.String())
+				}
+			}
 			if options.disableServerEcho {
 				if n == 0 {
 					t.Fatal("wolfSSL server returned an empty application datagram")
