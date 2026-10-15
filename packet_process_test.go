@@ -31,6 +31,7 @@ type packetProcessSpec struct {
 	Connections, Operations, Workers, Payload     int
 	CID, Burst, Raw, NoServerReadDeadline         bool
 	Resume, Early, SlowBound                      bool
+	Lifecycle                                     bool
 	Seed                                          uint64
 	CIDLengths                                    []int
 	Certificate, PrivateKey                       []byte
@@ -47,6 +48,7 @@ type packetProcessStats struct {
 	KernelUDP                                        map[string]uint64
 	Runtime                                          map[string]any
 	Offered, Received, Reordered                     uint64
+	Handshakes, Resumed                              uint64
 	LatencySamples, LatencyZeroSamples               int
 	Peer                                             int
 	Payload                                          int
@@ -246,6 +248,10 @@ func newPacketProcessRun(t testing.TB, spec packetProcessSpec) *packetProcessRun
 			spec.Address = ready.Address
 		}
 	}
+	if spec.Lifecycle {
+		run.stage(t, "prime")
+		return run
+	}
 	handshake := run.stage(t, "handshake")
 	payload := min(handshake["client"].Payload, handshake["server"].Payload)
 	for _, role := range []string{"client", "server"} {
@@ -355,13 +361,20 @@ func TestPacketProcessWorker(t *testing.T) {
 			return cid, nil
 		}
 	}
-	if spec.Resume {
+	if spec.Resume && !spec.Lifecycle {
 		config.SessionTicketsDisabled = false
 		config.ClientSessionCache = NewLRUClientSessionCache(4)
 		config.MaxEarlyData = 1024
 		config.EnableEarlyDataIO = true
 		config.EarlyDataReplayCache = NewLRUEarlyDataReplayCache(16)
 		config.AllowEarlyDataWithoutCookie = true
+	}
+	var lifecycle packetProcessLifecycle
+	if spec.Lifecycle {
+		config.SessionTicketsDisabled = false
+		// A new ClientHello may arrive before the previous Close removes its route.
+		config.MaxPendingConnections = 2 * spec.Connections
+		config.MaxBufferedApplicationDatagrams, config.MaxBufferedApplicationData = 4, 4096
 	}
 	if spec.SlowBound && spec.Role == "server" {
 		config.MaxBufferedApplicationDatagrams, config.MaxBufferedApplicationData = 4, 64
@@ -398,6 +411,10 @@ func TestPacketProcessWorker(t *testing.T) {
 		relay = newPacketProcessRelay(t, spec)
 		address = relay.front.LocalAddr().String()
 	case "client":
+		if spec.Lifecycle {
+			lifecycle = newPacketProcessLifecycle(config, spec.Connections)
+			break
+		}
 		remote, resolveErr := net.ResolveUDPAddr("udp4", address)
 		if resolveErr != nil {
 			t.Fatal(resolveErr)
@@ -487,6 +504,8 @@ func TestPacketProcessWorker(t *testing.T) {
 				observation.reset(t)
 			}
 			switch phase {
+			case "prime", "lifecycle":
+				result = lifecycle.run(t, spec, phase, listener, &wire)
 			case "handshake":
 				result.Payload = spec.Payload
 				if spec.Raw {
@@ -614,7 +633,7 @@ func TestPacketProcessWorker(t *testing.T) {
 					result = packetProcessTraffic(t, spec, phase, conns)
 				}
 			case "recovery":
-				if spec.Raw || spec.SlowBound {
+				if spec.Raw || spec.SlowBound || spec.Lifecycle {
 					break
 				}
 				for _, conn := range conns {

@@ -88,13 +88,7 @@ func BenchmarkListenerDatagramRoundTrip(b *testing.B) {
 		}
 		b.SetBytes(int64(2 * client.Payload))
 		b.ReportMetric(float64(2*client.Payload*b.N)/client.Elapsed.Seconds()/1e6, "MB/s")
-		b.ReportMetric(float64(client.Elapsed)/float64(b.N), "ns/op")
-		b.ReportMetric(float64(client.Allocated+server.Allocated)/float64(b.N), "B/op")
-		b.ReportMetric(float64(client.Allocs+server.Allocs)/float64(b.N), "allocs/op")
-		for role, resources := range map[string]packetProcessStats{"client": client, "server": server, "relay": relay} {
-			b.ReportMetric(float64(resources.Allocated)/float64(b.N), role+"_B/op")
-			b.ReportMetric(float64(resources.Resources.User+resources.Resources.System)/float64(b.N), role+"_cpu_ns/op")
-		}
+		reportPacketProcessBenchmark(b, client, server, relay)
 	}
 	for _, count := range []int{1, 64, 1024} {
 		for _, cid := range []bool{false, true} {
@@ -115,6 +109,41 @@ func BenchmarkListenerDatagramRoundTrip(b *testing.B) {
 					})
 				}
 			}
+		}
+	}
+}
+
+func reportPacketProcessBenchmark(b *testing.B, client, server, relay packetProcessStats) {
+	b.ReportMetric(float64(client.Elapsed)/float64(b.N), "ns/op")
+	b.ReportMetric(float64(client.Allocated+server.Allocated)/float64(b.N), "B/op")
+	b.ReportMetric(float64(client.Allocs+server.Allocs)/float64(b.N), "allocs/op")
+	for role, resources := range map[string]packetProcessStats{"client": client, "server": server, "relay": relay} {
+		b.ReportMetric(float64(resources.Allocated)/float64(b.N), role+"_B/op")
+		b.ReportMetric(float64(resources.Resources.User+resources.Resources.System)/float64(b.N), role+"_cpu_ns/op")
+	}
+}
+
+func BenchmarkListenerHandshakeLifecycle(b *testing.B) {
+	for _, resumed := range []bool{false, true} {
+		name := "Full"
+		if resumed {
+			name = "Resumed"
+		}
+		for _, concurrency := range []int{1, 64} {
+			b.Run(fmt.Sprintf("%s/Concurrency%d", name, concurrency), func(b *testing.B) {
+				b.StopTimer()
+				process := newPacketProcessRun(b, packetProcessSpec{Lifecycle: true, Resume: resumed, Connections: min(concurrency, b.N), Operations: b.N})
+				b.StartTimer()
+				stats := process.stage(b, "lifecycle")
+				b.StopTimer()
+				process.close(b)
+				for _, role := range []string{"client", "server"} {
+					if stats[role].Handshakes != uint64(b.N) {
+						b.Fatal("incomplete UDP connection lifecycles")
+					}
+				}
+				reportPacketProcessBenchmark(b, stats["client"], stats["server"], stats["relay"])
+			})
 		}
 	}
 }

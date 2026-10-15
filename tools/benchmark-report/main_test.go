@@ -353,6 +353,9 @@ func TestBenchmarkLabel(t *testing.T) {
 		want     string
 	}{
 		{"en", "BenchmarkConnectionHandshakeLifecycle-2", "Certificate-authenticated full handshake / AES-128-GCM"},
+		{"en", "BenchmarkListenerHandshakeLifecycle/Full/Concurrency1-4", "Listener UDP handshake, ticket and close / Full handshake / Concurrency 1"},
+		{"zh-CN", "BenchmarkListenerHandshakeLifecycle/Resumed/Concurrency64-4", "Listener UDP 握手、票据与关闭 / 会话恢复 / 并发 64"},
+		{"ru", "BenchmarkListenerHandshakeLifecycle/Full/Concurrency64-4", "Рукопожатие UDP через Listener, билет и закрытие / Полное рукопожатие / Параллелизм 64"},
 		{"en", "BenchmarkSessionTicketRequestHandshakeLifecycle-2", "Full handshake + 4 acknowledged session tickets"},
 		{"zh-CN", "BenchmarkGREASEHandshakeLifecycle/Disabled-2", "完整 mTLS 握手 + 会话票据 / GREASE 关闭"},
 		{"en", "BenchmarkGREASEHandshakeLifecycle/Enabled-2", "Full mTLS handshake + session ticket / GREASE enabled"},
@@ -436,6 +439,7 @@ func TestBenchmarkSection(t *testing.T) {
 		want int
 	}{
 		{"BenchmarkConnectionHandshakeLifecycle", 0},
+		{"BenchmarkListenerHandshakeLifecycle/Resumed/Concurrency64", 0},
 		{"BenchmarkListenerDatagramRoundTrip/Connections1/CID/Bytes64", 0},
 		{"BenchmarkListenerCIDRouting/Connections1024/Mixed/Miss", 2},
 		{"BenchmarkPacketSessionIngress/Bytes1200", 2},
@@ -458,6 +462,8 @@ func TestBenchmarkDisplayOrder(t *testing.T) {
 		want int
 	}{
 		{"BenchmarkConnectionHandshakeLifecycle-2", 10},
+		{"BenchmarkListenerHandshakeLifecycle/Full/Concurrency1-4", 154},
+		{"BenchmarkListenerHandshakeLifecycle/Resumed/Concurrency64-4", 157},
 		{"BenchmarkSessionTicketRequestHandshakeLifecycle-2", 35},
 		{"BenchmarkGREASEHandshakeLifecycle/Disabled-2", 38},
 		{"BenchmarkGREASEHandshakeLifecycle/Enabled-2", 39},

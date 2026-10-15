@@ -515,6 +515,11 @@ var benchmarkFeatureLabels = map[string][3]string{
 }
 
 var benchmarkPartTranslations = map[string][3]string{
+	"Listener":                             {"Listener UDP handshake, ticket and close", "Listener UDP 握手、票据与关闭", "Рукопожатие UDP через Listener, билет и закрытие"},
+	"Full":                                 {"Full handshake", "完整握手", "Полное рукопожатие"},
+	"Resumed":                              {"Session resumption", "会话恢复", "Возобновление сеанса"},
+	"Concurrency1":                         {"Concurrency 1", "并发 1", "Параллелизм 1"},
+	"Concurrency64":                        {"Concurrency 64", "并发 64", "Параллелизм 64"},
 	"Packet Session Ingress":               {"Listener packet ingress", "Listener 报文入队", "Приём пакетов через Listener"},
 	"Listener CID Routing":                 {"Listener CID routing", "Listener CID 路由", "Маршрутизация CID через Listener"},
 	"Fixed":                                {"Fixed length", "固定长度", "Фиксированная длина"},
@@ -597,6 +602,10 @@ var benchmarkDisplayOrders = map[string]int{
 	"ListenerDatagramRoundTrip/Connections1024/NoCID/Bytes1200":          149,
 	"ListenerDatagramRoundTrip/Connections1024/CID/Bytes64":              150,
 	"ListenerDatagramRoundTrip/Connections1024/CID/Bytes1200":            151,
+	"ListenerHandshakeLifecycle/Full/Concurrency1":                       154,
+	"ListenerHandshakeLifecycle/Full/Concurrency64":                      155,
+	"ListenerHandshakeLifecycle/Resumed/Concurrency1":                    156,
+	"ListenerHandshakeLifecycle/Resumed/Concurrency64":                   157,
 	"EarlyDataHandshakeLifecycle/Entries64":                              160,
 	"EarlyDataHandshakeLifecycle/Entries4096":                            161,
 	"MemoryDatagramRoundTrip/Bytes64":                                    162,
