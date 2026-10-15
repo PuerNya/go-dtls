@@ -11,6 +11,7 @@ import (
 	"slices"
 	"sync"
 	"testing"
+	"testing/synctest"
 	"time"
 )
 
@@ -39,6 +40,139 @@ func TestPacketSessionDatagramOwnership(t *testing.T) {
 	}
 	if _, err = session.readDatagram(); err == nil {
 		t.Fatal("truncated or dropped bytes were delivered again")
+	}
+}
+
+func TestPacketSessionReadDeadlineUpdates(t *testing.T) {
+	synctest.Test(t, func(t *testing.T) {
+		session := newPacketSession(nil, memoryAddr("peer"), 1, nil, nil, nil, nil, nil)
+		defer session.Close()
+		startReads := func() <-chan error {
+			results := make(chan error, 2)
+			for range 2 {
+				go func() {
+					var buffer [1]byte
+					_, err := session.Read(buffer[:])
+					results <- err
+				}()
+			}
+			synctest.Wait()
+			return results
+		}
+		assertBlocked := func(results <-chan error) {
+			t.Helper()
+			synctest.Wait()
+			select {
+			case err := <-results:
+				t.Fatalf("read ended before deadline: %v", err)
+			default:
+			}
+		}
+		assertTimeouts := func(results <-chan error) {
+			t.Helper()
+			synctest.Wait()
+			for range 2 {
+				select {
+				case err := <-results:
+					if networkErr, ok := errors.AsType[net.Error](err); !ok || !networkErr.Timeout() {
+						t.Fatalf("read returned non-timeout error: %v", err)
+					}
+				default:
+					t.Fatal("deadline did not wake every reader")
+				}
+			}
+		}
+		results := startReads()
+		_ = session.SetWriteDeadline(time.Now().Add(-time.Second))
+		assertBlocked(results)
+		_ = session.SetReadDeadline(time.Now().Add(10 * time.Second))
+		time.Sleep(5 * time.Second)
+		_ = session.SetReadDeadline(time.Now().Add(20 * time.Second))
+		time.Sleep(10 * time.Second)
+		assertBlocked(results)
+		_ = session.SetReadDeadline(time.Time{})
+		time.Sleep(30 * time.Second)
+		assertBlocked(results)
+		_ = session.SetReadDeadline(time.Now().Add(time.Hour))
+		_ = session.SetDeadline(time.Now().Add(time.Second))
+		time.Sleep(time.Second)
+		assertTimeouts(results)
+
+		_ = session.SetReadDeadline(time.Time{})
+		results = startReads()
+		_ = session.SetReadDeadline(time.Now().Add(-time.Second))
+		assertTimeouts(results)
+		_ = session.SetReadDeadline(time.Now().Add(time.Second))
+		session.enqueue(nil, memoryAddr("recovered"))
+		if n, err := session.Read(nil); err != nil || n != 0 || session.lastReadSource() != memoryAddr("recovered") {
+			t.Fatalf("read did not recover after timeout: n=%d err=%v", n, err)
+		}
+	})
+}
+
+func TestPacketSessionCloseWakesReaders(t *testing.T) {
+	for _, callback := range []bool{false, true} {
+		t.Run(fmt.Sprintf("Callback%t", callback), func(t *testing.T) {
+			synctest.Test(t, func(t *testing.T) {
+				session := newPacketSession(nil, memoryAddr("peer"), 1, nil, nil, nil, nil, nil)
+				_ = session.SetReadDeadline(time.Now().Add(time.Hour))
+				results := make(chan error, 2)
+				for range 2 {
+					go func() {
+						_, err := session.Read(nil)
+						results <- err
+					}()
+				}
+				synctest.Wait()
+				if callback {
+					_ = session.Close()
+				} else {
+					session.closeWithoutCallback()
+				}
+				for range 2 {
+					if err := <-results; !errors.Is(err, net.ErrClosed) {
+						t.Fatalf("closed read returned %v", err)
+					}
+				}
+				_ = session.SetDeadline(time.Now().Add(time.Second))
+				time.Sleep(2 * time.Hour)
+			})
+		})
+	}
+}
+
+func TestListenerRebindDoesNotWaitForCloseCallback(t *testing.T) {
+	listener := &Listener{sessions: make(map[string]*packetSession)}
+	callbackStarted, allowCallback := make(chan struct{}), make(chan struct{})
+	displaced := newPacketSession(nil, memoryAddr("new"), 1, func(session *packetSession) {
+		close(callbackStarted)
+		<-allowCallback
+		listener.removeSession(session)
+	}, nil, nil, nil, nil)
+	migrating := newPacketSession(nil, memoryAddr("old"), 1, nil, nil, nil, nil, nil)
+	defer migrating.Close()
+	listener.sessions[sessionKey(displaced.remote)] = displaced
+	listener.sessions[sessionKey(migrating.remote)] = migrating
+	closed := make(chan error, 1)
+	go func() { closed <- displaced.Close() }()
+	<-callbackStarted
+	rebound := make(chan struct{})
+	go func() {
+		listener.rebindSession(migrating, memoryAddr("new"))
+		close(rebound)
+	}()
+	select {
+	case <-rebound:
+	case <-time.After(3 * time.Second):
+		close(allowCallback)
+		t.Fatal("migration waited for a close callback under the Listener lock")
+	}
+	close(allowCallback)
+	if err := <-closed; err != nil {
+		t.Fatal(err)
+	}
+	if len(listener.sessions) != 1 || listener.sessions[sessionKey(memoryAddr("new"))] != migrating {
+		t.Fatal("close callback removed the migrated association")
 	}
 }
 
@@ -1177,6 +1311,33 @@ func BenchmarkPacketSessionIngress(b *testing.B) {
 				session.enqueue(packet, memoryAddr("peer"))
 				got, err := session.readDatagram()
 				if err != nil || len(got) != size {
+					b.Fatal("packet was not delivered")
+				}
+				recyclePacketDatagramBuffer(got)
+			}
+		})
+	}
+}
+
+func BenchmarkPacketSessionReadDeadline(b *testing.B) {
+	for _, refresh := range []bool{false, true} {
+		name := "FixedDeadline"
+		if refresh {
+			name = "UpdatedDeadline"
+		}
+		b.Run(name, func(b *testing.B) {
+			session := newPacketSession(nil, memoryAddr("peer"), 1, nil, nil, nil, nil, nil)
+			defer session.Close()
+			packet := make([]byte, 1200)
+			_ = session.SetReadDeadline(time.Now().Add(time.Hour))
+			b.ReportAllocs()
+			for b.Loop() {
+				if refresh {
+					_ = session.SetReadDeadline(time.Now().Add(time.Hour))
+				}
+				session.enqueue(packet, memoryAddr("peer"))
+				got, err := session.readDatagram()
+				if err != nil || len(got) != len(packet) {
 					b.Fatal("packet was not delivered")
 				}
 				recyclePacketDatagramBuffer(got)

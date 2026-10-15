@@ -533,7 +533,7 @@ type packetSession struct {
 	remote                 net.Addr
 	in                     chan packetDatagram
 	done                   chan struct{}
-	deadline               chan struct{}
+	readTimeout            chan struct{}
 	closeOnce              sync.Once
 	onClose                func(*packetSession)
 	onRebind               func(*packetSession, net.Addr)
@@ -541,7 +541,7 @@ type packetSession struct {
 	onRemoveCIDs           func(*packetSession, [][]byte)
 	onValidated            func(*packetSession)
 	mu                     sync.Mutex
-	readBy                 time.Time
+	readTimer              *time.Timer
 	writeBy                time.Time
 	lastReadFrom           net.Addr
 	localCID               []byte
@@ -558,7 +558,7 @@ type packetDatagram struct {
 func newPacketSession(conn net.PacketConn, remote net.Addr, queueSize int, onClose func(*packetSession), onRebind func(*packetSession, net.Addr), onNewCIDs func(*packetSession, [][]byte) error, onRemoveCIDs func(*packetSession, [][]byte), onValidated func(*packetSession)) *packetSession {
 	return &packetSession{
 		conn: conn, remote: remote, in: make(chan packetDatagram, queueSize), done: make(chan struct{}),
-		deadline: make(chan struct{}, 1), onClose: onClose, onRebind: onRebind, onNewCIDs: onNewCIDs, onRemoveCIDs: onRemoveCIDs, onValidated: onValidated,
+		readTimeout: make(chan struct{}), onClose: onClose, onRebind: onRebind, onNewCIDs: onNewCIDs, onRemoveCIDs: onRemoveCIDs, onValidated: onValidated,
 	}
 }
 
@@ -596,39 +596,19 @@ func (s *packetSession) Read(p []byte) (int, error) {
 
 // The queue owns its payload, so record readers can decrypt it in place.
 func (s *packetSession) readDatagram() ([]byte, error) {
-	for {
+	s.mu.Lock()
+	timeout := s.readTimeout
+	s.mu.Unlock()
+	select {
+	case datagram := <-s.in:
 		s.mu.Lock()
-		deadline := s.readBy
+		s.lastReadFrom = datagram.from
 		s.mu.Unlock()
-		var timer *time.Timer
-		var timeout <-chan time.Time
-		if !deadline.IsZero() {
-			delay := max(time.Until(deadline), 0)
-			timer = time.NewTimer(delay)
-			timeout = timer.C
-		}
-		select {
-		case datagram := <-s.in:
-			if timer != nil {
-				timer.Stop()
-			}
-			s.mu.Lock()
-			s.lastReadFrom = datagram.from
-			s.mu.Unlock()
-			return datagram.payload, nil
-		case <-s.done:
-			if timer != nil {
-				timer.Stop()
-			}
-			return nil, net.ErrClosed
-		case <-s.deadline:
-			if timer != nil {
-				timer.Stop()
-			}
-			continue
-		case <-timeout:
-			return nil, &sessionTimeoutError{}
-		}
+		return datagram.payload, nil
+	case <-s.done:
+		return nil, net.ErrClosed
+	case <-timeout:
+		return nil, &sessionTimeoutError{}
 	}
 }
 
@@ -670,6 +650,7 @@ func (s *packetSession) closeWithoutCallback() {
 	s.closeOnce.Do(func() {
 		s.closed.Store(true)
 		close(s.done)
+		_ = s.SetReadDeadline(time.Time{})
 		s.releaseQueuedDatagrams()
 	})
 }
@@ -680,13 +661,14 @@ func (s *packetSession) Close() error {
 		closed = true
 		s.closed.Store(true)
 		close(s.done)
+		_ = s.SetReadDeadline(time.Time{})
 		s.releaseQueuedDatagrams()
-		if s.onClose != nil {
-			s.onClose(s)
-		}
 	})
 	if !closed {
 		return net.ErrClosed
+	}
+	if s.onClose != nil {
+		s.onClose(s)
 	}
 	return nil
 }
@@ -744,26 +726,50 @@ func (s *packetSession) acceptsEmptyConnectionID() bool {
 	return s.connectionIDNegotiated && len(s.localCID) == 0
 }
 
-func (s *packetSession) signalDeadline() {
+func (s *packetSession) setReadDeadlineLocked(t time.Time) {
+	timer := s.readTimer
+	s.readTimer = nil
+	if timer != nil && !timer.Stop() {
+		// Wait for the callback before replacing its timeout channel.
+		<-s.readTimeout
+		timer = nil
+	}
+	if s.closed.Load() {
+		return
+	}
 	select {
-	case s.deadline <- struct{}{}:
+	case <-s.readTimeout:
+		s.readTimeout = make(chan struct{})
 	default:
+	}
+	if t.IsZero() {
+		return
+	}
+	if delay := time.Until(t); delay > 0 {
+		if timer == nil {
+			timeout := s.readTimeout
+			timer = time.AfterFunc(delay, func() { close(timeout) })
+		} else {
+			timer.Reset(delay)
+		}
+		s.readTimer = timer
+	} else {
+		close(s.readTimeout)
 	}
 }
 
 func (s *packetSession) SetDeadline(t time.Time) error {
 	s.mu.Lock()
-	s.readBy, s.writeBy = t, t
+	s.setReadDeadlineLocked(t)
+	s.writeBy = t
 	s.mu.Unlock()
-	s.signalDeadline()
 	return nil
 }
 
 func (s *packetSession) SetReadDeadline(t time.Time) error {
 	s.mu.Lock()
-	s.readBy = t
+	s.setReadDeadlineLocked(t)
 	s.mu.Unlock()
-	s.signalDeadline()
 	return nil
 }
 

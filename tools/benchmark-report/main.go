@@ -521,6 +521,9 @@ var benchmarkPartTranslations = map[string][3]string{
 	"Concurrency1":                         {"Concurrency 1", "并发 1", "Параллелизм 1"},
 	"Concurrency64":                        {"Concurrency 64", "并发 64", "Параллелизм 64"},
 	"Packet Session Ingress":               {"Listener packet ingress", "Listener 报文入队", "Приём пакетов через Listener"},
+	"Packet Session Read Deadline":         {"Listener read deadline", "Listener 读期限", "Срок чтения через Listener"},
+	"Fixed Deadline":                       {"Fixed deadline", "固定期限", "Фиксированный срок"},
+	"Updated Deadline":                     {"Updated deadline", "更新期限", "Обновляемый срок"},
 	"Listener CID Routing":                 {"Listener CID routing", "Listener CID 路由", "Маршрутизация CID через Listener"},
 	"Fixed":                                {"Fixed length", "固定长度", "Фиксированная длина"},
 	"Mixed":                                {"Mixed lengths", "混合长度", "Разные длины"},
@@ -634,6 +637,8 @@ var benchmarkDisplayOrders = map[string]int{
 	"PacketSessionIngress/Bytes1200":                                     201,
 	"PacketSessionIngress/Bytes2048":                                     202,
 	"PacketSessionIngress/Bytes4096":                                     203,
+	"PacketSessionReadDeadline/FixedDeadline":                            204,
+	"PacketSessionReadDeadline/UpdatedDeadline":                          205,
 
 	"ListenerDatagramRoundTrip/NoServerReadDeadline/Connections1024/CID/Bytes1200": 152,
 
@@ -1621,7 +1626,7 @@ func benchmarkSection(name string) int {
 		return 0
 	case strings.Contains(root, "RealUDP") && realUDPDirection(name) >= 0:
 		return 1
-	case strings.Contains(root, "ProtectedRecord"), strings.Contains(root, "Flight"), strings.Contains(root, "ACK"), root == "ListenerCIDRouting", root == "PacketSessionIngress":
+	case strings.Contains(root, "ProtectedRecord"), strings.Contains(root, "Flight"), strings.Contains(root, "ACK"), root == "ListenerCIDRouting", root == "PacketSessionIngress", root == "PacketSessionReadDeadline":
 		return 2
 	default:
 		return 3
