@@ -525,6 +525,7 @@ var benchmarkPartTranslations = map[string][3]string{
 	"Miss":                                 {"Miss", "未命中", "Нет совпадения"},
 	"Memory Datagram Round Trip":           {"In-memory datagram round trip", "内存 datagram 往返", "Обмен датаграммами в памяти"},
 	"Listener Datagram Round Trip":         {"Listener UDP round trip", "Listener UDP 往返", "Обмен UDP через Listener"},
+	"No Server Read Deadline":              {"No server read deadline", "服务端无读期限", "Без срока чтения на сервере"},
 	"Connections1":                         {"1 connection", "1 个连接", "1 соединение"},
 	"Connections64":                        {"64 connections", "64 个连接", "64 соединения"},
 	"Connections252":                       {"252 connections", "252 个连接", "252 соединения"},
@@ -624,6 +625,8 @@ var benchmarkDisplayOrders = map[string]int{
 	"PacketSessionIngress/Bytes1200":                                     201,
 	"PacketSessionIngress/Bytes2048":                                     202,
 	"PacketSessionIngress/Bytes4096":                                     203,
+
+	"ListenerDatagramRoundTrip/NoServerReadDeadline/Connections1024/CID/Bytes1200": 152,
 
 	"WolfSSLFeatureRealUDP/CertificateAES128GCM":        10,
 	"WolfSSLFeatureRealUDP/ApplicationDataRoundTrip":    20,

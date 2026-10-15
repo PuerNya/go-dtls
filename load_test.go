@@ -74,6 +74,28 @@ func (p loadPair) roundTrip(payload, buffer []byte) error {
 }
 
 func BenchmarkListenerDatagramRoundTrip(b *testing.B) {
+	run := func(b *testing.B, spec packetProcessSpec) {
+		b.StopTimer()
+		spec.Operations = b.N
+		process := newPacketProcessRun(b, spec)
+		b.StartTimer()
+		stats := process.stage(b, "traffic")
+		b.StopTimer()
+		process.close(b)
+		client, server, relay := stats["client"], stats["server"], stats["relay"]
+		if client.Received != uint64(b.N) || server.Received != uint64(b.N) {
+			b.Fatal("incomplete UDP round trips")
+		}
+		b.SetBytes(int64(2 * client.Payload))
+		b.ReportMetric(float64(2*client.Payload*b.N)/client.Elapsed.Seconds()/1e6, "MB/s")
+		b.ReportMetric(float64(client.Elapsed)/float64(b.N), "ns/op")
+		b.ReportMetric(float64(client.Allocated+server.Allocated)/float64(b.N), "B/op")
+		b.ReportMetric(float64(client.Allocs+server.Allocs)/float64(b.N), "allocs/op")
+		for role, resources := range map[string]packetProcessStats{"client": client, "server": server, "relay": relay} {
+			b.ReportMetric(float64(resources.Allocated)/float64(b.N), role+"_B/op")
+			b.ReportMetric(float64(resources.Resources.User+resources.Resources.System)/float64(b.N), role+"_cpu_ns/op")
+		}
+	}
 	for _, count := range []int{1, 64, 1024} {
 		for _, cid := range []bool{false, true} {
 			cidName := "NoCID"
@@ -81,27 +103,17 @@ func BenchmarkListenerDatagramRoundTrip(b *testing.B) {
 				cidName = "CID"
 			}
 			for _, size := range []int{64, 1200} {
-				b.Run(fmt.Sprintf("Connections%d/%s/Bytes%d", count, cidName, size), func(b *testing.B) {
-					b.StopTimer()
-					run := newPacketProcessRun(b, packetProcessSpec{Connections: count, Operations: b.N, Payload: size, CID: cid})
-					b.StartTimer()
-					stats := run.stage(b, "traffic")
-					b.StopTimer()
-					run.close(b)
-					client, server, relay := stats["client"], stats["server"], stats["relay"]
-					if client.Received != uint64(b.N) || server.Received != uint64(b.N) {
-						b.Fatal("incomplete UDP round trips")
-					}
-					b.SetBytes(int64(2 * client.Payload))
-					b.ReportMetric(float64(2*client.Payload*b.N)/client.Elapsed.Seconds()/1e6, "MB/s")
-					b.ReportMetric(float64(client.Elapsed)/float64(b.N), "ns/op")
-					b.ReportMetric(float64(client.Allocated+server.Allocated)/float64(b.N), "B/op")
-					b.ReportMetric(float64(client.Allocs+server.Allocs)/float64(b.N), "allocs/op")
-					for role, resources := range map[string]packetProcessStats{"client": client, "server": server, "relay": relay} {
-						b.ReportMetric(float64(resources.Allocated)/float64(b.N), role+"_B/op")
-						b.ReportMetric(float64(resources.Resources.User+resources.Resources.System)/float64(b.N), role+"_cpu_ns/op")
-					}
+				name := fmt.Sprintf("Connections%d/%s/Bytes%d", count, cidName, size)
+				spec := packetProcessSpec{Connections: count, Payload: size, CID: cid}
+				b.Run(name, func(b *testing.B) {
+					run(b, spec)
 				})
+				if count == 1024 && cid && size == 1200 {
+					spec.NoServerReadDeadline = true
+					b.Run("NoServerReadDeadline/"+name, func(b *testing.B) {
+						run(b, spec)
+					})
+				}
 			}
 		}
 	}

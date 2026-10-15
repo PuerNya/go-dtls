@@ -29,7 +29,7 @@ import (
 type packetProcessSpec struct {
 	Role, Address, Network, Output, Observe, CPUs string
 	Connections, Operations, Workers, Payload     int
-	CID, Burst, Raw                               bool
+	CID, Burst, Raw, NoServerReadDeadline         bool
 	Resume, Early, SlowBound                      bool
 	Seed                                          uint64
 	CIDLengths                                    []int
@@ -806,6 +806,9 @@ func packetProcessExchange(t *testing.T, spec packetProcessSpec, conn *Conn, ind
 	if burst {
 		deadline = time.Now().Add(3*time.Second + time.Duration(count/16)*10*time.Millisecond)
 	}
+	if phase == "traffic" && spec.Role == "server" && spec.NoServerReadDeadline {
+		deadline = time.Time{}
+	}
 	if err := conn.SetReadDeadline(deadline); err != nil {
 		t.Error(err)
 		return packetProcessStats{}, nil
@@ -947,9 +950,16 @@ func packetProcessExchange(t *testing.T, spec packetProcessSpec, conn *Conn, ind
 }
 
 func TestPacketProcessUDP(t *testing.T) {
-	for _, cid := range []bool{false, true} {
-		t.Run(fmt.Sprintf("CID%t", cid), func(t *testing.T) {
-			run := newPacketProcessRun(t, packetProcessSpec{Connections: 3, Operations: 19, Workers: 2, Payload: 64, CID: cid})
+	for _, test := range []struct {
+		name                      string
+		cid, noServerReadDeadline bool
+	}{
+		{name: "CIDfalse"},
+		{name: "CIDtrue", cid: true},
+		{name: "NoServerReadDeadline", cid: true, noServerReadDeadline: true},
+	} {
+		t.Run(test.name, func(t *testing.T) {
+			run := newPacketProcessRun(t, packetProcessSpec{Connections: 3, Operations: 19, Workers: 2, Payload: 64, CID: test.cid, NoServerReadDeadline: test.noServerReadDeadline})
 			stats := run.stage(t, "traffic")
 			for _, role := range []string{"client", "server"} {
 				if stats[role].Offered != 19 || stats[role].Received != 19 {
