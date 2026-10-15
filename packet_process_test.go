@@ -341,7 +341,7 @@ func TestPacketProcessWorker(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	config.Certificates = []tls.Certificate{{Certificate: [][]byte{spec.Certificate}, PrivateKey: key}}
+	config.Certificates = []tls.Certificate{{Certificate: [][]byte{spec.Certificate}, PrivateKey: key, Leaf: certificate}}
 	if spec.CID {
 		var next atomic.Uint64
 		config.GetConnectionID = func() ([]byte, error) {
